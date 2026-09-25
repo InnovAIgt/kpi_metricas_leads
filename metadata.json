@@ -1,0 +1,6 @@
+{
+  "name": "KPI Métricas de Citas y Auditoría de Llamadas",
+  "description": "Plataforma de métricas y auditoría para cruce de citas agendadas vs llamadas de vendedores, control de tiempos de contacto y cumplimiento de KPIs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

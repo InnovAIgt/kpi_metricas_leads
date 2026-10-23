@@ -15,7 +15,9 @@ import {
   Maximize2,
   ExternalLink,
   RefreshCw,
+  Download,
 } from 'lucide-react';
+import { cargarAudioRealPbx } from '../services/audioPbxService';
 
 export interface AudioLlamadaItem {
   id?: string;
@@ -40,125 +42,6 @@ interface ReproductorAudioFlotanteProps {
   onClose: () => void;
 }
 
-/**
- * Genera un Blob URL de audio WAV PCM (8000Hz, 16-bit Mono) directamente en el navegador
- * para garantizar reproducción continua e interactiva en Vercel, localhost y sin importar restricciones de red PBX.
- */
-export function generarWavBlobUrl(segundos: number, uid: string = ''): string {
-  const duracionSegundos = Math.max(3, Math.min(180, segundos || 15));
-  const sampleRate = 8000;
-  const numSamples = sampleRate * duracionSegundos;
-  const byteRate = sampleRate * 2;
-  const buffer = new ArrayBuffer(44 + numSamples * 2);
-  const view = new DataView(buffer);
-
-  // Escribir string ASCII en DataView
-  const writeString = (offset: number, str: string) => {
-    for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i));
-    }
-  };
-
-  // Encabezado RIFF/WAVE estándar
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + numSamples * 2, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, 1, true); // Mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, 2, true); // Block align
-  view.setUint16(34, 16, true); // Bits per sample
-  writeString(36, 'data');
-  view.setUint32(40, numSamples * 2, true);
-
-  // Semilla a partir del UID para variación tonal única por llamada
-  const seed = uid.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 50;
-
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    let sample = 0;
-    if (t < 1.0) {
-      // Tono PBX de inicio de llamada (440Hz + 480Hz estándar de telefonía)
-      sample = (Math.sin(2 * Math.PI * 440 * t) + Math.sin(2 * Math.PI * 480 * t)) * 0.14;
-    } else {
-      // Simulación de audio de canal de voz PBX
-      const baseFreq = 300 + seed + Math.sin(t * 3) * 120;
-      sample = Math.sin(2 * Math.PI * baseFreq * t) * 0.12 * (0.8 + 0.2 * Math.sin(t * 5));
-    }
-    const intSample = Math.max(-32767, Math.min(32767, Math.floor(sample * 32767)));
-    view.setInt16(44 + i * 2, intSample, true);
-  }
-
-  const blob = new Blob([buffer], { type: 'audio/wav' });
-  return URL.createObjectURL(blob);
-}
-
-/**
- * Normaliza y construye la lista priorizada de URLs candidatas para reproducir el audio
- * usando el ID, uniqueid y fallback a blob nativo para garantizar reproducción sin errores.
- */
-export function construirUrlsCandidatasAudio(llamada: AudioLlamadaItem | null): {
-  candidatos: string[];
-  urlDirecta: string;
-} {
-  if (!llamada) return { candidatos: [], urlDirecta: '' };
-
-  const rawUrl = llamada.audio_url || llamada.grabacion_url || '';
-  const uid = llamada.uniqueid || llamada.id || '';
-  const ext = llamada.extension || llamada.nombre || '';
-  const durSec = llamada.duracion_segundos || 15;
-  let urlDirecta = '';
-
-  if (rawUrl && typeof rawUrl === 'string' && rawUrl.trim() && rawUrl !== 'null' && rawUrl !== 'undefined') {
-    const s = rawUrl.trim();
-    if (s.startsWith('http://') || s.startsWith('https://')) {
-      urlDirecta = s;
-    } else {
-      urlDirecta = `https://api.red.com.sv${s.startsWith('/') ? '' : '/'}${s}`;
-    }
-  } else if (uid && ext) {
-    const fechaStr = llamada.fecha_hora || llamada.fecha || '';
-    const d = new Date(fechaStr || Date.now());
-    const y = d.getUTCFullYear() || 2026;
-    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-    const dia = String(d.getUTCDate()).padStart(2, '0');
-    const filename = `Grabacion_Ext_${ext}_${uid}.wav`;
-    const pais = String(llamada.pais || 'SV').toUpperCase();
-
-    if (pais === 'GT') {
-      urlDirecta = `https://api.red.com.sv/pbx/api/v1/rawCalls?pais=GT&anio=${y}&mes=${m}&dia=${dia}&archivo=${filename}`;
-    } else {
-      urlDirecta = `https://api.red.com.sv/pbx/api/v1/getAudio/${y}/${m}/${dia}/${filename}`;
-    }
-  }
-
-  const candidatos: string[] = [];
-
-  // Candidato 1: Proxy de audio del sistema pasando ID y uniqueid
-  if (uid) {
-    candidatos.push(`/api/audio-proxy?uniqueid=${encodeURIComponent(uid)}&id=${encodeURIComponent(llamada.id || '')}&duracion=${durSec}&url=${encodeURIComponent(urlDirecta)}`);
-    candidatos.push(`/api/audio?id=${encodeURIComponent(uid)}&duracion=${durSec}`);
-  } else if (urlDirecta) {
-    candidatos.push(`/api/audio-proxy?url=${encodeURIComponent(urlDirecta)}&duracion=${durSec}`);
-  }
-
-  // Candidato 2: URL Directa al servidor PBX
-  if (urlDirecta) {
-    candidatos.push(urlDirecta);
-  }
-
-  // Candidato 3: Generación de Blob WAV en cliente usando el ID (reproducción garantizada sin fallas)
-  try {
-    const blobUrl = generarWavBlobUrl(durSec, uid);
-    candidatos.push(blobUrl);
-  } catch (_) {}
-
-  return { candidatos, urlDirecta };
-}
-
 export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> = ({
   llamada,
   onClose,
@@ -166,7 +49,7 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const [reproduciendo, setReproduciendo] = useState(false);
-  const [cargando, setCargando] = useState(true);
+  const [cargando, setCargando] = useState(false);
   const [tiempoActual, setTiempoActual] = useState(0);
   const [duracionTotal, setDuracionTotal] = useState(0);
   const [volumen, setVolumen] = useState(1);
@@ -175,8 +58,7 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
   const [colapsado, setColapsado] = useState(false);
   const [errorAudio, setErrorAudio] = useState<string | null>(null);
 
-  const [listaCandidatos, setListaCandidatos] = useState<string[]>([]);
-  const [indiceCandidato, setIndiceCandidato] = useState(0);
+  const [blobAudioUrl, setBlobAudioUrl] = useState<string | null>(null);
   const [urlDirectaLlamada, setUrlDirectaLlamada] = useState('');
 
   // Formato mm:ss
@@ -187,59 +69,85 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
-  // Inicializar audio cuando cambia la llamada seleccionada
+  // Cargar el audio real desde el PBX bajo demanda (Fetch con Bearer JWT)
+  const cargarAudioLlamada = useCallback(async (item: AudioLlamadaItem) => {
+    setCargando(true);
+    setErrorAudio(null);
+    setReproduciendo(false);
+    setTiempoActual(0);
+    setDuracionTotal(item.duracion_segundos || 0);
+
+    try {
+      const res = await cargarAudioRealPbx(item);
+      setUrlDirectaLlamada(res.directUrl);
+
+      if (res.blobUrl) {
+        setBlobAudioUrl((prev) => {
+          if (prev && prev.startsWith('blob:')) {
+            try {
+              URL.revokeObjectURL(prev);
+            } catch (_) {}
+          }
+          return res.blobUrl;
+        });
+        setErrorAudio(null);
+        setCargando(false);
+        setReproduciendo(true);
+      } else {
+        setBlobAudioUrl(null);
+        setCargando(false);
+        setReproduciendo(false);
+        setErrorAudio(
+          res.error ||
+            'Esta llamada no cuenta con archivo de audio grabado en la PBX (llamada no contestada, fallida o sin grabación registrada).'
+        );
+      }
+    } catch (err: any) {
+      setBlobAudioUrl(null);
+      setCargando(false);
+      setReproduciendo(false);
+      setErrorAudio(
+        err?.message ||
+          'No fue posible conectar con el servidor PBX para descargar la grabación.'
+      );
+    }
+  }, []);
+
+  // Efecto cuando cambia la llamada seleccionada
   useEffect(() => {
     if (!llamada) {
-      setListaCandidatos([]);
-      setIndiceCandidato(0);
+      if (blobAudioUrl && blobAudioUrl.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(blobAudioUrl);
+        } catch (_) {}
+      }
+      setBlobAudioUrl(null);
       setReproduciendo(false);
       setErrorAudio(null);
       setUrlDirectaLlamada('');
       return;
     }
 
-    const { candidatos, urlDirecta } = construirUrlsCandidatasAudio(llamada);
-    setUrlDirectaLlamada(urlDirecta);
+    cargarAudioLlamada(llamada);
 
-    if (candidatos.length === 0) {
-      setErrorAudio('Este registro de llamada no cuenta con campos de audio o grabación en el sistema.');
-      setCargando(false);
-      setReproduciendo(false);
-      return;
-    }
+    return () => {
+      // Limpieza de memoria
+    };
+  }, [llamada, cargarAudioLlamada]);
 
-    setErrorAudio(null);
-    setCargando(true);
-    setTiempoActual(0);
-    setDuracionTotal(llamada.duracion_segundos || 15);
-    setListaCandidatos(candidatos);
-    setIndiceCandidato(0);
-    setReproduciendo(true);
-  }, [llamada]);
-
-  // Manejo de error: intentar el siguiente candidato en cascada
-  const handleAudioError = useCallback(() => {
-    if (indiceCandidato + 1 < listaCandidatos.length) {
-      const siguienteIndice = indiceCandidato + 1;
-      setIndiceCandidato(siguienteIndice);
-      setCargando(true);
-      return;
-    }
-
-    // Todos los candidatos agotados
+  // Manejo de error en el elemento <audio>
+  const handleAudioError = () => {
     setCargando(false);
     setReproduciendo(false);
     setErrorAudio(
-      'Grabación no disponible actualmente. El archivo de audio no se encuentra disponible en el servidor PBX o no fue grabado para esta llamada.'
+      'No fue posible decodificar o reproducir el archivo de grabación recibido desde la PBX.'
     );
-  }, [indiceCandidato, listaCandidatos]);
+  };
 
-  const urlActual = listaCandidatos[indiceCandidato] || '';
-
-  // Sincronizar reproducción del elemento <audio>
+  // Sincronizar estado con el elemento <audio>
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !urlActual) return;
+    if (!audio || !blobAudioUrl) return;
 
     if (reproduciendo) {
       const playPromise = audio.play();
@@ -251,17 +159,17 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
           })
           .catch((err) => {
             if (err.name !== 'AbortError') {
-              handleAudioError();
+              setReproduciendo(false);
             }
           });
       }
     } else {
       audio.pause();
     }
-  }, [reproduciendo, urlActual, handleAudioError]);
+  }, [reproduciendo, blobAudioUrl]);
 
   const toggleReproducir = () => {
-    if (errorAudio) return;
+    if (errorAudio || !blobAudioUrl) return;
     setReproduciendo((prev) => !prev);
   };
 
@@ -335,10 +243,9 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
   };
 
   const handleReintentar = () => {
-    setErrorAudio(null);
-    setCargando(true);
-    setIndiceCandidato(0);
-    setReproduciendo(true);
+    if (llamada) {
+      cargarAudioLlamada(llamada);
+    }
   };
 
   if (!llamada) return null;
@@ -348,6 +255,8 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
   const asesor = llamada.asesor_nombre || llamada.nombre || 'Asesor PBX';
   const estado = llamada.estado || 'CONTESTADA';
   const fechaStr = llamada.fecha_hora || llamada.fecha || '';
+  const pais = String(llamada.pais || 'SV').toUpperCase();
+  const uid = llamada.uniqueid || llamada.id || '';
 
   // Vista colapsada/mini
   if (colapsado) {
@@ -369,7 +278,8 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
         <button
           type="button"
           onClick={toggleReproducir}
-          className="p-1 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer"
+          disabled={!blobAudioUrl}
+          className="p-1 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer disabled:opacity-40"
           title={reproduciendo ? 'Pausar' : 'Reproducir'}
         >
           {reproduciendo ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
@@ -407,16 +317,16 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
       aria-label="Reproductor de audio flotante"
       className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[95%] max-w-4xl bg-slate-900/95 backdrop-blur-xl border border-slate-700/80 shadow-[0_20px_50px_rgba(0,0,0,0.7)] rounded-2xl p-3.5 md:p-4 text-white animate-in fade-in slide-in-from-bottom-4 duration-200"
     >
-      {/* Elemento de Audio Nativo Oculto */}
-      {urlActual && (
+      {/* Elemento de Audio Nativo con el Blob URL real obtenido de la PBX */}
+      {blobAudioUrl && (
         <audio
           ref={audioRef}
-          src={urlActual}
+          src={blobAudioUrl}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onEnded={() => setReproduciendo(false)}
           onError={handleAudioError}
-          preload="metadata"
+          preload="auto"
         />
       )}
 
@@ -441,10 +351,10 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
               <span className="truncate max-w-[150px] text-slate-300">{asesor}</span>
             </div>
 
-            {llamada.uniqueid && (
-              <div className="hidden lg:flex items-center gap-1 text-[11px] text-slate-400 font-mono bg-slate-800/80 px-2 py-0.5 rounded border border-slate-750">
-                <span className="text-slate-500">ID:</span>
-                <span className="text-indigo-300 font-medium">{llamada.uniqueid}</span>
+            {uid && (
+              <div className="hidden lg:flex items-center gap-1 text-[11px] text-slate-400 font-mono bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700">
+                <span className="text-slate-500">UID:</span>
+                <span className="text-indigo-300 font-medium">{uid}</span>
               </div>
             )}
 
@@ -464,10 +374,26 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
             >
               {estado}
             </span>
+
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
+              {pais === 'GT' ? '🇬🇹 GT' : '🇸🇻 SV'}
+            </span>
           </div>
 
-          {/* Botones de Minimizar y Cerrar */}
-          <div className="flex items-center gap-1">
+          {/* Botones de Descarga, Minimizar y Cerrar */}
+          <div className="flex items-center gap-1.5">
+            {blobAudioUrl && (
+              <a
+                href={blobAudioUrl}
+                download={`Grabacion_${pais}_Ext_${ext}_${uid || 'audio'}.wav`}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-900/60 hover:bg-indigo-800 text-indigo-200 border border-indigo-700/60 text-xs font-medium transition-colors"
+                title="Descargar archivo WAV real"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Descargar WAV</span>
+              </a>
+            )}
+
             <button
               type="button"
               onClick={() => setColapsado(true)}
@@ -487,13 +413,13 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
           </div>
         </div>
 
-        {/* Fila Inferior: Controles de Audio o Mensaje Amigable de Error */}
+        {/* Fila Inferior: Controles de Audio o Mensaje Amigable cuando no hay grabación */}
         {errorAudio ? (
           <div className="flex items-center justify-between gap-3 bg-amber-950/30 border border-amber-800/50 rounded-xl px-3.5 py-2.5 text-xs text-amber-200">
             <div className="flex items-center gap-2.5">
               <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
               <div>
-                <p className="font-semibold text-amber-300">Grabación no disponible actualmente</p>
+                <p className="font-semibold text-amber-300">Grabación no disponible</p>
                 <p className="text-[11px] text-amber-200/80">{errorAudio}</p>
               </div>
             </div>
@@ -502,7 +428,7 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
                 type="button"
                 onClick={handleReintentar}
                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-900/40 border border-amber-700/60 text-amber-200 hover:bg-amber-800/60 text-[11px] font-medium transition-colors cursor-pointer"
-                title="Reintentar reproducción"
+                title="Reintentar descarga desde PBX"
               >
                 <RefreshCw className="h-3 w-3" />
                 <span>Reintentar</span>
@@ -515,7 +441,7 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
                   className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 underline"
                   title="Abrir URL completa directa en nueva pestaña"
                 >
-                  <span>Enlace directo</span>
+                  <span>Enlace PBX</span>
                   <ExternalLink className="h-3 w-3" />
                 </a>
               )}
@@ -528,7 +454,8 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
               <button
                 type="button"
                 onClick={handleRewind5}
-                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                disabled={!blobAudioUrl || cargando}
+                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-40"
                 title="Retroceder 5 segundos"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
@@ -537,8 +464,8 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
               <button
                 type="button"
                 onClick={toggleReproducir}
-                disabled={cargando}
-                className="flex items-center justify-center h-9 w-9 rounded-full bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-400 hover:to-indigo-500 text-white shadow-lg shadow-indigo-600/30 transition-all cursor-pointer"
+                disabled={cargando || !blobAudioUrl}
+                className="flex items-center justify-center h-9 w-9 rounded-full bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-400 hover:to-indigo-500 text-white shadow-lg shadow-indigo-600/30 transition-all cursor-pointer disabled:opacity-50"
                 title={reproduciendo ? 'Pausar' : 'Reproducir'}
               >
                 {cargando ? (
@@ -553,7 +480,8 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
               <button
                 type="button"
                 onClick={handleForward5}
-                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer text-xs font-semibold"
+                disabled={!blobAudioUrl || cargando}
+                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer text-xs font-semibold disabled:opacity-40"
                 title="Avanzar 5 segundos"
               >
                 +5s
@@ -562,11 +490,18 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
               <button
                 type="button"
                 onClick={cambiarVelocidad}
-                className="px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-mono font-bold transition-colors cursor-pointer"
+                disabled={!blobAudioUrl}
+                className="px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-mono font-bold transition-colors cursor-pointer disabled:opacity-40"
                 title="Velocidad de reproducción"
               >
                 {velocidad}x
               </button>
+
+              {cargando && (
+                <span className="text-[11px] text-indigo-300 font-medium animate-pulse ml-1">
+                  Descargando audio de PBX...
+                </span>
+              )}
             </div>
 
             {/* Barra de Progreso y Tiempos */}
@@ -582,7 +517,8 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
                 step={0.1}
                 value={tiempoActual}
                 onChange={handleSeek}
-                className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400"
+                disabled={!blobAudioUrl}
+                className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 disabled:opacity-40"
                 title="Avanzar / retroceder en la grabación"
               />
 
@@ -596,7 +532,8 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
               <button
                 type="button"
                 onClick={toggleMute}
-                className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                disabled={!blobAudioUrl}
+                className="p-1 text-slate-400 hover:text-white cursor-pointer disabled:opacity-40"
                 title={muteado ? 'Activar sonido' : 'Silenciar'}
               >
                 {muteado ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4" />}
@@ -608,7 +545,8 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
                 step={0.05}
                 value={muteado ? 0 : volumen}
                 onChange={handleVolumenChange}
-                className="w-16 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                disabled={!blobAudioUrl}
+                className="w-16 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 disabled:opacity-40"
                 title="Volumen"
               />
             </div>

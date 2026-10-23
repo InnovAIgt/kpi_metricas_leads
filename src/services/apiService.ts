@@ -442,7 +442,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       fetch(`${url}/rest/v1/leads_no_calificados?select=*&order=id.desc`, { headers }).then((r) => r.ok ? r.json() : []),
       Promise.all(
         pbxOffsets.map((offset) =>
-          fetch(`${url}/rest/v1/llamadas_pbx?select=*&order=fecha_hora.desc.nullslast&offset=${offset}&limit=1000`, { headers }).then((r) => r.ok ? r.json() : [])
+          fetch(`${url}/rest/v1/llamadas_pbx?select=*&fecha_hora=not.is.null&order=fecha_hora.desc&offset=${offset}&limit=1000`, { headers }).then((r) => r.ok ? r.json() : [])
         )
       ).then((p) => p.flat()),
       Promise.all(

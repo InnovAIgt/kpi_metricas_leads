@@ -190,7 +190,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       Promise.all(
         pbxOffsets.map((offset) =>
           fetchSupabaseTable(
-            `llamadas_pbx?select=id,uniqueid,nombre,extension,destino,duracion_segundos,estado,fecha_hora,audio_url,grabacion_url,pais&order=fecha_hora.desc.nullslast&offset=${offset}&limit=1000`
+            `llamadas_pbx?select=id,uniqueid,nombre,extension,destino,duracion_segundos,estado,fecha_hora,audio_url,grabacion_url,pais&fecha_hora=not.is.null&order=fecha_hora.desc&offset=${offset}&limit=1000`
           )
         )
       ).then((pages) => pages.flat()),
@@ -768,119 +768,147 @@ app.delete('/api/catalogo/:id', async (req, res) => {
   }
 });
 
-// Helper para generar audio WAV PCM sintetizado con tono PBX realista
-function generarBufferWavPcm(segundos: number): Buffer {
-  const sampleRate = 8000;
-  const numSamples = sampleRate * Math.max(3, Math.min(60, segundos));
-  const buffer = Buffer.alloc(44 + numSamples * 2);
+// ==========================================
+// 5. PROXY REAL DE AUDIO / GRABACIONES PBX
+// ==========================================
+const PBX_HOST = 'https://api.red.com.sv';
+const PBX_USER = 'DBOLAINES';
+const PBX_PASS = 'Intelfon1234';
 
-  // Encabezado RIFF WAV
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + numSamples * 2, 4);
-  buffer.write('WAVE', 8);
-  buffer.write('fmt ', 12);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20); // PCM format
-  buffer.writeUInt16LE(1, 22); // Mono
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(sampleRate * 2, 28);
-  buffer.writeUInt16LE(2, 32);
-  buffer.writeUInt16LE(16, 34);
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(numSamples * 2, 40);
+let pbxBackendToken: string | null = null;
+let pbxBackendTokenExp = 0;
 
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    let sample = 0;
-    if (t < 1.2) {
-      // Tono PBX de inicio (440Hz + 480Hz)
-      sample = (Math.sin(2 * Math.PI * 440 * t) + Math.sin(2 * Math.PI * 480 * t)) * 0.15;
-    } else {
-      // Simulación de canal de voz PBX
-      const freq = 320 + Math.sin(t * 3.5) * 120;
-      sample = Math.sin(2 * Math.PI * freq * t) * 0.14 * (0.85 + 0.15 * Math.sin(t * 6));
-    }
-    const val = Math.max(-32767, Math.min(32767, Math.floor(sample * 32767)));
-    buffer.writeInt16LE(val, 44 + i * 2);
+async function getPbxJwtBackend(): Promise<string> {
+  if (pbxBackendToken && Date.now() < pbxBackendTokenExp) {
+    return pbxBackendToken;
   }
-
-  return buffer;
+  const r = await fetch(`${PBX_HOST}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: PBX_USER, password: PBX_PASS }),
+  });
+  if (!r.ok) {
+    throw new Error(`PBX login failed HTTP ${r.status}`);
+  }
+  const data = await r.json();
+  const token = data.token || data.jwt || data.access_token;
+  if (!token) throw new Error('No token in PBX login');
+  pbxBackendToken = token;
+  pbxBackendTokenExp = Date.now() + 23 * 3600 * 1000;
+  return token;
 }
 
-// ==========================================
-// 5. PROXY SEGURO DE AUDIO / GRABACIONES PBX
-// ==========================================
 app.get(['/api/audio-proxy', '/api/audio'], async (req, res) => {
   try {
     const rawAudioUrl = (req.query.url as string) || '';
     const uniqueid = (req.query.uniqueid as string) || (req.query.id as string) || '';
-    const duracionParam = Number(req.query.duracion || 15);
+    let pais = ((req.query.pais as string) || 'SV').toUpperCase();
+    if (pais !== 'GT' && pais !== 'SV') pais = 'SV';
 
-    let targetUrl = rawAudioUrl.trim();
-    if (!targetUrl && uniqueid) {
-      // Si solo nos envían el ID, buscar en caché o reconstruir endpoint de PBX
-      targetUrl = `https://api.red.com.sv/pbx/api/v1/rawCalls?archivo=Grabacion_${uniqueid}.wav`;
+    let anio = (req.query.anio as string) || '2026';
+    let mes = (req.query.mes as string) || '10';
+    let dia = (req.query.dia as string) || '22';
+    let archivo = (req.query.archivo as string) || '';
+
+    // Extraer parámetros si viene URL con formato rawCalls o getAudio
+    if (rawAudioUrl) {
+      try {
+        const u = new URL(rawAudioUrl.startsWith('http') ? rawAudioUrl : `${PBX_HOST}${rawAudioUrl}`);
+        const p = u.searchParams.get('pais')?.toUpperCase();
+        if (p === 'GT' || p === 'SV') pais = p;
+        if (u.searchParams.get('anio')) anio = u.searchParams.get('anio')!;
+        if (u.searchParams.get('mes')) mes = u.searchParams.get('mes')!;
+        if (u.searchParams.get('dia')) dia = u.searchParams.get('dia')!;
+        if (u.searchParams.get('archivo')) archivo = u.searchParams.get('archivo')!;
+      } catch (_) {
+        if (rawAudioUrl.includes('/getAudio/')) {
+          const partes = rawAudioUrl.split('/getAudio/')[1]?.split('/') || [];
+          if (partes.length >= 4) {
+            anio = partes[0];
+            mes = partes[1];
+            dia = partes[2];
+            archivo = partes.slice(3).join('/');
+          }
+        }
+      }
     }
 
-    if (!targetUrl && !uniqueid) {
-      return res.status(400).json({ exito: false, mensaje: 'ID o URL de audio requerida' });
+    if (!uniqueid && !archivo && !rawAudioUrl) {
+      return res.status(400).json({ exito: false, mensaje: 'ID, uniqueid o archivo de audio requerido' });
     }
 
-    if (targetUrl && !targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-      targetUrl = `https://api.red.com.sv${targetUrl.startsWith('/') ? '' : '/'}${targetUrl}`;
+    let token = await getPbxJwtBackend();
+
+    let targetUrl = '';
+    if (archivo) {
+      targetUrl = `${PBX_HOST}/pbx/api/v1/rawCalls?pais=${pais}&anio=${anio}&mes=${mes}&dia=${dia}&archivo=${encodeURIComponent(archivo)}`;
     }
 
     const rangeHeader = req.headers.range;
     const fetchHeaders: Record<string, string> = {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      Authorization: `Bearer ${token}`,
       Accept: 'audio/*,*/*',
     };
     if (rangeHeader) {
       fetchHeaders['Range'] = rangeHeader;
     }
 
-    // 1. Intentar consulta directa rápida al servidor PBX (con timeout de 2.5s para no congelar la UI)
+    let pbxRes: Response | null = null;
     if (targetUrl) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
-
-        const directRes = await fetch(targetUrl, {
-          headers: fetchHeaders,
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-
-        if (directRes.ok) {
-          const contentType = directRes.headers.get('content-type') || 'audio/wav';
-          const contentLength = directRes.headers.get('content-length');
-          const contentRange = directRes.headers.get('content-range');
-          const acceptRanges = directRes.headers.get('accept-ranges') || 'bytes';
-
-          res.setHeader('Content-Type', contentType);
-          res.setHeader('Accept-Ranges', acceptRanges);
-          res.setHeader('Cache-Control', 'public, max-age=3600');
-          if (contentLength) res.setHeader('Content-Length', contentLength);
-          if (contentRange) res.setHeader('Content-Range', contentRange);
-
-          const arrayBuffer = await directRes.arrayBuffer();
-          return res.status(directRes.status).send(Buffer.from(arrayBuffer));
-        }
-      } catch (_) {}
+      pbxRes = await fetch(targetUrl, { headers: fetchHeaders });
+      if (pbxRes.status === 401) {
+        token = await getPbxJwtBackend();
+        fetchHeaders.Authorization = `Bearer ${token}`;
+        pbxRes = await fetch(targetUrl, { headers: fetchHeaders });
+      }
     }
 
-    // 2. Si PBX requiere credenciales restringidas en red privada, generar audio WAV real garantizado
-    const wavBuffer = generarBufferWavPcm(duracionParam);
-    res.setHeader('Content-Type', 'audio/wav');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Length', String(wavBuffer.length));
-    res.setHeader('Cache-Control', 'public, max-age=600');
-    return res.status(200).send(wavBuffer);
+    // Si falló 404 o no teníamos nombre exacto de archivo, buscar en el listado del día por uniqueid
+    if ((!pbxRes || !pbxRes.ok || pbxRes.status === 404) && uniqueid) {
+      for (const p of [pais, pais === 'GT' ? 'SV' : 'GT']) {
+        try {
+          const listUrl = `${PBX_HOST}/pbx/api/v1/rawCalls?pais=${p}&anio=${anio}&mes=${mes}&dia=${dia}`;
+          const listRes = await fetch(listUrl, { headers: { Authorization: `Bearer ${token}` } });
+          if (listRes.ok) {
+            const files = await listRes.json();
+            if (Array.isArray(files)) {
+              const match = files.find((f: any) => f.name && f.name.includes(uniqueid));
+              if (match) {
+                targetUrl = `${PBX_HOST}/pbx/api/v1/rawCalls?pais=${p}&anio=${anio}&mes=${mes}&dia=${dia}&archivo=${encodeURIComponent(match.name)}`;
+                pbxRes = await fetch(targetUrl, { headers: fetchHeaders });
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (pbxRes && pbxRes.ok) {
+      const contentType = pbxRes.headers.get('content-type') || 'audio/wav';
+      const contentLength = pbxRes.headers.get('content-length');
+      const contentRange = pbxRes.headers.get('content-range');
+      const acceptRanges = pbxRes.headers.get('accept-ranges') || 'bytes';
+
+      res.setHeader('Content-Type', contentType.startsWith('audio/') ? contentType : 'audio/wav');
+      res.setHeader('Accept-Ranges', acceptRanges);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+      if (contentRange) res.setHeader('Content-Range', contentRange);
+
+      const arrayBuffer = await pbxRes.arrayBuffer();
+      return res.status(pbxRes.status).send(Buffer.from(arrayBuffer));
+    }
+
+    return res.status(404).json({
+      exito: false,
+      mensaje: 'Esta llamada no cuenta con archivo de audio grabado en la PBX (llamada no contestada, fallida o sin grabación).',
+    });
   } catch (err: any) {
     return res.status(500).json({
       exito: false,
-      mensaje: 'Error al procesar audio: ' + (err?.message || String(err)),
+      mensaje: 'Error al procesar audio PBX: ' + (err?.message || String(err)),
     });
   }
 });

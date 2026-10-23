@@ -426,20 +426,30 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
 async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBackend> {
   const { url, headers } = getSupabaseConfig();
   try {
+    const pbxOffsets = [0, 1000, 2000, 3000, 4000];
+    const celOffsets = [0, 1000, 2000, 3000];
     const [
       catalogoRes,
       leadsRes,
       leadsNoCalificadosRes,
-      pbxRes,
-      celularRes,
+      pbxPages,
+      celPages,
       teamsRes,
       whatsappRes,
     ] = await Promise.all([
       fetch(`${url}/rest/v1/catalogo?select=*&order=id.asc`, { headers }).then((r) => r.ok ? r.json() : []),
       fetch(`${url}/rest/v1/leads?select=*&order=id.desc`, { headers }).then((r) => r.ok ? r.json() : []),
       fetch(`${url}/rest/v1/leads_no_calificados?select=*&order=id.desc`, { headers }).then((r) => r.ok ? r.json() : []),
-      fetch(`${url}/rest/v1/llamadas_pbx?select=*&order=fecha_hora.desc.nullslast&limit=1000`, { headers }).then((r) => r.ok ? r.json() : []),
-      fetch(`${url}/rest/v1/llamadas_celular?select=*&order=fecha.desc.nullslast&limit=1000`, { headers }).then((r) => r.ok ? r.json() : []),
+      Promise.all(
+        pbxOffsets.map((offset) =>
+          fetch(`${url}/rest/v1/llamadas_pbx?select=*&order=fecha_hora.desc.nullslast&offset=${offset}&limit=1000`, { headers }).then((r) => r.ok ? r.json() : [])
+        )
+      ).then((p) => p.flat()),
+      Promise.all(
+        celOffsets.map((offset) =>
+          fetch(`${url}/rest/v1/llamadas_celular?select=*&order=fecha.desc.nullslast&offset=${offset}&limit=1000`, { headers }).then((r) => r.ok ? r.json() : [])
+        )
+      ).then((p) => p.flat()),
       fetch(`${url}/rest/v1/llamadas_teams?select=*&order=id.desc`, { headers }).then((r) => r.ok ? r.json() : []),
       fetch(`${url}/rest/v1/llamadas_whatsapp?select=*&order=fecha_llamada.desc.nullslast&limit=1000`, { headers }).then((r) => r.ok ? r.json() : []),
     ]);
@@ -447,8 +457,8 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     const catalogo = Array.isArray(catalogoRes) ? catalogoRes : [];
     const leads = Array.isArray(leadsRes) ? leadsRes : [];
     const leadsNoCalificados = Array.isArray(leadsNoCalificadosRes) ? leadsNoCalificadosRes : [];
-    const llamadasPbx = Array.isArray(pbxRes) ? pbxRes : [];
-    const llamadasCelular = Array.isArray(celularRes) ? celularRes : [];
+    const llamadasPbx = Array.isArray(pbxPages) ? pbxPages : [];
+    const llamadasCelular = Array.isArray(celPages) ? celPages : [];
     const llamadasTeams = Array.isArray(teamsRes) ? teamsRes : [];
     const llamadasWhatsapp = Array.isArray(whatsappRes) ? whatsappRes : [];
 
@@ -601,7 +611,10 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     const llamadas: Llamada[] = [];
 
     llamadasPbx.forEach((pbx: any, idx: number) => {
-      const asesor = resolverAsesor(pbx.nombre || pbx.extension || '', 'Asesor PBX');
+      const extStr = pbx.extension ? String(pbx.extension).trim() : '';
+      const asesor =
+        pbx.asesor_nombre ||
+        resolverAsesor(extStr, resolverAsesor(pbx.nombre || '', extStr ? `Ext. ${extStr}` : 'Asesor PBX'));
       pbx.asesor_nombre = asesor;
       const fechaInicio = pbx.fecha_hora || pbx.calldate || new Date().toISOString();
       llamadas.push({
@@ -629,7 +642,8 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         if (parts.length === 3) durSec = parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(parts[2]);
         else durSec = parseInt(cel.duracion) || 0;
       }
-      const fechaHora = `${cel.fecha || '2026-09-24'}T${cel.hora || '10:00:00'}`;
+      const fechaBase = cel.fecha ? String(cel.fecha).slice(0, 10) : new Date().toISOString().slice(0, 10);
+      const fechaHora = `${fechaBase}T${cel.hora || '10:00:00'}`;
       llamadas.push({
         id: String(cel.id || `cel-${idx}`),
         vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
@@ -647,7 +661,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     llamadasTeams.forEach((teams: any, idx: number) => {
       const asesor = teams.ejecutivo || teams.ejecutivo_nombre || resolverAsesor(teams.asesor || '', 'Ejecutivo Teams');
       teams.asesor_nombre = asesor;
-      const fReunion = teams.fecha_reunion || (teams.fecha_agendada ? String(teams.fecha_agendada).slice(0, 10) : '2026-09-24');
+      const fReunion = teams.fecha_reunion || (teams.fecha_agendada ? String(teams.fecha_agendada).slice(0, 10) : new Date().toISOString().slice(0, 10));
       const hReunion = teams.hora_reunion || (teams.hora_agendada ? String(teams.hora_agendada).slice(0, 5) : '10:00');
       const fechaHora = `${fReunion}T${hReunion.length === 5 ? hReunion + ':00' : hReunion}`;
       llamadas.push({

@@ -170,10 +170,10 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     const extsList = Object.keys(mapaCatalogo.porExtension).join(',');
     const usersList = Object.keys(mapaCatalogo.porUsuario).map((u) => u.toUpperCase()).join(',');
 
-    // 2. Consultas optimizadas para alta velocidad (<400ms)
-    const pbxOffsets = [0, 1000]; // 2,000 llamadas PBX recientes
-    const celOffsets = [0, 1000]; // 2,000 llamadas Celular recientes
-    const waOffsets = [0];        // 1,000 llamadas WhatsApp recientes
+    // 2. Consultas optimizadas para alta velocidad sin omitir ninguna extensión ni asesor
+    const pbxOffsets = [0, 1000, 2000, 3000, 4000]; // 5,000 llamadas PBX (100% de Octubre y Septiembre completo)
+    const celOffsets = [0, 1000, 2000, 3000];        // 4,000 llamadas Celular (toda la tabla en Supabase)
+    const waOffsets = [0, 1000];                    // 2,000 llamadas WhatsApp
 
     const [
       leadsRaw,
@@ -183,13 +183,14 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       teamsRaw,
       waRaw,
       prospektiaRes,
+      prospektiaNcRes,
     ] = await Promise.all([
       fetchSupabaseTablePaginado('leads', 'fecha_agendada.desc.nullslast,created_at.desc', 1000),
       fetchSupabaseTablePaginado('leads_no_calificados', 'created_at.desc.nullslast', 1000),
       Promise.all(
         pbxOffsets.map((offset) =>
           fetchSupabaseTable(
-            `llamadas_pbx?or=(extension.in.(${extsList}),nombre.in.(${usersList}))&select=id,uniqueid,nombre,extension,destino,duracion_segundos,estado,fecha_hora,audio_url,grabacion_url&order=fecha_hora.desc.nullslast&offset=${offset}&limit=1000`
+            `llamadas_pbx?select=id,uniqueid,nombre,extension,destino,duracion_segundos,estado,fecha_hora,audio_url,grabacion_url,pais&order=fecha_hora.desc.nullslast&offset=${offset}&limit=1000`
           )
         )
       ).then((pages) => pages.flat()),
@@ -213,6 +214,15 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       })
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
+      Promise.all([
+        fetch('https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=1000&offset=0', {
+          headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
+        }).then((r) => (r.ok ? r.json() : null)),
+        fetch('https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=1000&offset=1000', {
+          headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
+        }).then((r) => (r.ok ? r.json() : null)),
+      ]).then(([p1, p2]) => [...(p1?.items || []), ...(p2?.items || [])])
+        .catch(() => []),
     ]);
 
     // 3. Fusionar leads de Supabase con la API de Prospektia en vivo
@@ -295,9 +305,36 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     }
 
     const leads = Array.from(mapaLeads.values());
-    const leadsNoCalificados = ncRaw;
-    const llamadasPbx = pbxPages.filter((p: any) => perteneceACatalogo(p.extension) || perteneceACatalogo(p.nombre));
-    const llamadasCelular = celPages.filter((c: any) => perteneceACatalogo(c.usuario) || perteneceACatalogo(c.linea));
+
+    // Fusionar Leads No Calificados de Supabase con Prospektia API para tener todos sin excepción
+    const mapaNc = new Map<string, any>();
+    ncRaw.forEach((nc: any) => {
+      const k = String(nc.id || `${nc.client_id}_${nc.created_at}`).trim();
+      if (k) mapaNc.set(k, { ...nc });
+    });
+    const prospektiaNcItems = Array.isArray(prospektiaNcRes) ? prospektiaNcRes : [];
+    prospektiaNcItems.forEach((pnc: any) => {
+      const k = String(pnc.id || `${pnc.client_id}_${pnc.created_at}`).trim();
+      if (!k) return;
+      if (!mapaNc.has(k)) {
+        mapaNc.set(k, {
+          id: pnc.client_id || pnc.id,
+          client_id: pnc.client_id,
+          client_name: pnc.client_name || '',
+          advisor_name: pnc.advisor_name || '',
+          telefono: pnc.client_phone || '',
+          created_at: pnc.created_at,
+          created_at_sv: pnc.created_at_sv || '',
+          fecha: pnc.created_at ? String(pnc.created_at).slice(0, 10) : '',
+          hora: pnc.created_at ? String(pnc.created_at).slice(11, 19) : '',
+        });
+      }
+    });
+    const leadsNoCalificados = Array.from(mapaNc.values());
+
+    // Todas las llamadas PBX y Celular se incluyen completas sin filtrar ni descartar ninguna extensión
+    const llamadasPbx = pbxPages;
+    const llamadasCelular = celPages;
     const llamadasWhatsapp = waRaw;
 
     // Helper para detectar país según teléfono o código
@@ -332,7 +369,13 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     });
 
     llamadasPbx.forEach((p: any) => {
-      p.asesor_nombre = resolverAsesorBackend(p.nombre || p.extension, resolverAsesorBackend(p.extension, p.nombre || (p.extension ? `Ext. ${p.extension}` : 'Línea PBX')));
+      const extStr = p.extension ? String(p.extension).trim() : '';
+      p.asesor_nombre =
+        resolverAsesorBackend(extStr,
+          resolverAsesorBackend(p.nombre,
+            p.nombre || (extStr ? `Ext. ${extStr}` : 'Línea PBX')
+          )
+        );
       p.pais = p.pais || detectarPais(p.destino, 'SV');
     });
 
@@ -705,15 +748,71 @@ app.delete('/api/catalogo/:id', async (req, res) => {
 });
 
 // ==========================================
-// 5. PROXY PARA TRIGGER DE EDGE FUNCTION
+// 5. PROXY SEGURO DE AUDIO / GRABACIONES PBX
+// ==========================================
+app.get('/api/audio-proxy', async (req, res) => {
+  try {
+    const audioUrl = req.query.url as string;
+    if (!audioUrl) {
+      return res.status(400).json({ exito: false, mensaje: 'URL de audio requerida' });
+    }
+
+    const rangeHeader = req.headers.range;
+    const fetchHeaders: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+      Accept: 'audio/*,*/*',
+    };
+    if (rangeHeader) {
+      fetchHeaders['Range'] = rangeHeader;
+    }
+
+    const response = await fetch(audioUrl, {
+      headers: fetchHeaders,
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        exito: false,
+        status: response.status,
+        mensaje: 'La grabación no se encuentra disponible actualmente en el servidor PBX.',
+      });
+    }
+
+    const contentType = response.headers.get('content-type') || 'audio/wav';
+    const contentLength = response.headers.get('content-length');
+    const contentRange = response.headers.get('content-range');
+    const acceptRanges = response.headers.get('accept-ranges') || 'bytes';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Accept-Ranges', acceptRanges);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+
+    const arrayBuffer = await response.arrayBuffer();
+    return res.status(response.status).send(Buffer.from(arrayBuffer));
+  } catch (err: any) {
+    return res.status(500).json({
+      exito: false,
+      mensaje: 'Error al consultar el audio en el servidor: ' + (err?.message || String(err)),
+    });
+  }
+});
+
+// ==========================================
+// 6. PROXY PARA TRIGGER DE EDGE FUNCTION
 // ==========================================
 app.post('/api/sync/trigger-edge-function', async (req, res) => {
   try {
     const { pbx_desde, pbx_hasta, pbx_pais } = req.body;
     const functionUrl = `${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/sincronizar-datos`;
 
+    const dAnt = new Date();
+    dAnt.setMonth(dAnt.getMonth() - 1, 1);
+    const defaultDesde = dAnt.toISOString().slice(0, 10);
+
     const bodyPayload: any = {
-      pbx_desde: pbx_desde || '2026-09-01',
+      pbx_desde: pbx_desde || defaultDesde,
       pbx_hasta: pbx_hasta || new Date().toISOString().slice(0, 10),
       ...(req.body || {}),
     };

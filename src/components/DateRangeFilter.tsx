@@ -1,5 +1,6 @@
 import React from 'react';
 import { Calendar, X } from 'lucide-react';
+import { getMesActualInfo, getMesAnteriorInfo } from '../utils/dateHelpers';
 
 interface DateRangeFilterProps {
   fechaInicio: string;
@@ -19,14 +20,32 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
   label = 'Filtrar por Rango de Fechas',
 }) => {
   const tieneFiltro = Boolean(fechaInicio || fechaFin);
+  const infoActual = getMesActualInfo();
+  const infoAnterior = getMesAnteriorInfo();
 
   const presets = [
     {
-      etiqueta: 'Mes Actual (Septiembre)',
-      esActivo: fechaInicio === '2026-09-01' && fechaFin === '2026-09-30',
+      etiqueta: `Mes Actual (${infoActual.nombreMes})`,
+      esActivo: fechaInicio === infoActual.inicioMes && fechaFin === infoActual.finMes,
       aplicar: () => {
-        onChangeInicio('2026-09-01');
-        onChangeFin('2026-09-30');
+        onChangeInicio(infoActual.inicioMes);
+        onChangeFin(infoActual.finMes);
+      },
+    },
+    {
+      etiqueta: `Mes Anterior (${infoAnterior.nombreMes})`,
+      esActivo: fechaInicio === infoAnterior.inicioMes && fechaFin === infoAnterior.finMes,
+      aplicar: () => {
+        onChangeInicio(infoAnterior.inicioMes);
+        onChangeFin(infoAnterior.finMes);
+      },
+    },
+    {
+      etiqueta: 'Hoy',
+      esActivo: fechaInicio === infoActual.hoy && fechaFin === infoActual.hoy,
+      aplicar: () => {
+        onChangeInicio(infoActual.hoy);
+        onChangeFin(infoActual.hoy);
       },
     },
     {

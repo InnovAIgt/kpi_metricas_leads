@@ -18,24 +18,42 @@ import {
 import { CruceAuditoria, VendedorMetricas, ModoLeads } from '../types';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
 import { DateRangeFilter } from './DateRangeFilter';
-import { getRangoSemanaActual, getRangoDefaultLeads } from '../utils/dateHelpers';
+import {
+  getRangoSemanaActual,
+  getRangoDefaultLeads,
+  getMesActualInfo,
+  getMesAnteriorInfo,
+  esDelMesActual,
+} from '../utils/dateHelpers';
 
 interface VistaKpiCumplimientoProps {
   cruces: CruceAuditoria[];
   tipoLeadActual?: ModoLeads;
+  catalogo?: any[];
 }
 
 export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
   cruces,
   tipoLeadActual = 'calificados',
+  catalogo = [],
 }) => {
   const esNoCalificado = tipoLeadActual === 'no_calificados';
 
   // Filtros globales y de fecha (Por defecto: Todo Septiembre 2026 completo)
   const [busqueda, setBusqueda] = useState('');
   const rangoInicial = getRangoDefaultLeads();
-  const [fechaInicio, setFechaInicio] = useState(rangoInicial.inicio);
-  const [fechaFin, setFechaFin] = useState(rangoInicial.fin);
+  const [fechaInicio, setFechaInicio] = useState(() => {
+    const tieneEnMesActual = cruces.some((c) =>
+      esDelMesActual(c.cita, ['fecha_agendada', 'fecha_creado', 'created_at', 'fecha_cita'])
+    );
+    return tieneEnMesActual ? rangoInicial.inicio : '';
+  });
+  const [fechaFin, setFechaFin] = useState(() => {
+    const tieneEnMesActual = cruces.some((c) =>
+      esDelMesActual(c.cita, ['fecha_agendada', 'fecha_creado', 'created_at', 'fecha_cita'])
+    );
+    return tieneEnMesActual ? rangoInicial.fin : '';
+  });
 
   // Vendedor seleccionado para ver sus leads detallados
   const [vendedorSeleccionado, setVendedorSeleccionado] = useState<string | null>(null);
@@ -379,12 +397,24 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    setFechaInicio('2026-09-01');
-                    setFechaFin('2026-09-30');
+                    const ant = getMesAnteriorInfo();
+                    setFechaInicio(ant.inicioMes);
+                    setFechaFin(ant.finMes);
                   }}
                   className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-sm cursor-pointer transition-all"
                 >
-                  Ver Todo Septiembre (01 al 30 Sep)
+                  Ver Mes Anterior ({getMesAnteriorInfo().nombreMes})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const act = getMesActualInfo();
+                    setFechaInicio(act.inicioMes);
+                    setFechaFin(act.finMes);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-sm cursor-pointer transition-all"
+                >
+                  Ver Mes Actual ({getMesActualInfo().nombreMes})
                 </button>
                 <button
                   type="button"

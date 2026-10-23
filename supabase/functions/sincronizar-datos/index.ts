@@ -670,7 +670,7 @@ Deno.serve(async (req) => {
 
     const dataLeadsNoCalificados = deduplicarPorClave(
       await Promise.all(rawNc.map(normalizarLeadNoCalificado)),
-      "id"
+      "client_id"
     );
 
     const dataCelular = deduplicarPorClave(
@@ -689,7 +689,7 @@ Deno.serve(async (req) => {
         ? upsertEnLotes(supabase, "leads", dataLeads, "codigo_prospecto")
         : { tabla: "leads", insertados: 0, sinClave: 0, errores: [] },
       dataLeadsNoCalificados.length > 0
-        ? upsertEnLotes(supabase, "leads_no_calificados", dataLeadsNoCalificados, "id")
+        ? upsertEnLotes(supabase, "leads_no_calificados", dataLeadsNoCalificados, "client_id,created_at")
         : { tabla: "leads_no_calificados", insertados: 0, sinClave: 0, errores: [] },
       dataCelular.length > 0
         ? upsertEnLotes(supabase, "llamadas_celular", dataCelular, "id")

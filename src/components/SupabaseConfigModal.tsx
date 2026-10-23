@@ -21,6 +21,7 @@ import {
 import { SupabaseConfig } from '../types';
 import { probarConexionSupabase } from '../services/supabaseService';
 import { triggerEdgeFunction } from '../services/apiService';
+import { getMesActualInfo, getMesAnteriorInfo } from '../utils/dateHelpers';
 import codigoEdgeFunctionRaw from '../../supabase/functions/sincronizar-datos/index.ts?raw';
 
 interface SupabaseConfigModalProps {
@@ -59,8 +60,8 @@ export const SupabaseConfigModal: React.FC<SupabaseConfigModalProps> = ({
     datos?: any;
   } | null>(null);
 
-  // Parámetros de sincronización Edge Function
-  const [fechaDesde, setFechaDesde] = useState('2026-09-01');
+  // Parámetros de sincronización Edge Function (desde el mes anterior hasta hoy)
+  const [fechaDesde, setFechaDesde] = useState(() => getMesAnteriorInfo().inicioMes);
   const [fechaHasta, setFechaHasta] = useState(() => new Date().toISOString().slice(0, 10));
   const [paisSync, setPaisSync] = useState<'AMBOS' | 'SV' | 'GT'>('AMBOS');
 

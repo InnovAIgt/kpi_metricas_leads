@@ -19,7 +19,7 @@ import {
   calcularResumenKPIs,
   calcularMetricasPorVendedor,
 } from './utils/matchingEngine';
-import { esDelMesActual } from './utils/dateHelpers';
+import { esDelMesActual, esDelMesAnterior, getMesActualInfo } from './utils/dateHelpers';
 import {
   sincronizarDatosDesdeBackend,
   actualizarLeadKpiBackend,
@@ -41,7 +41,8 @@ import { MetricsOverview } from './components/MetricsOverview';
 import { VendorScorecard } from './components/VendorScorecard';
 import { LoginScreen } from './components/LoginScreen';
 import { SupabaseConfigModal } from './components/SupabaseConfigModal';
-import { CheckCircle2, AlertCircle, Info, ExternalLink, Play, ArrowLeftRight } from 'lucide-react';
+import { ReproductorAudioFlotante } from './components/ReproductorAudioFlotante';
+import { CheckCircle2, AlertCircle, Info, ExternalLink, Play, ArrowLeftRight, Phone, Video, Building2 } from 'lucide-react';
 
 export default function App() {
   // Autenticación de usuario (por defecto activo para mostrar los datos de inmediato)
@@ -123,6 +124,7 @@ export default function App() {
   const [filtroFecha, setFiltroFecha] = useState<FiltroFecha>('este_mes');
   const [sincronizando, setSincronizando] = useState(false);
   const [modalSupabaseAbierto, setModalSupabaseAbierto] = useState(false);
+  const [llamadaReproduciendo, setLlamadaReproduciendo] = useState<any | null>(null);
   const [toast, setToast] = useState<{
     tipo: 'exito' | 'error' | 'info';
     mensaje: string;
@@ -201,9 +203,16 @@ export default function App() {
   };
 
   const handleSincronizarManual = async () => {
-    mostrarToast('Sincronizando con Supabase y PBX en vivo...', 'info');
+    mostrarToast('Sincronizando con PBX en vivo y Supabase...', 'info');
+    try {
+      await triggerEdgeFunction({
+        pbx_desde: `${new Date().toISOString().slice(0, 7)}-01`,
+        pbx_hasta: new Date().toISOString().slice(0, 10),
+        pbx_pais: 'AMBOS',
+      });
+    } catch (_) {}
     await cargarDatosDesdeBackend();
-    mostrarToast('Datos sincronizados correctamente.', 'exito');
+    mostrarToast('Datos sincronizados en vivo correctamente.', 'exito');
   };
 
   // Citas activas según el modo seleccionado (¡NO SE MEZCLAN!)
@@ -346,6 +355,7 @@ export default function App() {
             ? datos.ejecutivo.toLowerCase().replace(/\s+/g, '_')
             : 'asesor_general',
           vendedor_nombre: datos.ejecutivo || 'Asesor General',
+          telefono_marcado: String(datos.telefono_destino || '').trim(),
           prospecto_telefono: String(datos.telefono_destino || '').trim(),
           fecha_hora_inicio: `${datos.fecha}T${datos.hora}`,
           fecha_hora_fin: `${datos.fecha}T${datos.hora}`,
@@ -367,7 +377,18 @@ export default function App() {
     }
   };
 
-  // Filtrado temporal global (por defecto: mes actual Septiembre 2026)
+  const hayLeadsEnMesActual = useMemo(() => {
+    return citasActivas.some((c) =>
+      esDelMesActual(c, [
+        'fecha_agendada',
+        'fecha_creado',
+        'created_at',
+        'fecha_hora_programada',
+      ])
+    );
+  }, [citasActivas]);
+
+  // Filtrado temporal global (mes actual dinámico, mes anterior o histórico)
   const citasFiltradas = useMemo(() => {
     if (filtroFecha === 'todos') return citasActivas;
     const ahora = new Date();
@@ -381,7 +402,16 @@ export default function App() {
         return f1 === hoyStr || f2 === hoyStr || f3 === hoyStr;
       }
       if (filtroFecha === 'este_mes') {
+        if (!hayLeadsEnMesActual) return true; // Si la API externa no ha publicado leads en el mes actual, mostrar los más recientes
         return esDelMesActual(c, [
+          'fecha_agendada',
+          'fecha_creado',
+          'created_at',
+          'fecha_hora_programada',
+        ]);
+      }
+      if (filtroFecha === 'mes_anterior') {
+        return esDelMesAnterior(c, [
           'fecha_agendada',
           'fecha_creado',
           'created_at',
@@ -390,7 +420,7 @@ export default function App() {
       }
       return true;
     });
-  }, [citasActivas, filtroFecha]);
+  }, [citasActivas, filtroFecha, hayLeadsEnMesActual]);
 
   const llamadasFiltradas = useMemo(() => {
     if (filtroFecha === 'todos') return llamadas;
@@ -401,7 +431,17 @@ export default function App() {
       const fechaCall = call.fecha_hora_inicio ? call.fecha_hora_inicio.slice(0, 10) : '';
       if (filtroFecha === 'hoy') return fechaCall === hoyStr;
       if (filtroFecha === 'este_mes') {
+        if (!hayLeadsEnMesActual) return true;
         return esDelMesActual(call, [
+          'fecha_hora_inicio',
+          'fecha_hora',
+          'fecha',
+          'calldate',
+          'created_at',
+        ]);
+      }
+      if (filtroFecha === 'mes_anterior') {
+        return esDelMesAnterior(call, [
           'fecha_hora_inicio',
           'fecha_hora',
           'fecha',
@@ -411,7 +451,7 @@ export default function App() {
       }
       return true;
     });
-  }, [llamadas, filtroFecha]);
+  }, [llamadas, filtroFecha, hayLeadsEnMesActual]);
 
   // Motor de Cruce Inteligente (auditoría ±5 min, comparación telefónica y de asesor)
   const crucesAuditoria = useMemo(() => {
@@ -426,27 +466,34 @@ export default function App() {
     return calcularMetricasPorVendedor(crucesAuditoria);
   }, [crucesAuditoria]);
 
-  // Conteos del mes actual para la barra lateral (muestra solo la cantidad del mes)
+  // Conteos del mes actual para la barra lateral (muestra cantidad del mes o total disponible si no hay en el mes)
   const conteosMes = useMemo(() => {
+    const pbxMes = rawPbx.filter((item) =>
+      esDelMesActual(item, ['fecha_hora', 'fecha', 'calldate', 'created_at'])
+    ).length;
+    const celMes = rawCelular.filter((item) =>
+      esDelMesActual(item, ['fecha', 'dia_consultado', 'created_at'])
+    ).length;
+    const waMes = rawWhatsapp.filter((item) =>
+      esDelMesActual(item, ['fecha_llamada', 'created_at', 'fecha_hora'])
+    ).length;
+    const leadsMes = rawLeads.filter((item) =>
+      esDelMesActual(item, ['fecha_agendada', 'fecha_creado', 'created_at'])
+    ).length;
+    const ncMes = rawLeadsNoCalificados.filter((item) =>
+      esDelMesActual(item, ['created_at', 'created_at_sv', 'fecha'])
+    ).length;
+    const teamsMes = rawTeams.filter((item) =>
+      esDelMesActual(item, ['fecha_hora_inicio', 'fecha_hora', 'created_at', 'fecha_reunion'])
+    ).length;
+
     return {
-      pbx: rawPbx.filter((item) =>
-        esDelMesActual(item, ['fecha_hora', 'fecha', 'calldate', 'created_at'])
-      ).length,
-      celular: rawCelular.filter((item) =>
-        esDelMesActual(item, ['fecha', 'dia_consultado', 'created_at'])
-      ).length,
-      whatsapp: rawWhatsapp.filter((item) =>
-        esDelMesActual(item, ['fecha_llamada', 'created_at', 'fecha_hora'])
-      ).length,
-      leads: rawLeads.filter((item) =>
-        esDelMesActual(item, ['fecha_agendada', 'fecha_creado', 'created_at'])
-      ).length,
-      leadsNoCalificados: rawLeadsNoCalificados.filter((item) =>
-        esDelMesActual(item, ['created_at', 'created_at_sv'])
-      ).length,
-      teams: rawTeams.filter((item) =>
-        esDelMesActual(item, ['fecha_hora_inicio', 'fecha_hora', 'created_at'])
-      ).length,
+      pbx: pbxMes > 0 ? pbxMes : rawPbx.length,
+      celular: celMes > 0 ? celMes : rawCelular.length,
+      whatsapp: waMes > 0 ? waMes : rawWhatsapp.length,
+      leads: leadsMes > 0 ? leadsMes : rawLeads.length,
+      leadsNoCalificados: ncMes > 0 ? ncMes : rawLeadsNoCalificados.length,
+      teams: teamsMes > 0 ? teamsMes : rawTeams.length,
       catalogo: catalogo.length,
     };
   }, [rawPbx, rawCelular, rawWhatsapp, rawLeads, rawLeadsNoCalificados, rawTeams, catalogo]);
@@ -587,17 +634,37 @@ export default function App() {
                   etiqueta: 'Audio / Grabación',
                   render: (val, fila) => {
                     const audio = val || fila.grabacion_url;
+                    const estaReproduciendo =
+                      llamadaReproduciendo?.uniqueid === fila.uniqueid ||
+                      llamadaReproduciendo?.id === fila.id;
+
                     return audio ? (
-                      <a
-                        href={audio}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300"
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLlamadaReproduciendo(fila);
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
+                          estaReproduciendo
+                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400'
+                            : 'bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 hover:bg-indigo-900 hover:text-indigo-200'
+                        }`}
+                        title="Reproducir audio en reproductor flotante sin salir de la página"
                       >
-                        <Play className="h-3 w-3" /> Escuchar
-                      </a>
+                        {estaReproduciendo ? (
+                          <>
+                            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                            <span>Escuchando</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="h-3 w-3 fill-indigo-400" />
+                            <span>Escuchar</span>
+                          </>
+                        )}
+                      </button>
                     ) : (
-                      <span className="text-slate-600">-</span>
+                      <span className="text-slate-600 text-xs italic">Sin audio</span>
                     );
                   },
                 },
@@ -720,6 +787,36 @@ export default function App() {
                       {val || fila.celular || fila.movil || 'Sin teléfono'}
                     </span>
                   ),
+                },
+                {
+                  clave: 'tipo_reunion',
+                  etiqueta: 'Tipo de Reunión',
+                  render: (val) => {
+                    const tipo = String(val || 'Llamada Telefonica').trim();
+                    const tipoLower = tipo.toLowerCase();
+                    if (tipoLower.includes('teams') || tipoLower.includes('virtual')) {
+                      return (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-950/80 text-blue-300 border border-blue-700/50 whitespace-nowrap">
+                          <Video className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                          <span>{tipo}</span>
+                        </span>
+                      );
+                    }
+                    if (tipoLower.includes('presencial')) {
+                      return (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-purple-950/80 text-purple-300 border border-purple-700/50 whitespace-nowrap">
+                          <Building2 className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                          <span>{tipo}</span>
+                        </span>
+                      );
+                    }
+                    return (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-700/50 whitespace-nowrap">
+                        <Phone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                        <span>{tipo}</span>
+                      </span>
+                    );
+                  },
                 },
                 {
                   clave: 'fecha_agendada',
@@ -1181,6 +1278,7 @@ export default function App() {
             <VistaKpiCumplimiento
               cruces={crucesAuditoria}
               tipoLeadActual={modoLeads}
+              catalogo={catalogo}
             />
           )}
 
@@ -1221,6 +1319,12 @@ export default function App() {
           cargarDatosDesdeBackend();
           mostrarToast('Datos de Supabase actualizados tras sincronización', 'exito');
         }}
+      />
+
+      {/* Reproductor Flotante de Audio para Llamadas PBX */}
+      <ReproductorAudioFlotante
+        llamada={llamadaReproduciendo}
+        onClose={() => setLlamadaReproduciendo(null)}
       />
     </div>
   );

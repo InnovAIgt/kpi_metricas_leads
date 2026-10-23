@@ -20,7 +20,13 @@ import {
 } from 'lucide-react';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
 import { DateRangeFilter } from './DateRangeFilter';
-import { getRangoSemanaActual, getRangoDefaultLeads } from '../utils/dateHelpers';
+import {
+  getRangoSemanaActual,
+  getRangoDefaultLeads,
+  getMesActualInfo,
+  getMesAnteriorInfo,
+  esDelMesActual,
+} from '../utils/dateHelpers';
 
 export interface ColumnaDef {
   clave: string;
@@ -55,8 +61,18 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 }) => {
   const [busqueda, setBusqueda] = useState('');
   const rangoInicial = getRangoDefaultLeads();
-  const [fechaInicio, setFechaInicio] = useState(rangoInicial.inicio);
-  const [fechaFin, setFechaFin] = useState(rangoInicial.fin);
+  const [fechaInicio, setFechaInicio] = useState(() => {
+    const tieneEnMesActual = datos.some((d) =>
+      esDelMesActual(d, ['fecha_hora', 'fecha_agendada', 'fecha_creado', 'fecha', 'created_at'])
+    );
+    return tieneEnMesActual ? rangoInicial.inicio : '';
+  });
+  const [fechaFin, setFechaFin] = useState(() => {
+    const tieneEnMesActual = datos.some((d) =>
+      esDelMesActual(d, ['fecha_hora', 'fecha_agendada', 'fecha_creado', 'fecha', 'created_at'])
+    );
+    return tieneEnMesActual ? rangoInicial.fin : '';
+  });
 
   // Estado para modal de Teams (Ingresar/Editar llamada)
   const [modalTeamsAbierto, setModalTeamsAbierto] = useState(false);
@@ -83,8 +99,8 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
   // Filtros dinámicos por cada columna: { [claveColumna]: string[] (valores marcados) }
   const [filtrosColumnas, setFiltrosColumnas] = useState<Record<string, string[]>>({});
 
-  // Para leads calificados: mostrar por defecto solo los que tienen reunión agendada pactada
-  const [soloConReunion, setSoloConReunion] = useState(icono === 'leads');
+  // Para leads calificados: permitir filtrar opcionalmente solo los que tienen reunión agendada pactada (por defecto false para mostrar todos los del período)
+  const [soloConReunion, setSoloConReunion] = useState(false);
 
   const handleCambiarFiltroColumna = (clave: string, seleccionados: string[]) => {
     setFiltrosColumnas((prev) => ({
@@ -268,7 +284,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
   const datosConFecha = useMemo(() => {
     let base = datos;
 
-    // Si es leads y está marcado soloConReunion, filtrar solo los que tienen fecha_agendada real
+    // Si es leads y el usuario activó filtrar soloConReunion, filtrar solo los que tienen fecha_agendada real
     if (icono === 'leads' && soloConReunion) {
       base = base.filter(
         (fila) =>
@@ -280,7 +296,25 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
     if (!fechaInicio && !fechaFin) return base;
 
-    // Detectar columna de fecha en la tabla
+    // Para leads: evaluar cualquiera de sus fechas válidas (fecha_agendada, fecha_creado o created_at)
+    // Esto garantiza consistencia total con el Resumen y KPIs de Cumplimiento (mostrando exactamente todos los del período)
+    if (icono === 'leads') {
+      return base.filter((fila) => {
+        const f1 = fila.fecha_agendada && fila.fecha_agendada !== 'null' ? String(fila.fecha_agendada).slice(0, 10) : '';
+        const f2 = fila.fecha_creado && fila.fecha_creado !== 'null' ? String(fila.fecha_creado).slice(0, 10) : '';
+        const f3 = fila.created_at && fila.created_at !== 'null' ? String(fila.created_at).slice(0, 10) : '';
+        const f4 = fila.fecha && fila.fecha !== 'null' ? String(fila.fecha).slice(0, 10) : '';
+        const fechas = [f1, f2, f3, f4].filter(Boolean);
+        if (fechas.length === 0) return true;
+        return fechas.some((f) => {
+          if (fechaInicio && f < fechaInicio) return false;
+          if (fechaFin && f > fechaFin) return false;
+          return true;
+        });
+      });
+    }
+
+    // Para llamadas y otros registros: detectar columna de fecha en la tabla
     const colFecha = columnas.find((c) =>
       c.esFecha ||
       c.clave.includes('fecha') ||
@@ -429,10 +463,10 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500 shadow-sm'
                     : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
                 }`}
-                title="Alternar entre ver solo prospectos con fecha de reunión agendada o todos los calificados"
+                title="Alternar entre ver todos los prospectos del período o solo aquellos con fecha pactada"
               >
                 <Check className={`h-3.5 w-3.5 ${soloConReunion ? 'text-emerald-400' : 'text-slate-500'}`} />
-                <span>{soloConReunion ? 'Solo Con Reunión Agendada (Activo)' : 'Ver Todos los Calificados'}</span>
+                <span>{soloConReunion ? 'Solo Con Reunión Pactada (Filtro Activo)' : 'Ver Todos los Prospectos del Período'}</span>
               </button>
             )}
             {icono === 'teams' && (
@@ -617,19 +651,43 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                       <p className="text-sm font-semibold text-white">
                         No se encontraron registros en el rango seleccionado {fechaInicio && fechaFin ? `(${fechaInicio} al ${fechaFin})` : ''}
                       </p>
-                      <p className="text-xs text-slate-400">
-                        En la base de datos de Leads, los registros agendados disponibles llegan hasta el 16 de septiembre. Puedes alternar rápidamente con los siguientes accesos directos:
-                      </p>
+                      {icono === 'leads' ? (
+                        <div className="text-xs text-slate-300 space-y-1.5 bg-slate-950/60 p-3 rounded-lg border border-slate-800 text-left">
+                          <p className="font-semibold text-white">Estado de las fuentes de datos:</p>
+                          <p>
+                            • <strong className="text-emerald-400">Telefonía (PBX y Celular):</strong> Registros sincronizados en tiempo real hasta hoy ({getMesActualInfo().hoy}).
+                          </p>
+                          <p>
+                            • <strong className="text-cyan-400">Leads Calificados (Prospektia API):</strong> El último lote de citas agendadas por la API externa fue del 29 de septiembre de 2026.
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-400">
+                          No hay eventos registrados en este período específico. Puedes alternar rápidamente con los siguientes accesos directos:
+                        </p>
+                      )}
                       <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
                         <button
                           type="button"
                           onClick={() => {
-                            setFechaInicio('2026-09-01');
-                            setFechaFin('2026-09-30');
+                            const ant = getMesAnteriorInfo();
+                            setFechaInicio(ant.inicioMes);
+                            setFechaFin(ant.finMes);
                           }}
                           className="px-3 py-1.5 rounded-lg bg-indigo-950/80 border border-indigo-700/80 text-indigo-300 hover:bg-indigo-900 text-xs font-medium cursor-pointer transition-colors"
                         >
-                          Todo Septiembre (01-30 Sep)
+                          Ver Mes Anterior ({getMesAnteriorInfo().nombreMes})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const act = getMesActualInfo();
+                            setFechaInicio(act.inicioMes);
+                            setFechaFin(act.finMes);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-950/80 border border-emerald-700/80 text-emerald-300 hover:bg-emerald-900 text-xs font-medium cursor-pointer transition-colors"
+                        >
+                          Ver Mes Actual ({getMesActualInfo().nombreMes})
                         </button>
                         <button
                           type="button"
@@ -639,7 +697,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                           }}
                           className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 text-xs font-medium cursor-pointer transition-colors"
                         >
-                          Ver Todos
+                          Ver Todos ({datos.length})
                         </button>
                       </div>
                     </div>

@@ -1,12 +1,71 @@
+const NOMBRES_MESES = [
+  'Enero',
+  'Febrero',
+  'Marzo',
+  'Abril',
+  'Mayo',
+  'Junio',
+  'Julio',
+  'Agosto',
+  'Septiembre',
+  'Octubre',
+  'Noviembre',
+  'Diciembre',
+];
+
+export interface MesInfo {
+  anio: number;
+  mes: number;
+  mesStr: string;
+  mesTarget: string; // ej: "2026-10"
+  nombreMes: string; // ej: "Octubre"
+  inicioMes: string; // ej: "2026-10-01"
+  finMes: string; // ej: "2026-10-31"
+  hoy: string; // ej: "2026-10-07"
+}
+
+/**
+ * Obtiene dinámicamente toda la información del mes actual del sistema
+ */
+export function getMesActualInfo(baseDate?: Date | string): MesInfo {
+  const d = baseDate ? new Date(baseDate) : new Date();
+  const anio = d.getFullYear();
+  const mes = d.getMonth() + 1;
+  const mesStr = String(mes).padStart(2, '0');
+  const mesTarget = `${anio}-${mesStr}`;
+  const nombreMes = NOMBRES_MESES[mes - 1] || 'Octubre';
+
+  const inicioMes = `${anio}-${mesStr}-01`;
+  const ultimoDiaNum = new Date(anio, mes, 0).getDate();
+  const finMes = `${anio}-${mesStr}-${String(ultimoDiaNum).padStart(2, '0')}`;
+  const hoy = d.toISOString().slice(0, 10);
+
+  return {
+    anio,
+    mes,
+    mesStr,
+    mesTarget,
+    nombreMes,
+    inicioMes,
+    finMes,
+    hoy,
+  };
+}
+
+/**
+ * Obtiene dinámicamente la información del mes anterior
+ */
+export function getMesAnteriorInfo(baseDate?: Date | string): MesInfo {
+  const d = baseDate ? new Date(baseDate) : new Date();
+  const dAnterior = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+  return getMesActualInfo(dAnterior);
+}
+
 /**
  * Obtiene el rango de la semana actual calendario (Lunes a Domingo) en formato YYYY-MM-DD.
- * Para hoy 24 de septiembre 2026, retorna exactamente lunes 2026-09-21 a domingo 2026-09-27.
  */
 export function getRangoSemanaActual(baseDate?: Date | string): { inicio: string; fin: string } {
-  let ahora = baseDate ? new Date(baseDate) : new Date();
-  if (ahora.getFullYear() !== 2026) {
-    ahora = new Date('2026-09-25T12:00:00Z');
-  }
+  const ahora = baseDate ? new Date(baseDate) : new Date();
   const diaSemana = ahora.getDay(); // 0 = Domingo, 1 = Lunes, ...
   const diffLunes = diaSemana === 0 ? -6 : 1 - diaSemana;
 
@@ -30,28 +89,40 @@ export function getRangoSemanaActual(baseDate?: Date | string): { inicio: string
 }
 
 /**
- * Obtiene el rango por defecto del mes actual completo (01 al 30 de septiembre de 2026)
+ * Obtiene el rango por defecto del mes actual dinámico
  */
 export function getRangoDefaultLeads(): { inicio: string; fin: string } {
+  const info = getMesActualInfo();
   return {
-    inicio: '2026-09-01',
-    fin: '2026-09-30',
+    inicio: info.inicioMes,
+    fin: info.finMes,
   };
 }
 
 /**
- * Obtiene el rango del mes actual
+ * Obtiene el rango del mes actual dinámico
  */
 export function getRangoMesActual(): { inicio: string; fin: string } {
+  const info = getMesActualInfo();
   return {
-    inicio: '2026-09-01',
-    fin: '2026-09-30',
+    inicio: info.inicioMes,
+    fin: info.finMes,
+  };
+}
+
+/**
+ * Obtiene el rango del mes anterior dinámico
+ */
+export function getRangoMesAnterior(): { inicio: string; fin: string } {
+  const info = getMesAnteriorInfo();
+  return {
+    inicio: info.inicioMes,
+    fin: info.finMes,
   };
 }
 
 /**
  * Valida si una fecha es futura/próxima (estrictamente mayor a hoy, no hoy ni en el pasado).
- * Requisito usuario: "son leads que si fecha es proxima no hoy o en el pasado"
  */
 export function esFechaProxima(fechaStrOVal?: string | null): boolean {
   if (!fechaStrOVal) return false;
@@ -59,19 +130,12 @@ export function esFechaProxima(fechaStrOVal?: string | null): boolean {
   const f = str.slice(0, 10);
   if (!f || f.length < 10) return false;
 
-  // Fecha actual de referencia: 2026-09-25
-  const ahora = new Date();
-  let hoyStr = ahora.toISOString().slice(0, 10);
-  if (ahora.getFullYear() < 2026) {
-    hoyStr = '2026-09-25';
-  }
-
-  // Estrictamente futura (no hoy y no en el pasado)
+  const hoyStr = new Date().toISOString().slice(0, 10);
   return f > hoyStr;
 }
 
 /**
- * Valida si un registro pertenece al mes actual (Septiembre 2026)
+ * Valida si un registro pertenece al mes actual dinámico (ej: Octubre 2026)
  */
 export function esDelMesActual(
   item: any,
@@ -89,31 +153,84 @@ export function esDelMesActual(
   ]
 ): boolean {
   if (!item) return false;
-  const mesTarget = '2026-09';
+  const info = getMesActualInfo();
+  return esDelMesEspecifico(item, info.anio, info.mes, dateKeys);
+}
+
+/**
+ * Valida si un registro pertenece al mes anterior dinámico (ej: Septiembre 2026)
+ */
+export function esDelMesAnterior(
+  item: any,
+  dateKeys: string[] = [
+    'fecha_agendada',
+    'fecha_creado',
+    'fecha_hora',
+    'fecha_hora_inicio',
+    'fecha_llamada',
+    'fecha',
+    'created_at',
+    'created_at_sv',
+    'calldate',
+    'solo_fecha',
+  ]
+): boolean {
+  if (!item) return false;
+  const info = getMesAnteriorInfo();
+  return esDelMesEspecifico(item, info.anio, info.mes, dateKeys);
+}
+
+/**
+ * Validador universal para cualquier año y mes especificado
+ */
+export function esDelMesEspecifico(
+  item: any,
+  anio: number,
+  mes: number,
+  dateKeys: string[] = [
+    'fecha_agendada',
+    'fecha_creado',
+    'fecha_hora',
+    'fecha_hora_inicio',
+    'fecha_llamada',
+    'fecha',
+    'created_at',
+    'created_at_sv',
+    'calldate',
+    'solo_fecha',
+  ]
+): boolean {
+  if (!item) return false;
+  const mesStr = String(mes).padStart(2, '0');
+  const targetIso = `${anio}-${mesStr}`;
+  const targetSlash = `/${mesStr}/${anio}`;
+  const targetDash = `-${mesStr}-${anio}`;
+
   for (const k of dateKeys) {
     const val = item[k];
     if (val) {
       const s = String(val).trim();
-      // Formato ISO "2026-09-..."
-      if (s.startsWith(mesTarget)) return true;
-      // Formato latam "DD/09/2026..." o "2026/09/..."
-      if (
-        s.includes('/09/2026') ||
-        s.includes('-09-2026') ||
-        s.includes('2026-09') ||
-        s.includes('2026/09')
-      ) {
-        return true;
+      if (s.startsWith(targetIso) || s.includes(targetIso)) return true;
+      if (s.includes(targetSlash) || s.includes(targetDash)) return true;
+
+      // Parseo seguro de fecha si no coincide en string
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) {
+        if (d.getFullYear() === anio && d.getMonth() + 1 === mes) {
+          return true;
+        }
       }
     }
   }
-  // Para llamadas_pbx que tienen columnas 'mes' y 'anio' explícitas
+
+  // Columnas numéricas/texto directas de llamadas_pbx ('mes' y 'anio')
   if (
-    (item.mes === 9 || item.mes === '9' || item.mes === '09') &&
-    (item.anio === 2026 || item.anio === '2026')
+    (Number(item.mes) === mes || String(item.mes) === mesStr) &&
+    Number(item.anio) === anio
   ) {
     return true;
   }
+
   return false;
 }
 

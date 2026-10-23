@@ -18,6 +18,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { VistaApp, ModoLeads } from '../types';
+import { getMesActualInfo } from '../utils/dateHelpers';
 
 interface SidebarProps {
   vistaActiva: VistaApp;
@@ -341,13 +342,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Footer con acceso directo a la configuración de la Edge Function y Supabase */}
+      {/* Footer con acceso directo a sincronización en caliente de APIs y base de datos */}
       <div className="p-3 border-t border-slate-800/80 bg-slate-950/60 mt-auto">
         <button
           type="button"
           onClick={onAbrirConfigSupabase}
           className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl bg-indigo-950/40 hover:bg-indigo-900/50 border border-indigo-500/30 text-indigo-300 transition-all text-xs group shadow-sm"
-          title="Ver código actualizado de la Edge Function y sincronizar data de Septiembre"
+          title={`Sincronizar datos en caliente desde APIs y Supabase (${getMesActualInfo().nombreMes})`}
         >
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400 group-hover:bg-indigo-500/30">
@@ -355,10 +356,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div className="text-left">
               <div className="font-semibold text-white text-[11px] leading-tight">
-                Edge Function & Sync
+                Sincronización en Caliente
               </div>
               <div className="text-[9px] text-indigo-300/80">
-                Sincronizar Septiembre
+                APIs en Vivo ({getMesActualInfo().nombreMes})
               </div>
             </div>
           </div>

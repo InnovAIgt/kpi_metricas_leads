@@ -14,6 +14,7 @@ import {
   User,
 } from 'lucide-react';
 import { FiltroFecha, SupabaseConfig, ModoLeads } from '../types';
+import { getMesActualInfo, getMesAnteriorInfo } from '../utils/dateHelpers';
 
 interface HeaderProps {
   filtroFecha: FiltroFecha;
@@ -42,6 +43,9 @@ export const Header: React.FC<HeaderProps> = ({
   modoLeads,
   onAlternarModo,
 }) => {
+  const infoActual = getMesActualInfo();
+  const infoAnterior = getMesAnteriorInfo();
+
   return (
     <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-40 shadow-lg">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
@@ -87,17 +91,17 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
 
-            {/* Estado Supabase y Acceso a Edge Function */}
+            {/* Estado y Acceso a Sincronización en Vivo */}
             <button
               type="button"
               onClick={onAbrirConfigSupabase}
               className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border bg-indigo-950/60 hover:bg-indigo-900/80 border-indigo-500/40 text-indigo-300 transition-all cursor-pointer shadow-sm group"
-              title="Abrir modal de Edge Function y sincronización de datos de Septiembre"
+              title={`Sincronización en vivo con APIs y base de datos (${infoActual.nombreMes})`}
             >
               <Database className="h-3.5 w-3.5 text-indigo-400 group-hover:scale-110 transition-transform" />
-              <span className="font-semibold text-white">Edge Function</span>
+              <span className="font-semibold text-white">APIs en Vivo</span>
               <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded border border-emerald-500/30 font-medium">
-                Septiembre
+                {infoActual.nombreMes}
               </span>
             </button>
 
@@ -110,8 +114,20 @@ export const Header: React.FC<HeaderProps> = ({
                     ? 'bg-rose-600 text-white font-medium shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
+                title={`Mes actual (${infoActual.nombreMes})`}
               >
-                Mes Actual
+                Mes Actual ({infoActual.nombreMes.slice(0, 3)})
+              </button>
+              <button
+                onClick={() => setFiltroFecha('mes_anterior')}
+                className={`text-xs px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                  filtroFecha === 'mes_anterior'
+                    ? 'bg-rose-600 text-white font-medium shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title={`Mes anterior (${infoAnterior.nombreMes})`}
+              >
+                {infoAnterior.nombreMes.slice(0, 3)}
               </button>
               <button
                 onClick={() => setFiltroFecha('hoy')}

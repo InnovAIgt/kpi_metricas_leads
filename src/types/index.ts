@@ -2,7 +2,7 @@ export interface Cita {
   id: string;
   prospecto_nombre: string;
   prospecto_telefono: string;
-  prospecto_email: string;
+  prospecto_email?: string;
   vendedor_id: string;
   vendedor_nombre: string;
   fecha_hora_programada: string; // ISO string
@@ -28,6 +28,7 @@ export interface Cita {
   fecha_creado?: string;
   hora_creado?: string;
   pais?: string;
+  created_at?: string;
   tipo_lead?: 'calificados' | 'no_calificados';
   kpi_sla_etapa_1?: boolean;
   kpi_sla_etapa_2?: boolean;
@@ -44,14 +45,18 @@ export interface Llamada {
   vendedor_nombre: string;
   telefono_marcado: string;
   prospecto_nombre?: string;
+  prospecto_telefono?: string;
   fecha_hora_inicio: string; // ISO string
   fecha_hora_fin: string; // ISO string
   duracion_segundos: number;
   resultado: 'contestada' | 'buzon' | 'no_contesta' | 'ocupado' | 'fallida';
-  proveedor: 'Twilio' | 'CloudTalk' | 'RingCentral' | 'Aircall' | 'Vapi' | 'Zadarma' | 'VoIP';
+  proveedor: 'Twilio' | 'CloudTalk' | 'RingCentral' | 'Aircall' | 'Vapi' | 'Zadarma' | 'VoIP' | 'PBX' | 'Celular' | 'Teams' | 'WhatsApp' | string;
   grabacion_url?: string;
+  audio_url?: string;
   notas_llamada?: string;
   canal_tipo?: 'PBX' | 'Celular' | 'WhatsApp' | 'Teams';
+  estado_llamada?: string;
+  fuente?: string;
 }
 
 export type EstadoCumplimiento =
@@ -140,7 +145,7 @@ export interface SupabaseConfig {
   conectado: boolean;
 }
 
-export type FiltroFecha = 'hoy' | 'ayer' | 'ultimos_7_dias' | 'este_mes' | 'todos';
+export type FiltroFecha = 'hoy' | 'ayer' | 'ultimos_7_dias' | 'este_mes' | 'mes_anterior' | 'todos';
 
 export type ModoLeads = 'calificados' | 'no_calificados';
 

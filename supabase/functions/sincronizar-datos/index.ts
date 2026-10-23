@@ -554,6 +554,7 @@ Deno.serve(async (req) => {
   }
 
   try {
+    const urlObj = new URL(req.url);
     let bodyRecibido: any = {};
     if (req.method === "POST") {
       try {
@@ -561,6 +562,85 @@ Deno.serve(async (req) => {
       } catch (_) {
         bodyRecibido = {};
       }
+    }
+
+    // 0. Streaming / Proxy de Audio de Grabaciones PBX (con credenciales seguras)
+    const action = urlObj.searchParams.get("action") || bodyRecibido?.action;
+    const audioParam =
+      urlObj.searchParams.get("audio_url") ||
+      urlObj.searchParams.get("url") ||
+      bodyRecibido?.audio_url ||
+      bodyRecibido?.url;
+
+    if (action === "audio" || action === "proxy_audio" || (audioParam && action !== "sync")) {
+      if (!audioParam) {
+        return new Response(JSON.stringify({ error: "audio_url requerido" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const redPbxHost =
+        Deno.env.get("RED_PBX_HOST") || bodyRecibido?.red_pbx_host || "https://api.red.com.sv";
+      const pbxUsername =
+        Deno.env.get("PBX_USERNAME") || Deno.env.get("USERNAME") || bodyRecibido?.pbx_username || "";
+      const pbxPassword =
+        Deno.env.get("PBX_PASSWORD") || Deno.env.get("PASSWORD") || bodyRecibido?.pbx_password || "";
+
+      let jwtPbx = "";
+      if (pbxUsername && pbxPassword) {
+        const loginResult = await obtenerJwtPbx(redPbxHost, pbxUsername, pbxPassword);
+        jwtPbx = loginResult.token || "";
+      }
+
+      let targetUrl = String(audioParam).trim();
+      if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+        targetUrl = `${redPbxHost}${targetUrl.startsWith("/") ? "" : "/"}${targetUrl}`;
+      }
+
+      const audioHeaders: Record<string, string> = {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        Accept: "audio/*,*/*",
+      };
+      if (jwtPbx) {
+        audioHeaders["Authorization"] = `Bearer ${jwtPbx}`;
+      }
+      const range = req.headers.get("range");
+      if (range) {
+        audioHeaders["Range"] = range;
+      }
+
+      const audioResponse = await fetch(targetUrl, { headers: audioHeaders });
+      if (!audioResponse.ok) {
+        return new Response(
+          JSON.stringify({
+            error: "Grabación no disponible actualmente en servidor PBX",
+            status: audioResponse.status,
+            target_url: targetUrl,
+          }),
+          {
+            status: audioResponse.status,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      const forwardHeaders = new Headers(corsHeaders);
+      forwardHeaders.set("Content-Type", audioResponse.headers.get("content-type") || "audio/wav");
+      forwardHeaders.set("Accept-Ranges", "bytes");
+      forwardHeaders.set("Cache-Control", "public, max-age=3600");
+      if (audioResponse.headers.get("content-length")) {
+        forwardHeaders.set("Content-Length", audioResponse.headers.get("content-length")!);
+      }
+      if (audioResponse.headers.get("content-range")) {
+        forwardHeaders.set("Content-Range", audioResponse.headers.get("content-range")!);
+      }
+
+      return new Response(audioResponse.body, {
+        status: audioResponse.status,
+        headers: forwardHeaders,
+      });
     }
 
     // 1. Supabase nativo con Service Role Key para permisos de escritura completos

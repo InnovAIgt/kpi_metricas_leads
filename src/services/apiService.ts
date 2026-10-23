@@ -617,6 +617,27 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         resolverAsesor(extStr, resolverAsesor(pbx.nombre || '', extStr ? `Ext. ${extStr}` : 'Asesor PBX'));
       pbx.asesor_nombre = asesor;
       const fechaInicio = pbx.fecha_hora || pbx.calldate || new Date().toISOString();
+      let audioFinal = String(pbx.audio_url || pbx.grabacion_url || '').trim();
+      if (audioFinal && audioFinal !== 'null' && audioFinal !== 'undefined') {
+        if (!audioFinal.startsWith('http')) {
+          audioFinal = `https://api.red.com.sv${audioFinal.startsWith('/') ? '' : '/'}${audioFinal}`;
+        }
+      } else if (pbx.uniqueid && extStr) {
+        const d = new Date(fechaInicio);
+        if (!isNaN(d.getTime())) {
+          const y = d.getUTCFullYear();
+          const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const dia = String(d.getUTCDate()).padStart(2, '0');
+          const fn = `Grabacion_Ext_${extStr}_${pbx.uniqueid}.wav`;
+          audioFinal =
+            String(pbx.pais).toUpperCase() === 'GT'
+              ? `https://api.red.com.sv/pbx/api/v1/rawCalls?pais=GT&anio=${y}&mes=${m}&dia=${dia}&archivo=${fn}`
+              : `https://api.red.com.sv/pbx/api/v1/getAudio/${y}/${m}/${dia}/${fn}`;
+        }
+      }
+      pbx.audio_url = audioFinal || null;
+      pbx.grabacion_url = audioFinal || null;
+
       llamadas.push({
         id: String(pbx.uniqueid || pbx.id || `pbx-${idx}`),
         vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
@@ -628,7 +649,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         resultado: pbx.estado?.toLowerCase() === 'answered' ? 'contestada' : 'no_contesta',
         proveedor: 'PBX',
         canal_tipo: 'PBX',
-        audio_url: pbx.audio_url || pbx.grabacion_url,
+        audio_url: audioFinal || undefined,
       });
     });
 

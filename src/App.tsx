@@ -633,12 +633,15 @@ export default function App() {
                   clave: 'audio_url',
                   etiqueta: 'Audio / Grabación',
                   render: (val, fila) => {
-                    const audio = val || fila.grabacion_url;
+                    const audio = val || fila.grabacion_url || fila.audio_url;
+                    const tieneAudio = Boolean(
+                      audio || (fila.uniqueid && (fila.extension || fila.nombre))
+                    );
                     const estaReproduciendo =
                       llamadaReproduciendo?.uniqueid === fila.uniqueid ||
                       llamadaReproduciendo?.id === fila.id;
 
-                    return audio ? (
+                    return tieneAudio ? (
                       <button
                         type="button"
                         onClick={() => {

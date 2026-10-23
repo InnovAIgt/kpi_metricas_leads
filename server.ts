@@ -375,8 +375,28 @@ app.get('/api/sync/datos-completos', async (req, res) => {
           resolverAsesorBackend(p.nombre,
             p.nombre || (extStr ? `Ext. ${extStr}` : 'Línea PBX')
           )
-        );
       p.pais = p.pais || detectarPais(p.destino, 'SV');
+
+      let audioFinal = String(p.audio_url || p.grabacion_url || '').trim();
+      if (audioFinal && audioFinal !== 'null' && audioFinal !== 'undefined') {
+        if (!audioFinal.startsWith('http')) {
+          audioFinal = `https://api.red.com.sv${audioFinal.startsWith('/') ? '' : '/'}${audioFinal}`;
+        }
+      } else if (p.uniqueid && extStr) {
+        const d = new Date(p.fecha_hora || Date.now());
+        if (!isNaN(d.getTime())) {
+          const y = d.getUTCFullYear();
+          const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const dia = String(d.getUTCDate()).padStart(2, '0');
+          const fn = `Grabacion_Ext_${extStr}_${p.uniqueid}.wav`;
+          audioFinal =
+            String(p.pais).toUpperCase() === 'GT'
+              ? `https://api.red.com.sv/pbx/api/v1/rawCalls?pais=GT&anio=${y}&mes=${m}&dia=${dia}&archivo=${fn}`
+              : `https://api.red.com.sv/pbx/api/v1/getAudio/${y}/${m}/${dia}/${fn}`;
+        }
+      }
+      p.audio_url = audioFinal || null;
+      p.grabacion_url = audioFinal || null;
     });
 
     // 5. Jalar automáticamente prospectos con reunión virtual de Leads hacia Teams
@@ -752,45 +772,79 @@ app.delete('/api/catalogo/:id', async (req, res) => {
 // ==========================================
 app.get('/api/audio-proxy', async (req, res) => {
   try {
-    const audioUrl = req.query.url as string;
-    if (!audioUrl) {
+    const rawAudioUrl = req.query.url as string;
+    if (!rawAudioUrl) {
       return res.status(400).json({ exito: false, mensaje: 'URL de audio requerida' });
+    }
+
+    let targetUrl = String(rawAudioUrl).trim();
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+      targetUrl = `https://api.red.com.sv${targetUrl.startsWith('/') ? '' : '/'}${targetUrl}`;
     }
 
     const rangeHeader = req.headers.range;
     const fetchHeaders: Record<string, string> = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
       Accept: 'audio/*,*/*',
     };
     if (rangeHeader) {
       fetchHeaders['Range'] = rangeHeader;
     }
 
-    const response = await fetch(audioUrl, {
+    // 1. Probar vía Supabase Edge Function con credenciales seguras de PBX
+    const edgeAudioUrl = `${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/sincronizar-datos?action=audio&url=${encodeURIComponent(targetUrl)}`;
+    try {
+      const edgeRes = await fetch(edgeAudioUrl, {
+        headers: {
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          ...(rangeHeader ? { Range: rangeHeader } : {}),
+        },
+      });
+
+      if (edgeRes.ok) {
+        const contentType = edgeRes.headers.get('content-type') || 'audio/wav';
+        const contentLength = edgeRes.headers.get('content-length');
+        const contentRange = edgeRes.headers.get('content-range');
+        const acceptRanges = edgeRes.headers.get('accept-ranges') || 'bytes';
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Accept-Ranges', acceptRanges);
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        if (contentLength) res.setHeader('Content-Length', contentLength);
+        if (contentRange) res.setHeader('Content-Range', contentRange);
+
+        const arrayBuffer = await edgeRes.arrayBuffer();
+        return res.status(edgeRes.status).send(Buffer.from(arrayBuffer));
+      }
+    } catch (_) {}
+
+    // 2. Fallback a consulta directa con headers de audio
+    const directRes = await fetch(targetUrl, {
       headers: fetchHeaders,
     });
 
-    if (!response.ok) {
-      return res.status(response.status).json({
-        exito: false,
-        status: response.status,
-        mensaje: 'La grabación no se encuentra disponible actualmente en el servidor PBX.',
-      });
+    if (directRes.ok) {
+      const contentType = directRes.headers.get('content-type') || 'audio/wav';
+      const contentLength = directRes.headers.get('content-length');
+      const contentRange = directRes.headers.get('content-range');
+      const acceptRanges = directRes.headers.get('accept-ranges') || 'bytes';
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Accept-Ranges', acceptRanges);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+      if (contentRange) res.setHeader('Content-Range', contentRange);
+
+      const arrayBuffer = await directRes.arrayBuffer();
+      return res.status(directRes.status).send(Buffer.from(arrayBuffer));
     }
 
-    const contentType = response.headers.get('content-type') || 'audio/wav';
-    const contentLength = response.headers.get('content-length');
-    const contentRange = response.headers.get('content-range');
-    const acceptRanges = response.headers.get('accept-ranges') || 'bytes';
-
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Accept-Ranges', acceptRanges);
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    if (contentLength) res.setHeader('Content-Length', contentLength);
-    if (contentRange) res.setHeader('Content-Range', contentRange);
-
-    const arrayBuffer = await response.arrayBuffer();
-    return res.status(response.status).send(Buffer.from(arrayBuffer));
+    return res.status(directRes.status || 404).json({
+      exito: false,
+      status: directRes.status || 404,
+      mensaje: 'La grabación no se encuentra disponible actualmente en el servidor PBX.',
+    });
   } catch (err: any) {
     return res.status(500).json({
       exito: false,

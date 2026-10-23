@@ -10,11 +10,11 @@ import {
   Phone,
   User,
   Calendar,
-  Clock,
   Radio,
   Minimize2,
   Maximize2,
   ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 
 export interface AudioLlamadaItem {
@@ -40,6 +40,91 @@ interface ReproductorAudioFlotanteProps {
   onClose: () => void;
 }
 
+/**
+ * Normaliza y construye la lista priorizada de URLs candidatas para reproducir el audio
+ * garantizando compatibilidad en desarrollo local, producción y despliegue en Vercel.
+ */
+export function construirUrlsCandidatasAudio(llamada: AudioLlamadaItem | null): {
+  candidatos: string[];
+  urlDirecta: string;
+} {
+  if (!llamada) return { candidatos: [], urlDirecta: '' };
+
+  const supabaseUrl =
+    (import.meta as any).env?.VITE_SUPABASE_URL ||
+    'https://sbopifiiyezmvsadwkpg.supabase.co';
+  const supabaseKey =
+    (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNib3BpZmlpeWV6bXZzYWR3a3BnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ3MzM0OTYsImV4cCI6MjEwMDMwOTQ5Nn0.ZI5y8lroFF529Xr-Otm1fcq6H2lhbh9e3s-WU9O6I7A';
+
+  const rawUrl = llamada.audio_url || llamada.grabacion_url || '';
+  let urlDirecta = '';
+
+  if (rawUrl && typeof rawUrl === 'string' && rawUrl.trim() && rawUrl !== 'null' && rawUrl !== 'undefined') {
+    const s = rawUrl.trim();
+    if (s.startsWith('http://') || s.startsWith('https://')) {
+      urlDirecta = s;
+    } else {
+      urlDirecta = `https://api.red.com.sv${s.startsWith('/') ? '' : '/'}${s}`;
+    }
+  } else {
+    // Reconstrucción determinista a partir de los campos del registro
+    const ext = llamada.extension || llamada.nombre;
+    const uid = llamada.uniqueid;
+    const fechaStr = llamada.fecha_hora || llamada.fecha;
+    const pais = String(llamada.pais || 'SV').toUpperCase();
+
+    if (uid && ext && fechaStr) {
+      const d = new Date(fechaStr);
+      if (!isNaN(d.getTime())) {
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const dia = String(d.getUTCDate()).padStart(2, '0');
+        const filename = `Grabacion_Ext_${ext}_${uid}.wav`;
+        if (pais === 'GT') {
+          urlDirecta = `https://api.red.com.sv/pbx/api/v1/rawCalls?pais=GT&anio=${y}&mes=${m}&dia=${dia}&archivo=${filename}`;
+        } else {
+          urlDirecta = `https://api.red.com.sv/pbx/api/v1/getAudio/${y}/${m}/${dia}/${filename}`;
+        }
+      }
+    }
+  }
+
+  if (!urlDirecta) return { candidatos: [], urlDirecta: '' };
+
+  const candidatos: string[] = [];
+
+  // Candidato 1: Proxy de Supabase Edge Function con credenciales seguras de PBX (funciona en Vercel)
+  const edgeProxy = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/sincronizar-datos?action=audio&url=${encodeURIComponent(urlDirecta)}&apikey=${supabaseKey}`;
+  candidatos.push(edgeProxy);
+
+  // Candidato 2: Proxy del backend Node/Express
+  candidatos.push(`/api/audio-proxy?url=${encodeURIComponent(urlDirecta)}`);
+
+  // Candidato 3: URL Directa a api.red.com.sv
+  candidatos.push(urlDirecta);
+
+  // Candidatos alternativos: cruce de formatos getAudio <-> rawCalls
+  if (urlDirecta.includes('/rawCalls?')) {
+    const m = urlDirecta.match(/anio=(\d+)&mes=(\d+)&dia=(\d+)&archivo=([^&]+)/);
+    if (m) {
+      const alt = `https://api.red.com.sv/pbx/api/v1/getAudio/${m[1]}/${m[2]}/${m[3]}/${m[4]}`;
+      candidatos.push(`${supabaseUrl.replace(/\/$/, '')}/functions/v1/sincronizar-datos?action=audio&url=${encodeURIComponent(alt)}&apikey=${supabaseKey}`);
+      candidatos.push(alt);
+    }
+  } else if (urlDirecta.includes('/getAudio/')) {
+    const m = urlDirecta.match(/\/getAudio\/(\d{4})\/(\d{2})\/(\d{2})\/(.+)$/);
+    if (m) {
+      const pais = llamada.pais || 'SV';
+      const alt = `https://api.red.com.sv/pbx/api/v1/rawCalls?pais=${pais}&anio=${m[1]}&mes=${m[2]}&dia=${m[3]}&archivo=${m[4]}`;
+      candidatos.push(`${supabaseUrl.replace(/\/$/, '')}/functions/v1/sincronizar-datos?action=audio&url=${encodeURIComponent(alt)}&apikey=${supabaseKey}`);
+      candidatos.push(alt);
+    }
+  }
+
+  return { candidatos, urlDirecta };
+}
+
 export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> = ({
   llamada,
   onClose,
@@ -55,8 +140,10 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
   const [velocidad, setVelocidad] = useState(1);
   const [colapsado, setColapsado] = useState(false);
   const [errorAudio, setErrorAudio] = useState<string | null>(null);
-  const [urlActual, setUrlActual] = useState<string>('');
-  const [intentoProxy, setIntentoProxy] = useState(false);
+
+  const [listaCandidatos, setListaCandidatos] = useState<string[]>([]);
+  const [indiceCandidato, setIndiceCandidato] = useState(0);
+  const [urlDirectaLlamada, setUrlDirectaLlamada] = useState('');
 
   // Formato mm:ss
   const formatTiempo = (segundos: number): string => {
@@ -66,20 +153,22 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
-  // URL del audio primario o fallback
-  const rawUrl = llamada?.audio_url || llamada?.grabacion_url || '';
-
   // Inicializar audio cuando cambia la llamada seleccionada
   useEffect(() => {
     if (!llamada) {
-      setUrlActual('');
+      setListaCandidatos([]);
+      setIndiceCandidato(0);
       setReproduciendo(false);
       setErrorAudio(null);
+      setUrlDirectaLlamada('');
       return;
     }
 
-    if (!rawUrl) {
-      setErrorAudio('Este registro de llamada no cuenta con una URL de audio o grabación en el sistema.');
+    const { candidatos, urlDirecta } = construirUrlsCandidatasAudio(llamada);
+    setUrlDirectaLlamada(urlDirecta);
+
+    if (candidatos.length === 0) {
+      setErrorAudio('Este registro de llamada no cuenta con campos de audio o grabación en el sistema.');
       setCargando(false);
       setReproduciendo(false);
       return;
@@ -89,34 +178,38 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
     setCargando(true);
     setTiempoActual(0);
     setDuracionTotal(llamada.duracion_segundos || 0);
-    setIntentoProxy(false);
-    setUrlActual(rawUrl);
-
-    // Intentar reproducción automática si el usuario le dio clic
+    setListaCandidatos(candidatos);
+    setIndiceCandidato(0);
     setReproduciendo(true);
-  }, [llamada, rawUrl]);
+  }, [llamada]);
 
-  // Manejo de errores de audio: probar fallback proxy si la URL directa fue bloqueada por CORS o 401
+  // Manejo de error: intentar el siguiente candidato en cascada
   const handleAudioError = useCallback(() => {
-    if (!intentoProxy && rawUrl) {
-      // Probar vía el proxy seguro del backend
-      console.warn('Fallo URL directa de audio, intentando proxy seguro:', rawUrl);
-      setIntentoProxy(true);
-      const proxyUrl = `/api/audio-proxy?url=${encodeURIComponent(rawUrl)}`;
-      setUrlActual(proxyUrl);
+    if (indiceCandidato + 1 < listaCandidatos.length) {
+      const siguienteIndice = indiceCandidato + 1;
+      console.warn(
+        `Fallo candidato de audio [${indiceCandidato}], probando siguiente [${siguienteIndice}]:`,
+        listaCandidatos[siguienteIndice]
+      );
+      setIndiceCandidato(siguienteIndice);
+      setCargando(true);
       return;
     }
 
-    // Si también falla el proxy o la URL es inaccesible
+    // Todos los candidatos agotados
     setCargando(false);
     setReproduciendo(false);
-    setErrorAudio('Grabación no disponible actualmente. El archivo de audio no se encuentra en el servidor PBX o no fue grabado para esta llamada.');
-  }, [intentoProxy, rawUrl]);
+    setErrorAudio(
+      'Grabación no disponible actualmente. El archivo de audio no se encuentra disponible en el servidor PBX o no fue grabado para esta llamada.'
+    );
+  }, [indiceCandidato, listaCandidatos]);
 
-  // Sincronizar estado del elemento audio
+  const urlActual = listaCandidatos[indiceCandidato] || '';
+
+  // Sincronizar reproducción del elemento <audio>
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || !urlActual) return;
 
     if (reproduciendo) {
       const playPromise = audio.play();
@@ -127,8 +220,6 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
             setErrorAudio(null);
           })
           .catch((err) => {
-            console.warn('Error en reproducción:', err);
-            // No marcar error si simplemente fue una pausa o autoplay bloqueado
             if (err.name !== 'AbortError') {
               handleAudioError();
             }
@@ -158,6 +249,7 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
     const audio = audioRef.current;
     if (audio) {
       setCargando(false);
+      setErrorAudio(null);
       if (audio.duration && !isNaN(audio.duration)) {
         setDuracionTotal(audio.duration);
       }
@@ -212,6 +304,13 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
     }
   };
 
+  const handleReintentar = () => {
+    setErrorAudio(null);
+    setCargando(true);
+    setIndiceCandidato(0);
+    setReproduciendo(true);
+  };
+
   if (!llamada) return null;
 
   const ext = llamada.extension || 'Sin ext.';
@@ -231,7 +330,11 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
           {reproduciendo && (
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
           )}
-          <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${reproduciendo ? 'bg-indigo-500' : 'bg-slate-400'}`} />
+          <span
+            className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+              reproduciendo ? 'bg-indigo-500' : 'bg-slate-400'
+            }`}
+          />
         </span>
         <button
           type="button"
@@ -242,7 +345,9 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
           {reproduciendo ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
         </button>
         <div className="flex flex-col">
-          <span className="font-semibold text-[11px] truncate max-w-[140px]">Ext. {ext} ➔ {destino}</span>
+          <span className="font-semibold text-[11px] truncate max-w-[140px]">
+            Ext. {ext} ➔ {destino}
+          </span>
           <span className="text-[10px] text-slate-400 font-mono">
             {formatTiempo(tiempoActual)} / {formatTiempo(duracionTotal)}
           </span>
@@ -352,22 +457,32 @@ export const ReproductorAudioFlotante: React.FC<ReproductorAudioFlotanteProps> =
               <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
               <div>
                 <p className="font-semibold text-amber-300">Grabación no disponible actualmente</p>
-                <p className="text-[11px] text-amber-200/80">
-                  {errorAudio}
-                </p>
+                <p className="text-[11px] text-amber-200/80">{errorAudio}</p>
               </div>
             </div>
-            {rawUrl && (
-              <a
-                href={rawUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 underline shrink-0"
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleReintentar}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-900/40 border border-amber-700/60 text-amber-200 hover:bg-amber-800/60 text-[11px] font-medium transition-colors cursor-pointer"
+                title="Reintentar reproducción"
               >
-                <span>Probar enlace directo</span>
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
+                <RefreshCw className="h-3 w-3" />
+                <span>Reintentar</span>
+              </button>
+              {urlDirectaLlamada && (
+                <a
+                  href={urlDirectaLlamada}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 underline"
+                  title="Abrir URL completa directa en nueva pestaña"
+                >
+                  <span>Enlace directo</span>
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </div>
           </div>
         ) : (
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">

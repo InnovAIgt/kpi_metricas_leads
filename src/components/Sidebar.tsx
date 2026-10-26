@@ -121,75 +121,55 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {/* Llamadas PBX */}
               <button
                 onClick={() => onCambiarVista('reg_pbx')}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all ${
                   vistaActiva === 'reg_pbx'
                     ? 'bg-red-950/60 text-red-200 font-semibold shadow-inner border-l-2 border-red-500'
                     : 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
                 }`}
               >
-                <div className="flex items-center gap-2.5">
-                  <PhoneCall className="h-3.5 w-3.5 text-red-400" />
-                  <span>Llamadas PBX</span>
-                </div>
-                <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 font-mono">
-                  {conteos.pbx}
-                </span>
+                <PhoneCall className="h-3.5 w-3.5 text-red-400 shrink-0" />
+                <span>Llamadas PBX</span>
               </button>
 
               {/* Llamadas Celular */}
               <button
                 onClick={() => onCambiarVista('reg_celular')}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all ${
                   vistaActiva === 'reg_celular'
                     ? 'bg-blue-950/60 text-blue-200 font-semibold border-l-2 border-blue-500'
                     : 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
                 }`}
               >
-                <div className="flex items-center gap-2.5">
-                  <Smartphone className="h-3.5 w-3.5 text-blue-400" />
-                  <span>Llamadas Celular</span>
-                </div>
-                <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 font-mono">
-                  {conteos.celular}
-                </span>
+                <Smartphone className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                <span>Llamadas Celular</span>
               </button>
 
               {/* Llamadas WhatsApp */}
               <button
                 onClick={() => onCambiarVista('reg_whatsapp')}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all ${
                   vistaActiva === 'reg_whatsapp'
                     ? 'bg-emerald-950/60 text-emerald-200 font-semibold border-l-2 border-emerald-500'
                     : 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
                 }`}
               >
-                <div className="flex items-center gap-2.5">
-                  <MessageSquare className="h-3.5 w-3.5 text-emerald-400" />
-                  <span>Llamadas WhatsApp</span>
-                </div>
-                <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 font-mono">
-                  {conteos.whatsapp}
-                </span>
+                <MessageSquare className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                <span>Llamadas WhatsApp</span>
               </button>
 
               {/* 1. Leads Calificados (Solo si está logueado en modo calificados) */}
               {esCalificado && (
                 <button
                   onClick={() => onCambiarVista('reg_leads')}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all ${
                     vistaActiva === 'reg_leads'
                       ? 'bg-amber-950/60 text-amber-200 font-semibold border-l-2 border-amber-500'
                       : 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
                   }`}
                   title="Leads Calificados: Citas agendadas del mes actual"
                 >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <CalendarCheck className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-                    <span className="truncate font-medium">Leads Calificados (Citas)</span>
-                  </div>
-                  <span className="text-[10px] bg-amber-950/70 border border-amber-800/40 px-1.5 py-0.5 rounded text-amber-300 font-mono font-bold" title="Cantidad del mes actual">
-                    {conteos.leads}
-                  </span>
+                  <CalendarCheck className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                  <span className="truncate font-medium">Leads Calificados (Citas)</span>
                 </button>
               )}
 
@@ -197,39 +177,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {!esCalificado && (
                 <button
                   onClick={() => onCambiarVista('reg_leads_no_calificados')}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all ${
                     vistaActiva === 'reg_leads_no_calificados'
                       ? 'bg-cyan-950/60 text-cyan-200 font-semibold border-l-2 border-cyan-500'
                       : 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
                   }`}
                   title="Leads No Calificados: Prospectos directos del mes actual"
                 >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <UserPlus className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
-                    <span className="truncate font-medium">Leads No Calificados</span>
-                  </div>
-                  <span className="text-[10px] bg-cyan-950/70 border border-cyan-800/40 px-1.5 py-0.5 rounded text-cyan-300 font-mono font-bold" title="Cantidad del mes actual">
-                    {conteos.leadsNoCalificados}
-                  </span>
+                  <UserPlus className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
+                  <span className="truncate font-medium">Leads No Calificados</span>
                 </button>
               )}
 
               {/* Reuniones Teams */}
               <button
                 onClick={() => onCambiarVista('reg_teams')}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all ${
                   vistaActiva === 'reg_teams'
                     ? 'bg-purple-950/60 text-purple-200 font-semibold border-l-2 border-purple-500'
                     : 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
                 }`}
               >
-                <div className="flex items-center gap-2.5">
-                  <Users className="h-3.5 w-3.5 text-purple-400" />
-                  <span>Reuniones Teams</span>
-                </div>
-                <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 font-mono">
-                  {conteos.teams}
-                </span>
+                <Users className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                <span>Reuniones Teams</span>
               </button>
             </div>
           )}
@@ -239,19 +209,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="pt-2">
           <button
             onClick={() => onCambiarVista('catalogo_crud')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-all text-left ${
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-left ${
               vistaActiva === 'catalogo_crud'
                 ? 'bg-indigo-950/50 text-indigo-300 font-semibold border-l-2 border-indigo-500'
                 : 'text-slate-300 hover:bg-slate-800/60 hover:text-white'
             }`}
           >
-            <div className="flex items-center gap-3">
-              <BookOpen className="h-4 w-4 text-slate-400" />
-              <span>Catálogo (CRUD)</span>
-            </div>
-            <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 font-mono">
-              {conteos.catalogo}
-            </span>
+            <BookOpen className="h-4 w-4 text-slate-400 shrink-0" />
+            <span>Catálogo (CRUD)</span>
           </button>
         </div>
 

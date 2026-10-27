@@ -30,7 +30,6 @@ import {
   guardarLlamadaManualBackend,
   triggerEdgeFunction,
 } from './services/apiService';
-import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { VistaCriterios } from './components/VistaCriterios';
 import { VistaKpiCumplimiento } from './components/VistaKpiCumplimiento';
@@ -547,7 +546,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 1. SIDEBAR NAVEGACIÓN (CON TOGGLE AL CLIC EN LOGO Y DOS ENTRADAS) */}
+      {/* 1. SIDEBAR NAVEGACIÓN (CON TOGGLE AL CLIC EN LOGO, DOS ENTRADAS Y SALIR) */}
       <Sidebar
         vistaActiva={vistaActiva}
         onCambiarVista={(vista) => setVistaActiva(vista)}
@@ -555,33 +554,17 @@ export default function App() {
         onAlternarModoLeads={handleAlternarModoLeads}
         conteos={conteosMes}
         onAbrirConfigSupabase={() => setModalSupabaseAbierto(true)}
+        usuario={usuarioAutenticado}
+        onLogout={() => {
+          localStorage.removeItem('kpi_auth_user');
+          setUsuarioAutenticado(null);
+        }}
+        onSincronizar={handleSincronizarManual}
+        sincronizando={sincronizando}
       />
 
       {/* 2. ÁREA PRINCIPAL */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Header Superior */}
-        <Header
-          filtroFecha={filtroFecha}
-          setFiltroFecha={setFiltroFecha}
-          onAbrirParametros={() => setVistaActiva('criterios')}
-          onAbrirConfigSupabase={() => setModalSupabaseAbierto(true)}
-          onSincronizar={handleSincronizarManual}
-          sincronizando={sincronizando}
-          supabaseConfig={{
-            supabase_url: 'https://sbopifiiyezmvsadwkpg.supabase.co',
-            supabase_anon_key: 'oculto-en-backend',
-            edge_function_name: 'sincronizar-datos',
-            almacenar_en_bd: true,
-            frecuencia_sync_minutos: 60,
-            conectado: true,
-          }}
-          onLogout={() => {
-            localStorage.removeItem('kpi_auth_user');
-            setUsuarioAutenticado(null);
-          }}
-          usuario={usuarioAutenticado}
-        />
-
         {/* Contenido Dinámico */}
         <main className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* VISTA 1: CRITERIOS */}

@@ -20,6 +20,7 @@ import {
   calcularMetricasPorVendedor,
 } from './utils/matchingEngine';
 import { esDelMesActual, esDelMesAnterior, getMesActualInfo } from './utils/dateHelpers';
+import { esLeadCalificadoValido } from './utils/leadValidation';
 import {
   sincronizarDatosDesdeBackend,
   actualizarLeadKpiBackend,
@@ -66,7 +67,13 @@ export default function App() {
   // Datos separados por categoría
   const [citasCalificadas, setCitasCalificadas] = useState<Cita[]>(() => {
     const saved = localStorage.getItem('kpi_citas_calificadas');
-    return saved ? JSON.parse(saved) : [];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed.filter((c) => esLeadCalificadoValido(c));
+      } catch (_) {}
+    }
+    return [];
   });
 
   const [citasNoCalificadas, setCitasNoCalificadas] = useState<Cita[]>(() => {
@@ -101,7 +108,9 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.filter((l) => esLeadCalificadoValido(l));
+        }
       } catch (_) {}
     }
     return [];
@@ -217,7 +226,9 @@ export default function App() {
 
   // Citas activas según el modo seleccionado (¡NO SE MEZCLAN!)
   const citasActivas = useMemo(() => {
-    return modoLeads === 'calificados' ? citasCalificadas : citasNoCalificadas;
+    return modoLeads === 'calificados'
+      ? citasCalificadas.filter((c) => esLeadCalificadoValido(c))
+      : citasNoCalificadas;
   }, [modoLeads, citasCalificadas, citasNoCalificadas]);
 
   // Guardar cambios de KPIs en lead (SLA / Retroalimentación)
@@ -762,7 +773,7 @@ export default function App() {
               titulo="Leads Calificados (Citas y Reuniones Agendadas)"
               subtitulo="Citas agendadas en public.leads con fecha y hora de reunión pactada, SLA y Retroalimentación"
               icono="leads"
-              datos={rawLeads}
+              datos={rawLeads.filter((l) => esLeadCalificadoValido(l))}
               columnas={[
                 {
                   clave: 'codigo_prospecto',

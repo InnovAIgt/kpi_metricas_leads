@@ -96,6 +96,63 @@ async function fetchSupabaseTablePaginado(
   return all;
 }
 
+// Helper de validación estricta de Lead Calificado
+function esLeadCalificadoValido(lead: any): boolean {
+  if (!lead) return false;
+
+  // 1. Validar fecha_agendada real
+  const fAg = lead.fecha_agendada && lead.fecha_agendada !== 'null' ? String(lead.fecha_agendada).trim() : '';
+  if (!fAg || fAg.length < 8) return false;
+
+  // 2. Validar tipo_reunion (no debe ser "(sin reunion)", "sin reunion", etc.)
+  const tipo = String(lead.tipo_reunion || lead.tipo || '').toLowerCase().trim();
+  if (
+    tipo.includes('sin reunion') ||
+    tipo.includes('sin reunión') ||
+    tipo.includes('sin agendar') ||
+    tipo.includes('no agendad') ||
+    tipo === '(sin reunion)' ||
+    tipo === 'sin reunion'
+  ) {
+    return false;
+  }
+
+  // 3. Validar nombre del prospecto / empresa
+  const rawNombre = String(
+    lead.nombre_prospecto || lead.nombre || lead.cliente || lead.prospecto_nombre || ''
+  ).trim();
+  if (rawNombre.length < 2) return false;
+
+  // Al menos 2 caracteres alfanuméricos Unicode (descarta emojis puros como "😎")
+  const caracteresValidos = rawNombre.match(/[\p{L}\p{N}]/gu) || [];
+  if (caracteresValidos.length < 2) return false;
+
+  // Descartar placeholders y apodos informales
+  const normalizado = rawNombre.toLowerCase();
+  const invalidos = [
+    'el amigo',
+    'amigo',
+    'elamigo',
+    'amigo mio',
+    'el compa',
+    'prueba',
+    'test',
+    'tester',
+    'asdf',
+    'qwerty',
+    'desconocido',
+    'anonimo',
+    'anónimo',
+    'sin nombre',
+    'no nombre',
+    'cliente',
+    'lead',
+  ];
+  if (invalidos.includes(normalizado)) return false;
+
+  return true;
+}
+
 // Cache en memoria para respuestas ultra-rápidas (<5ms) y evitar sobrecarga de Supabase
 let cacheDatosCompletos: { data: any; timestamp: number } | null = null;
 let syncPromiseEnVuelo: Promise<any> | null = null;
@@ -265,8 +322,13 @@ app.get('/api/sync/datos-completos', async (req, res) => {
           status: pl.status || 'en_proceso',
           created_at: pl.created_at || (pl.fecha_creado ? `${pl.fecha_creado}T${pl.hora_creado || '00:00:00'}Z` : new Date().toISOString()),
         };
-        mapaLeads.set(cod, nuevo);
-        leadsParaUpsertSupabase.push(nuevo);
+        if (esLeadCalificadoValido(nuevo)) {
+          mapaLeads.set(cod, nuevo);
+          leadsParaUpsertSupabase.push(nuevo);
+        } else {
+          // Si no es calificado, agregarlo a mapaLeads solo si ya existía para actualizarlo, pero no crearlo como nuevo lead agendado
+          mapaLeads.set(cod, nuevo);
+        }
       } else {
         // Si en Supabase no tenía fecha_agendada pero en Prospektia sí tiene, actualizar
         let huboCambio = false;
@@ -282,7 +344,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
           existente.nombre_prospecto = pl.nombre_prospecto;
           huboCambio = true;
         }
-        if (huboCambio) {
+        if (huboCambio && esLeadCalificadoValido(existente)) {
           leadsParaUpsertSupabase.push(existente);
         }
       }
@@ -304,7 +366,19 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       })();
     }
 
-    const leads = Array.from(mapaLeads.values());
+    const todosLosLeads = Array.from(mapaLeads.values());
+    const leadsCalificadosValidos: any[] = [];
+    const leadsNoCalificadosTransferidos: any[] = [];
+
+    todosLosLeads.forEach((l: any) => {
+      if (esLeadCalificadoValido(l)) {
+        leadsCalificadosValidos.push(l);
+      } else {
+        leadsNoCalificadosTransferidos.push(l);
+      }
+    });
+
+    const leads = leadsCalificadosValidos;
 
     // Fusionar Leads No Calificados de Supabase con Prospektia API para tener todos sin excepción
     const mapaNc = new Map<string, any>();
@@ -330,6 +404,29 @@ app.get('/api/sync/datos-completos', async (req, res) => {
         });
       }
     });
+
+    // Transferir a No Calificados cualquier lead de leadsRaw que no cumpla los requisitos de cita agendada o nombre
+    leadsNoCalificadosTransferidos.forEach((l: any) => {
+      const k = String(l.codigo_prospecto || l.id || '').trim();
+      if (!k) return;
+      if (!mapaNc.has(k)) {
+        const fRef = l.fecha_creado || (l.created_at ? String(l.created_at).slice(0, 10) : '');
+        const hRef = l.hora_creado || (l.created_at ? String(l.created_at).slice(11, 19) : '');
+        mapaNc.set(k, {
+          id: l.id || l.codigo_prospecto,
+          client_id: l.codigo_prospecto,
+          client_name: l.nombre_prospecto || l.nombre || 'Lead No Calificado',
+          advisor_name: l.asesor_nombre || 'Asesor Asignado',
+          telefono: l.telefono || '',
+          created_at: l.created_at || (fRef ? `${fRef}T${hRef || '00:00:00'}` : new Date().toISOString()),
+          fecha: fRef,
+          hora: hRef,
+          campaign_name: l.tipo_reunion || 'Lead Sin Cita Agendada',
+          pais: l.pais || 'SV',
+        });
+      }
+    });
+
     const leadsNoCalificados = Array.from(mapaNc.values());
 
     // Todas las llamadas PBX y Celular se incluyen completas sin filtrar ni descartar ninguna extensión

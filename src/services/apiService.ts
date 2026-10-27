@@ -1,4 +1,5 @@
 import { Cita, Llamada } from '../types';
+import { esLeadCalificadoValido } from '../utils/leadValidation';
 
 export interface DatosSyncBackend {
   citasCalificadas: Cita[];
@@ -164,8 +165,9 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
           return { fechaIso: new Date().toISOString(), fecha: '', hora: '' };
         };
 
-        // A. Leads Calificados (public.leads)
-        // Regla: "aca solo calificados deben salir con fecha y hora de reunion"
+        // A. Separar Leads Calificados (con reunión agendada real y nombre válido) y No Calificados
+        const leadsCalificadosValidos: any[] = [];
+
         leads.forEach((lead: any, idx: number) => {
           const { fechaIso, fechaAgendada, horaAgendada, fechaCreado, horaCreado, tieneCitaAgendada } =
             extraerFechaHoraLead(lead);
@@ -188,35 +190,87 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
             lead.cliente ||
             (lead.codigo_prospecto ? `Prospecto ${lead.codigo_prospecto}` : `Lead #${idx + 1}`);
 
-          // Registrar siempre todos los leads para auditoría y KPIs
-          citasCalificadas.push({
-            id: String(lead.id || lead.codigo_prospecto || `lead-${idx}`),
-            codigo_prospecto: lead.codigo_prospecto,
-            prospecto_nombre: nombreProspecto,
-            prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
-            prospecto_email: lead.asesor_email || lead.email || '',
-            vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
-            vendedor_nombre: asesor,
-            fecha_hora_programada: fechaIso,
-            fecha_agendada: fechaAgendada || undefined,
-            hora_agendada: horaAgendada || undefined,
-            fecha_creado: fechaCreado || undefined,
-            hora_creado: horaCreado || undefined,
-            created_at: lead.created_at || undefined,
-            pais: lead.pais || 'SV',
-            estado_cita: lead.status === 'cancelada' ? 'cancelada' : 'programada',
-            fuente: 'Supabase',
-            tipo_reunion: (lead.tipo_reunion as any) || 'Llamada Telefonica',
-            tipo_lead: 'calificados',
-            notas: `País: ${lead.pais || 'SV'}`,
-            kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
-            kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
-            kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
-            kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
-            kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
-            kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
-            kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
-          });
+          const esCalificado = esLeadCalificadoValido(lead);
+
+          if (esCalificado) {
+            leadsCalificadosValidos.push(lead);
+            citasCalificadas.push({
+              id: String(lead.id || lead.codigo_prospecto || `lead-${idx}`),
+              codigo_prospecto: lead.codigo_prospecto,
+              prospecto_nombre: nombreProspecto,
+              prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
+              prospecto_email: lead.asesor_email || lead.email || '',
+              vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
+              vendedor_nombre: asesor,
+              fecha_hora_programada: fechaIso,
+              fecha_agendada: fechaAgendada || undefined,
+              hora_agendada: horaAgendada || undefined,
+              fecha_creado: fechaCreado || undefined,
+              hora_creado: horaCreado || undefined,
+              created_at: lead.created_at || undefined,
+              pais: lead.pais || 'SV',
+              estado_cita: lead.status === 'cancelada' ? 'cancelada' : 'programada',
+              fuente: 'Supabase',
+              tipo_reunion: (lead.tipo_reunion as any) || 'Llamada Telefonica',
+              tipo_lead: 'calificados',
+              notas: `País: ${lead.pais || 'SV'}`,
+              kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
+              kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
+              kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
+              kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
+              kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
+              kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
+              kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
+            });
+          } else {
+            // No cumple criterios de calificado (sin reunión, emoji, inicial o apodo) -> va a No Calificados
+            const fRef = fechaCreado || (lead.created_at ? String(lead.created_at).slice(0, 10) : new Date().toISOString().slice(0, 10));
+            let hRef = horaCreado || (lead.created_at ? String(lead.created_at).slice(11, 19) : '09:00:00');
+            if (hRef.length === 5) hRef += ':00';
+            const fIsoNoCal = `${fRef}T${hRef}`;
+
+            leadsNoCalificados.push({
+              id: lead.id || lead.codigo_prospecto,
+              client_id: lead.codigo_prospecto,
+              client_name: nombreProspecto,
+              advisor_name: asesor,
+              telefono: lead.telefono || lead.celular || '',
+              created_at: lead.created_at || fIsoNoCal,
+              fecha: fRef,
+              hora: hRef,
+              campaign_name: lead.tipo_reunion || 'Lead Sin Cita Agendada',
+              pais: lead.pais || 'SV',
+            });
+
+            citasNoCalificadas.push({
+              id: String(lead.id || lead.codigo_prospecto || `lead-nc-${idx}`),
+              codigo_prospecto: lead.codigo_prospecto,
+              prospecto_nombre: nombreProspecto,
+              prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
+              prospecto_email: lead.asesor_email || lead.email || '',
+              vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
+              vendedor_nombre: asesor,
+              fecha_hora_programada: fIsoNoCal,
+              fecha_agendada: fRef,
+              hora_agendada: hRef,
+              fecha_creado: fRef,
+              hora_creado: hRef,
+              created_at: lead.created_at || undefined,
+              pais: lead.pais || 'SV',
+              estado_cita: 'no_show',
+              fuente: 'Supabase',
+              tipo_reunion: lead.tipo_reunion || '(sin reunion)',
+              tipo_lead: 'no_calificados',
+              notas: `Lead No Calificado (${lead.tipo_reunion || 'Sin reunión'})`,
+              kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
+              kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
+              kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
+              kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
+              kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
+              kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
+              kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
+            });
+          }
         });
 
         // B. Leads No Calificados (public.leads_no_calificados)
@@ -403,7 +457,7 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
           rawPbx: llamadasPbx,
           rawCelular: llamadasCelular,
           rawWhatsapp: llamadasWhatsapp,
-          rawLeads: leads,
+          rawLeads: leadsCalificadosValidos,
           rawLeadsNoCalificados: leadsNoCalificados,
           rawTeams: llamadasTeams,
           estadisticas: json.estadisticas || {},
@@ -499,6 +553,8 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
 
     // Mapear Leads Calificados
     const citasCalificadas: Cita[] = [];
+    const leadsCalificadosValidos: any[] = [];
+
     leads.forEach((lead: any, idx: number) => {
       const fAgendada = lead.fecha_agendada && lead.fecha_agendada !== 'null' ? String(lead.fecha_agendada).trim() : '';
       let hAgendada = lead.hora_agendada && lead.hora_agendada !== 'null' ? String(lead.hora_agendada).trim() : '';
@@ -525,34 +581,86 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       lead.fecha_creado = fCreado || fCreatedAt;
       lead.hora_creado = hCreado || hCreatedAt;
 
-      citasCalificadas.push({
-        id: String(lead.id || lead.codigo_prospecto || `lead-${idx}`),
-        codigo_prospecto: lead.codigo_prospecto,
-        prospecto_nombre: nombreProspecto,
-        prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
-        prospecto_email: lead.asesor_email || lead.email || '',
-        vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
-        vendedor_nombre: asesor,
-        fecha_hora_programada: fechaIso,
-        fecha_agendada: fAgendada || undefined,
-        hora_agendada: hAgendada || undefined,
-        fecha_creado: fCreado || fCreatedAt || undefined,
-        hora_creado: hCreado || hCreatedAt || undefined,
-        created_at: lead.created_at || undefined,
-        pais: lead.pais || 'SV',
-        estado_cita: lead.status === 'cancelada' ? 'cancelada' : 'programada',
-        fuente: 'Supabase',
-        tipo_reunion: (lead.tipo_reunion as any) || 'Llamada Telefonica',
-        tipo_lead: 'calificados',
-        notas: `País: ${lead.pais || 'SV'}`,
-        kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
-        kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
-        kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
-        kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
-        kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
-        kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
-        kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
-      });
+      const esCalificado = esLeadCalificadoValido(lead);
+
+      if (esCalificado) {
+        leadsCalificadosValidos.push(lead);
+        citasCalificadas.push({
+          id: String(lead.id || lead.codigo_prospecto || `lead-${idx}`),
+          codigo_prospecto: lead.codigo_prospecto,
+          prospecto_nombre: nombreProspecto,
+          prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
+          prospecto_email: lead.asesor_email || lead.email || '',
+          vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
+          vendedor_nombre: asesor,
+          fecha_hora_programada: fechaIso,
+          fecha_agendada: fAgendada || undefined,
+          hora_agendada: hAgendada || undefined,
+          fecha_creado: fCreado || fCreatedAt || undefined,
+          hora_creado: hCreado || hCreatedAt || undefined,
+          created_at: lead.created_at || undefined,
+          pais: lead.pais || 'SV',
+          estado_cita: lead.status === 'cancelada' ? 'cancelada' : 'programada',
+          fuente: 'Supabase',
+          tipo_reunion: (lead.tipo_reunion as any) || 'Llamada Telefonica',
+          tipo_lead: 'calificados',
+          notas: `País: ${lead.pais || 'SV'}`,
+          kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
+          kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
+          kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
+          kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
+          kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
+          kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
+          kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
+        });
+      } else {
+        // Enviar a no calificados
+        const fRef = fCreado || fCreatedAt || new Date().toISOString().slice(0, 10);
+        const hRef = hCreado || hCreatedAt || '09:00:00';
+        const fIsoNoCal = `${fRef}T${hRef.length === 5 ? hRef + ':00' : hRef}`;
+
+        leadsNoCalificados.push({
+          id: lead.id || lead.codigo_prospecto,
+          client_id: lead.codigo_prospecto,
+          client_name: nombreProspecto,
+          advisor_name: asesor,
+          telefono: lead.telefono || lead.celular || '',
+          created_at: lead.created_at || fIsoNoCal,
+          fecha: fRef,
+          hora: hRef,
+          campaign_name: lead.tipo_reunion || 'Lead Sin Cita Agendada',
+          pais: lead.pais || 'SV',
+        });
+
+        citasNoCalificadas.push({
+          id: String(lead.id || lead.codigo_prospecto || `lead-nc-${idx}`),
+          codigo_prospecto: lead.codigo_prospecto,
+          prospecto_nombre: nombreProspecto,
+          prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
+          prospecto_email: lead.asesor_email || lead.email || '',
+          vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
+          vendedor_nombre: asesor,
+          fecha_hora_programada: fIsoNoCal,
+          fecha_agendada: fRef,
+          hora_agendada: hRef,
+          fecha_creado: fRef,
+          hora_creado: hRef,
+          created_at: lead.created_at || undefined,
+          pais: lead.pais || 'SV',
+          estado_cita: 'no_show',
+          fuente: 'Supabase',
+          tipo_reunion: lead.tipo_reunion || '(sin reunion)',
+          tipo_lead: 'no_calificados',
+          notas: `Lead No Calificado (${lead.tipo_reunion || 'Sin reunión'})`,
+          kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
+          kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
+          kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
+          kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
+          kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
+          kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
+          kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
+        });
+      }
     });
 
     // Mapear Leads No Calificados
@@ -731,11 +839,11 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       rawPbx: llamadasPbx,
       rawCelular: llamadasCelular,
       rawWhatsapp: llamadasWhatsapp,
-      rawLeads: leads,
+      rawLeads: leadsCalificadosValidos,
       rawLeadsNoCalificados: leadsNoCalificados,
       rawTeams: llamadasTeams,
       estadisticas: {
-        total_leads_calificados: leads.length,
+        total_leads_calificados: leadsCalificadosValidos.length,
         total_leads_no_calificados: leadsNoCalificados.length,
         total_llamadas_pbx: llamadasPbx.length,
         total_llamadas_celular: llamadasCelular.length,

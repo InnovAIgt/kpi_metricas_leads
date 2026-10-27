@@ -390,8 +390,22 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
       });
     });
 
-    return resultado;
-  }, [datosConFecha, busqueda, filtrosColumnas]);
+    // Ordenar descendente por fecha para que los registros más recientes aparezcan siempre de primero
+    const colFecha = columnas.find((c) =>
+      c.esFecha ||
+      c.clave.includes('fecha') ||
+      c.clave.includes('created_at') ||
+      c.clave.includes('calldate')
+    )?.clave;
+
+    return [...resultado].sort((a, b) => {
+      let valA = colFecha ? a[colFecha] : null;
+      if (!valA) valA = a.fecha_agendada || a.fecha_hora || a.fecha_llamada || a.fecha || a.created_at || '';
+      let valB = colFecha ? b[colFecha] : null;
+      if (!valB) valB = b.fecha_agendada || b.fecha_hora || b.fecha_llamada || b.fecha || b.created_at || '';
+      return String(valB).localeCompare(String(valA));
+    });
+  }, [datosConFecha, busqueda, filtrosColumnas, columnas]);
 
   // Agrupamiento de columnas (ej: KPI RETROALIMENTACION / KPI SLA)
   const hayGrupos = useMemo(() => columnas.some((c) => Boolean(c.grupo)), [columnas]);

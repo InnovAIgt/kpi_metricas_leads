@@ -215,7 +215,16 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
       });
     });
 
-    return lista;
+    // Ordenar de forma descendente por fecha y hora para que los leads de hoy y recientes aparezcan de primero
+    return [...lista].sort((a, b) => {
+      const fA = a.cita?.fecha_agendada || a.fecha_cita || a.cita?.fecha_hora_programada || a.cita?.created_at || '';
+      const hA = a.cita?.hora_agendada || '';
+      const fB = b.cita?.fecha_agendada || b.fecha_cita || b.cita?.fecha_hora_programada || b.cita?.created_at || '';
+      const hB = b.cita?.hora_agendada || '';
+      const strA = `${fA}T${hA}`;
+      const strB = `${fB}T${hB}`;
+      return strB.localeCompare(strA);
+    });
   }, [crucesConFecha, vendedorSeleccionado, busqueda, filtrosColumnas]);
 
   // Valores únicos para cada filtro checklist

@@ -112,6 +112,9 @@ async function fetchPbxEnCaliente(): Promise<any[]> {
         grabacion_url: grabacionUrl,
       };
     });
+
+    llamadasNormalizadas.sort((a: any, b: any) => (b.fecha_hora || '').localeCompare(a.fecha_hora || ''));
+    return llamadasNormalizadas;
   } catch (err) {
     console.error('Error PBX en caliente Vercel:', err);
     return [];
@@ -127,7 +130,7 @@ async function fetchCelularEnCaliente(): Promise<any[]> {
     const json = await res.json();
     const items = json && Array.isArray(json.data) ? json.data : [];
 
-    return items.map((c: any) => {
+    const itemsNormalizados = items.map((c: any) => {
       let durSec = 0;
       if (typeof c.duracion === 'string' && c.duracion.includes(':')) {
         const p = c.duracion.split(':').map(Number);
@@ -151,6 +154,9 @@ async function fetchCelularEnCaliente(): Promise<any[]> {
         operador: c.operador || 'Claro / Tigo',
       };
     });
+
+    itemsNormalizados.sort((a: any, b: any) => `${b.fecha}T${b.hora}`.localeCompare(`${a.fecha}T${a.hora}`));
+    return itemsNormalizados;
   } catch (err) {
     console.error('Error Celular en caliente Vercel:', err);
     return [];

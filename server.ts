@@ -227,8 +227,8 @@ async function fetchPbxEnCaliente(): Promise<any[]> {
     const resultados = await Promise.all(promises);
     const llamadasRaw = resultados.flat();
 
-    // Normalizar a formato interno de llamadas PBX
-    return llamadasRaw.map((c: any) => {
+    // Normalizar a formato interno de llamadas PBX y ordenar descendente por fecha_hora
+    const llamadasNormalizadas = llamadasRaw.map((c: any) => {
       const ext = c.EXTENSION ? String(c.EXTENSION).trim() : '';
       const durSec = Number(c.DURATION_SEC ?? Math.round(Number(c.DURACION_MINUTOS || 0) * 60));
       const fIso = c.FECHA || (c.SOLO_FECHA ? String(c.SOLO_FECHA).slice(0, 10) + 'T00:00:00.000Z' : new Date().toISOString());
@@ -264,6 +264,9 @@ async function fetchPbxEnCaliente(): Promise<any[]> {
         grabacion_url: grabacionUrl,
       };
     });
+
+    llamadasNormalizadas.sort((a: any, b: any) => (b.fecha_hora || '').localeCompare(a.fecha_hora || ''));
+    return llamadasNormalizadas;
   } catch (err) {
     console.error('Error obteniendo llamadas PBX en caliente:', err);
     return [];
@@ -280,7 +283,7 @@ async function fetchCelularEnCaliente(): Promise<any[]> {
     const json = await res.json();
     const items = json && Array.isArray(json.data) ? json.data : [];
 
-    return items.map((c: any) => {
+    const itemsNormalizados = items.map((c: any) => {
       let durSec = 0;
       if (typeof c.duracion === 'string' && c.duracion.includes(':')) {
         const p = c.duracion.split(':').map(Number);
@@ -304,6 +307,9 @@ async function fetchCelularEnCaliente(): Promise<any[]> {
         operador: c.operador || 'Claro / Tigo',
       };
     });
+
+    itemsNormalizados.sort((a: any, b: any) => `${b.fecha}T${b.hora}`.localeCompare(`${a.fecha}T${a.hora}`));
+    return itemsNormalizados;
   } catch (err) {
     console.error('Error obteniendo llamadas Celular en caliente:', err);
     return [];

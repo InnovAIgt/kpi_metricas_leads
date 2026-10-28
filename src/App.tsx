@@ -161,48 +161,57 @@ export default function App() {
     );
   };
 
+  // Helper para almacenamiento seguro en localStorage (no bloquea si supera 5MB de cuota del navegador)
+  const safeSetLocalStorage = (key: string, value: any) => {
+    try {
+      localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+    } catch (_) {
+      // Si la cuota de 5MB del navegador se supera, continuar sin interrumpir React
+    }
+  };
+
   // Carga automática inicial de datos reales desde el backend
   useEffect(() => {
     cargarDatosDesdeBackend();
   }, []);
 
-  useEffect(() => {
-    if (usuarioAutenticado) {
-      cargarDatosDesdeBackend();
-    }
-  }, [usuarioAutenticado]);
-
   const cargarDatosDesdeBackend = async () => {
     setSincronizando(true);
     try {
       const data = await sincronizarDatosDesdeBackend();
-      if (data.citasCalificadas.length > 0) {
-        setCitasCalificadas(data.citasCalificadas);
-        localStorage.setItem('kpi_citas_calificadas', JSON.stringify(data.citasCalificadas));
-      }
-      if (data.citasNoCalificadas.length > 0) {
-        setCitasNoCalificadas(data.citasNoCalificadas);
-        localStorage.setItem('kpi_citas_no_calificadas', JSON.stringify(data.citasNoCalificadas));
-      }
-      if (data.llamadas.length > 0) {
-        setLlamadas(data.llamadas);
-        localStorage.setItem('kpi_llamadas_data', JSON.stringify(data.llamadas));
-      }
-      setCatalogo(data.catalogo || []);
-      setRawPbx(data.rawPbx || []);
-      setRawCelular(data.rawCelular || []);
-      setRawWhatsapp(data.rawWhatsapp || []);
-      setRawLeads(data.rawLeads || []);
-      setRawLeadsNoCalificados(data.rawLeadsNoCalificados || []);
-      setRawTeams(data.rawTeams || []);
 
-      if (data.catalogo && data.catalogo.length > 0) localStorage.setItem('kpi_catalogo_cache', JSON.stringify(data.catalogo));
-      if (data.rawPbx && data.rawPbx.length > 0) localStorage.setItem('kpi_raw_pbx_cache', JSON.stringify(data.rawPbx));
-      if (data.rawCelular && data.rawCelular.length > 0) localStorage.setItem('kpi_raw_cel_cache', JSON.stringify(data.rawCelular));
-      if (data.rawWhatsapp && data.rawWhatsapp.length > 0) localStorage.setItem('kpi_raw_wa_cache', JSON.stringify(data.rawWhatsapp));
-      if (data.rawLeads && data.rawLeads.length > 0) localStorage.setItem('kpi_raw_leads_cache', JSON.stringify(data.rawLeads));
-      if (data.rawLeadsNoCalificados && data.rawLeadsNoCalificados.length > 0) localStorage.setItem('kpi_raw_nc_cache', JSON.stringify(data.rawLeadsNoCalificados));
-      if (data.rawTeams && data.rawTeams.length > 0) localStorage.setItem('kpi_raw_teams_cache', JSON.stringify(data.rawTeams));
+      // 1. ACTUALIZAR DE INMEDIATO EL ESTADO EN MEMORIA DE REACT (PRIORITARIO)
+      if (Array.isArray(data.catalogo)) setCatalogo(data.catalogo);
+      if (Array.isArray(data.rawPbx) && data.rawPbx.length > 0) setRawPbx(data.rawPbx);
+      if (Array.isArray(data.rawCelular) && data.rawCelular.length > 0) setRawCelular(data.rawCelular);
+      if (Array.isArray(data.rawWhatsapp) && data.rawWhatsapp.length > 0) setRawWhatsapp(data.rawWhatsapp);
+      if (Array.isArray(data.rawLeads) && data.rawLeads.length > 0) setRawLeads(data.rawLeads);
+      if (Array.isArray(data.rawLeadsNoCalificados) && data.rawLeadsNoCalificados.length > 0) {
+        setRawLeadsNoCalificados(data.rawLeadsNoCalificados);
+      }
+      if (Array.isArray(data.rawTeams)) setRawTeams(data.rawTeams);
+      if (Array.isArray(data.citasCalificadas) && data.citasCalificadas.length > 0) {
+        setCitasCalificadas(data.citasCalificadas);
+      }
+      if (Array.isArray(data.citasNoCalificadas)) setCitasNoCalificadas(data.citasNoCalificadas);
+      if (Array.isArray(data.llamadas) && data.llamadas.length > 0) setLlamadas(data.llamadas);
+
+      // 2. Persistir en localStorage de forma segura sin romper la app
+      safeSetLocalStorage('kpi_catalogo_cache', data.catalogo || []);
+      safeSetLocalStorage('kpi_citas_calificadas', data.citasCalificadas || []);
+      safeSetLocalStorage('kpi_citas_no_calificadas', data.citasNoCalificadas || []);
+      safeSetLocalStorage('kpi_raw_leads_cache', data.rawLeads || []);
+      safeSetLocalStorage('kpi_raw_nc_cache', data.rawLeadsNoCalificados || []);
+      safeSetLocalStorage('kpi_raw_teams_cache', data.rawTeams || []);
+      if (data.rawPbx && data.rawPbx.length > 0) {
+        safeSetLocalStorage('kpi_raw_pbx_cache', data.rawPbx.slice(0, 1000));
+      }
+      if (data.rawCelular && data.rawCelular.length > 0) {
+        safeSetLocalStorage('kpi_raw_cel_cache', data.rawCelular.slice(0, 1000));
+      }
+      if (data.rawWhatsapp && data.rawWhatsapp.length > 0) {
+        safeSetLocalStorage('kpi_raw_wa_cache', data.rawWhatsapp.slice(0, 1000));
+      }
     } catch (err: any) {
       console.warn('Error al sincronizar datos:', err);
     } finally {
@@ -583,7 +592,7 @@ export default function App() {
           {vistaActiva === 'reg_pbx' && (
             <VistaTablaRegistros
               titulo="Registros de Llamadas PBX"
-              subtitulo="Datos sincronizados desde getCalls2 en public.llamadas_pbx"
+              subtitulo="Llamadas en caliente consultadas directamente desde api.red.com.sv (PBX getCalls2)"
               icono="pbx"
               datos={rawPbx}
               catalogo={catalogo}
@@ -673,7 +682,7 @@ export default function App() {
           {vistaActiva === 'reg_celular' && (
             <VistaTablaRegistros
               titulo="Historial de Llamadas de Celular"
-              subtitulo="Datos de ejecutivos en public.llamadas_celular"
+              subtitulo="Llamadas en caliente consultadas directamente desde kpi.red.com.sv (Historial Ejecutivos)"
               icono="celular"
               datos={rawCelular}
               catalogo={catalogo}
@@ -754,7 +763,7 @@ export default function App() {
           {vistaActiva === 'reg_leads' && (
             <VistaTablaRegistros
               titulo="Leads Calificados (Citas y Reuniones Agendadas)"
-              subtitulo="Citas agendadas en public.leads con fecha y hora de reunión pactada, SLA y Retroalimentación"
+              subtitulo="Leads calificados en caliente desde prospektia.red.com.sv con fecha y hora de reunión pactada"
               icono="leads"
               datos={rawLeads.filter((l) => esLeadCalificadoValido(l))}
               columnas={[
@@ -1088,7 +1097,7 @@ export default function App() {
           {vistaActiva === 'reg_leads_no_calificados' && (
             <VistaTablaRegistros
               titulo="Leads No Calificados (Prospectos Directos)"
-              subtitulo="Prospectos directos recibidos en public.leads_no_calificados"
+              subtitulo="Leads no calificados consultados en caliente desde prospektia.red.com.sv (Auditoría)"
               icono="leads"
               datos={rawLeadsNoCalificados}
               columnas={[

@@ -480,34 +480,22 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
 async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBackend> {
   const { url, headers } = getSupabaseConfig();
   try {
-    const pbxOffsets = [0, 1000, 2000, 3000, 4000];
-    const celOffsets = [0, 1000, 2000, 3000];
+    const waOffsets = [0, 1000];
     const [
       catalogoRes,
-      leadsRes,
-      leadsNoCalificadosRes,
-      pbxPages,
-      celPages,
       teamsRes,
       whatsappRes,
       prospektiaRes,
       prospektiaNcRes,
+      celRes,
     ] = await Promise.all([
       fetch(`${url}/rest/v1/catalogo?select=*&order=id.asc`, { headers }).then((r) => r.ok ? r.json() : []),
-      fetch(`${url}/rest/v1/leads?select=*&order=fecha_agendada.desc.nullslast,created_at.desc.nullslast`, { headers }).then((r) => r.ok ? r.json() : []),
-      fetch(`${url}/rest/v1/leads_no_calificados?select=*&order=created_at.desc.nullslast`, { headers }).then((r) => r.ok ? r.json() : []),
-      Promise.all(
-        pbxOffsets.map((offset) =>
-          fetch(`${url}/rest/v1/llamadas_pbx?select=*&fecha_hora=not.is.null&order=fecha_hora.desc.nullslast&offset=${offset}&limit=1000`, { headers }).then((r) => r.ok ? r.json() : [])
-        )
-      ).then((p) => p.flat()),
-      Promise.all(
-        celOffsets.map((offset) =>
-          fetch(`${url}/rest/v1/llamadas_celular?select=*&order=fecha.desc.nullslast,hora.desc.nullslast&offset=${offset}&limit=1000`, { headers }).then((r) => r.ok ? r.json() : [])
-        )
-      ).then((p) => p.flat()),
       fetch(`${url}/rest/v1/llamadas_teams?select=*&order=fecha_reunion.desc.nullslast,id.desc`, { headers }).then((r) => r.ok ? r.json() : []),
-      fetch(`${url}/rest/v1/llamadas_whatsapp?select=*&order=fecha_llamada.desc.nullslast&limit=2000`, { headers }).then((r) => r.ok ? r.json() : []),
+      Promise.all(
+        waOffsets.map((offset) =>
+          fetch(`${url}/rest/v1/llamadas_whatsapp?select=*&order=fecha_llamada.desc.nullslast&offset=${offset}&limit=1000`, { headers }).then((r) => r.ok ? r.json() : [])
+        )
+      ).then((p) => p.flat()),
       fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
         headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
       })
@@ -523,57 +511,43 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       ])
         .then(([p1, p2]) => [...(p1?.items || []), ...(p2?.items || [])])
         .catch(() => []),
+      fetch('https://kpi.red.com.sv/api/historial-llamadas-ejecutivos', {
+        headers: { 'X-API-KEY': 'mso_papi_2026_7f2b9c4d8e6a1b3f5d7c9e0a2b4c6d8f' },
+      }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
 
     const catalogo = Array.isArray(catalogoRes) ? catalogoRes : [];
     
-    // Fusionar Leads de Supabase y Prospektia API
+    // Leads 100% de Prospektia API en vivo
     const mapaDirectoLeads = new Map<string, any>();
-    (Array.isArray(leadsRes) ? leadsRes : []).forEach((l: any) => {
-      const cod = String(l.codigo_prospecto || l.id || '').trim();
-      if (cod) mapaDirectoLeads.set(cod, { ...l });
-    });
-
     const leadsProspektiaApi = prospektiaRes?.leads || [];
     leadsProspektiaApi.forEach((pl: any) => {
       const cod = String(pl.codigo_prospecto || pl.id || '').trim();
       if (!cod) return;
       const fAg = pl.fecha_agendada ? String(pl.fecha_agendada).trim() : null;
       const hAg = pl.hora_agendada ? String(pl.hora_agendada).trim() : null;
-      const existente = mapaDirectoLeads.get(cod);
-      if (!existente) {
-        mapaDirectoLeads.set(cod, {
-          codigo_prospecto: cod,
-          nombre_prospecto: pl.nombre_prospecto || pl.nombre || '',
-          telefono: pl.telefono || '',
-          fecha_agendada: fAg,
-          hora_agendada: hAg,
-          fecha_creado: pl.fecha_creado || null,
-          hora_creado: pl.hora_creado || null,
-          tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
-          pais: pl.pais || 'SV',
-          asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
-          asesor_nombre: pl.asesor_nombre || null,
-          asesor_email: pl.asesor_email || null,
-          status: pl.status || 'en_proceso',
-          created_at: pl.created_at || (pl.fecha_creado ? `${pl.fecha_creado}T${pl.hora_creado || '00:00:00'}Z` : new Date().toISOString()),
-        });
-      } else {
-        if (fAg && (!existente.fecha_agendada || existente.fecha_agendada === 'null')) existente.fecha_agendada = fAg;
-        if (hAg && (!existente.hora_agendada || existente.hora_agendada === 'null')) existente.hora_agendada = hAg;
-        if (pl.nombre_prospecto && !existente.nombre_prospecto) existente.nombre_prospecto = pl.nombre_prospecto;
-      }
+      mapaDirectoLeads.set(cod, {
+        codigo_prospecto: cod,
+        nombre_prospecto: pl.nombre_prospecto || pl.nombre || '',
+        telefono: pl.telefono || '',
+        fecha_agendada: fAg,
+        hora_agendada: hAg,
+        fecha_creado: pl.fecha_creado || null,
+        hora_creado: pl.hora_creado || null,
+        tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
+        pais: pl.pais || 'SV',
+        asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
+        asesor_nombre: pl.asesor_nombre || null,
+        asesor_email: pl.asesor_email || null,
+        status: pl.status || 'Agendado',
+        created_at: pl.created_at || (pl.fecha_creado ? `${pl.fecha_creado}T${pl.hora_creado || '00:00:00'}Z` : new Date().toISOString()),
+      });
     });
 
     const leads = Array.from(mapaDirectoLeads.values());
 
-    // Fusionar Leads No Calificados de Supabase y Prospektia API
+    // Leads No Calificados de Prospektia API
     const mapaDirectoNc = new Map<string, any>();
-    (Array.isArray(leadsNoCalificadosRes) ? leadsNoCalificadosRes : []).forEach((nc: any) => {
-      const k = String(nc.id || `${nc.client_id}_${nc.created_at}`).trim();
-      if (k) mapaDirectoNc.set(k, { ...nc });
-    });
-
     const prospektiaNcItems = Array.isArray(prospektiaNcRes) ? prospektiaNcRes : [];
     prospektiaNcItems.forEach((pnc: any) => {
       const k = String(pnc.id || `${pnc.client_id}_${pnc.created_at}`).trim();
@@ -594,8 +568,8 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     });
 
     const leadsNoCalificados = Array.from(mapaDirectoNc.values());
-    const llamadasPbx = Array.isArray(pbxPages) ? pbxPages : [];
-    const llamadasCelular = Array.isArray(celPages) ? celPages : [];
+    const llamadasPbx: any[] = [];
+    const llamadasCelular = Array.isArray(celRes?.data) ? celRes.data : [];
     const llamadasTeams = Array.isArray(teamsRes) ? teamsRes : [];
     const llamadasWhatsapp = Array.isArray(whatsappRes) ? whatsappRes : [];
 

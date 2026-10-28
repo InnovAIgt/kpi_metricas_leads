@@ -153,13 +153,170 @@ function esLeadCalificadoValido(lead: any): boolean {
   return true;
 }
 
-// Cache en memoria para respuestas ultra-rápidas (<5ms) y evitar sobrecarga de Supabase
+// ==========================================
+// CONFIGURACIÓN Y APIS EXTERNAS EN CALIENTE
+// ==========================================
+const PBX_HOST = 'https://api.red.com.sv';
+const PBX_USER = 'DBOLAINES';
+const PBX_PASS = 'Intelfon1234';
+
+let pbxBackendToken: string | null = null;
+let pbxBackendTokenExp = 0;
+
+async function getPbxJwtBackend(): Promise<string> {
+  if (pbxBackendToken && Date.now() < pbxBackendTokenExp) {
+    return pbxBackendToken;
+  }
+  const r = await fetch(`${PBX_HOST}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: PBX_USER, password: PBX_PASS }),
+  });
+  if (!r.ok) {
+    throw new Error(`PBX login failed HTTP ${r.status}`);
+  }
+  const data = await r.json();
+  const token = data.token || data.jwt || data.access_token;
+  if (!token) throw new Error('No token in PBX login');
+  pbxBackendToken = token;
+  pbxBackendTokenExp = Date.now() + 23 * 3600 * 1000;
+  return token;
+}
+
+// Generador de ventanas de 7 días (requisito estricto de PBX getCalls2 para no dar timeout)
+function generarVentanasPbx(diasAtras = 60): [string, string][] {
+  const rangos: [string, string][] = [];
+  const hoy = new Date();
+  const limite = new Date(hoy.getTime() - diasAtras * 24 * 3600 * 1000);
+  let fin = new Date(hoy);
+
+  while (fin > limite) {
+    const inicio = new Date(fin.getTime() - 6 * 24 * 3600 * 1000);
+    const startObj = inicio < limite ? limite : inicio;
+    rangos.push([startObj.toISOString().slice(0, 10), fin.toISOString().slice(0, 10)]);
+    fin = new Date(startObj.getTime() - 24 * 3600 * 1000);
+  }
+  return rangos;
+}
+
+// Consulta EN VIVO a PBX (api.red.com.sv) sin tocar Supabase
+async function fetchPbxEnCaliente(): Promise<any[]> {
+  try {
+    const token = await getPbxJwtBackend();
+    const ventanas = generarVentanasPbx(60); // 60 días hacia atrás hasta hoy
+    const promises: Promise<any[]>[] = [];
+
+    for (const [d, h] of ventanas) {
+      for (const pais of ['SV', 'GT']) {
+        promises.push(
+          fetch(`${PBX_HOST}/pbx/api/v1/getCalls2?desde=${d}&hasta=${h}&pais=${pais}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((res) => {
+              if (res && res.info && Array.isArray(res.info)) {
+                return res.info.map((c: any) => ({ ...c, pais }));
+              }
+              return [];
+            })
+            .catch(() => [])
+        );
+      }
+    }
+
+    const resultados = await Promise.all(promises);
+    const llamadasRaw = resultados.flat();
+
+    // Normalizar a formato interno de llamadas PBX
+    return llamadasRaw.map((c: any) => {
+      const ext = c.EXTENSION ? String(c.EXTENSION).trim() : '';
+      const durSec = Number(c.DURATION_SEC ?? Math.round(Number(c.DURACION_MINUTOS || 0) * 60));
+      const fIso = c.FECHA || (c.SOLO_FECHA ? String(c.SOLO_FECHA).slice(0, 10) + 'T00:00:00.000Z' : new Date().toISOString());
+      const pais = (c.pais || 'SV').toUpperCase();
+      const y = c.ANIO || (c.FECHA ? new Date(c.FECHA).getUTCFullYear() : 2026);
+      const m = String(c.MES || (c.FECHA ? new Date(c.FECHA).getUTCMonth() + 1 : 10)).padStart(2, '0');
+      const d = String(c.DIA || (c.FECHA ? new Date(c.FECHA).getUTCDate() : 1)).padStart(2, '0');
+      const fn = ext && c.uniqueid ? `Grabacion_Ext_${ext}_${c.uniqueid}.wav` : '';
+      const grabacionUrl = fn
+        ? (pais === 'GT'
+            ? `${PBX_HOST}/pbx/api/v1/rawCalls?pais=GT&anio=${y}&mes=${m}&dia=${d}&archivo=${encodeURIComponent(fn)}`
+            : `${PBX_HOST}/pbx/api/v1/getAudio/${y}/${m}/${d}/${fn}`)
+        : null;
+
+      return {
+        id: c.uniqueid || `pbx_${Date.now()}_${Math.random()}`,
+        uniqueid: c.uniqueid,
+        nombre: c.NOMBRE,
+        extension: ext,
+        destino: c.DESTINO ? String(c.DESTINO).trim() : '',
+        duracion_segundos: durSec,
+        duracion_minutos: Number(c.DURACION_MINUTOS || (durSec / 60).toFixed(2)),
+        duracion_hh_mm_ss: c.DURACION_HH_MM_SS,
+        estado: c.ESTADO || (durSec > 0 ? 'CONTESTADA' : 'NO CONTESTADA'),
+        fecha_hora: fIso,
+        fecha: fIso.slice(0, 10),
+        hora: fIso.slice(11, 19),
+        anio: y,
+        mes: Number(m),
+        dia: Number(d),
+        pais,
+        audio_url: grabacionUrl,
+        grabacion_url: grabacionUrl,
+      };
+    });
+  } catch (err) {
+    console.error('Error obteniendo llamadas PBX en caliente:', err);
+    return [];
+  }
+}
+
+// Consulta EN VIVO a Celular (kpi.red.com.sv) sin tocar Supabase
+async function fetchCelularEnCaliente(): Promise<any[]> {
+  try {
+    const res = await fetch('https://kpi.red.com.sv/api/historial-llamadas-ejecutivos', {
+      headers: { 'X-API-KEY': 'mso_papi_2026_7f2b9c4d8e6a1b3f5d7c9e0a2b4c6d8f' },
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const items = json && Array.isArray(json.data) ? json.data : [];
+
+    return items.map((c: any) => {
+      let durSec = 0;
+      if (typeof c.duracion === 'string' && c.duracion.includes(':')) {
+        const p = c.duracion.split(':').map(Number);
+        if (p.length === 3) durSec = p[0] * 3600 + p[1] * 60 + p[2];
+        else if (p.length === 2) durSec = p[0] * 60 + p[1];
+      } else {
+        durSec = Number(c.duracion || 0);
+      }
+      const f = c.fecha ? String(c.fecha).slice(0, 10) : '';
+      const h = c.hora || '00:00:00';
+      return {
+        id: c.id,
+        fecha: f,
+        hora: h,
+        destino: c.destino ? String(c.destino).trim() : '',
+        duracion: durSec,
+        duracion_texto: c.duracion,
+        tipo: c.tipo || 'Saliente',
+        linea: c.linea || '',
+        usuario: c.usuario || '',
+        operador: c.operador || 'Claro / Tigo',
+      };
+    });
+  } catch (err) {
+    console.error('Error obteniendo llamadas Celular en caliente:', err);
+    return [];
+  }
+}
+
+// Cache en memoria para respuestas ultra-rápidas (<5ms)
 let cacheDatosCompletos: { data: any; timestamp: number } | null = null;
 let syncPromiseEnVuelo: Promise<any> | null = null;
 const CACHE_TTL_MS = 30000; // 30 segundos de cache
 
 // ==============================================================================
-// 2. ENDPOINT PROXY UNIFICADO DE DATOS (Backend a Supabase)
+// 2. ENDPOINT PROXY UNIFICADO DE DATOS (PBX, Celular y Leads EN CALIENTE)
 // ==============================================================================
 app.get('/api/sync/datos-completos', async (req, res) => {
   const forzar = req.query.forzar === 'true';
@@ -179,7 +336,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
 
   const tInicio = Date.now();
   syncPromiseEnVuelo = (async () => {
-    // 1. Obtener primero el Catálogo de Asesores Oficial
+    // 1. Obtener primero el Catálogo de Asesores Oficial desde Supabase
     const catalogo = await fetchSupabaseTable('catalogo?select=*&order=id.asc');
 
     // Construir mapa de búsqueda rápida
@@ -218,46 +375,20 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       return fallback;
     };
 
-    const perteneceACatalogo = (ident: string): boolean => {
-      if (!ident || ident === 'null' || ident === 'undefined') return false;
-      const res = resolverAsesorBackend(ident, '__NO__');
-      return res !== '__NO__';
-    };
-
-    const extsList = Object.keys(mapaCatalogo.porExtension).join(',');
-    const usersList = Object.keys(mapaCatalogo.porUsuario).map((u) => u.toUpperCase()).join(',');
-
-    // 2. Consultas optimizadas para alta velocidad sin omitir ninguna extensión ni asesor
-    const pbxOffsets = [0, 1000, 2000, 3000, 4000]; // 5,000 llamadas PBX (100% de Octubre y Septiembre completo)
-    const celOffsets = [0, 1000, 2000, 3000];        // 4,000 llamadas Celular (toda la tabla en Supabase)
-    const waOffsets = [0, 1000];                    // 2,000 llamadas WhatsApp
+    // 2. Consultas: PBX, Celular y Leads 100% EN VIVO de sus APIs externas.
+    // Solo WhatsApp, Catálogo y Teams provienen de Supabase.
+    const waOffsets = [0, 1000]; // 2,000 llamadas WhatsApp
 
     const [
-      leadsRaw,
-      ncRaw,
-      pbxPages,
-      celPages,
+      pbxDirecto,
+      celDirecto,
       teamsRaw,
       waRaw,
       prospektiaRes,
       prospektiaNcRes,
     ] = await Promise.all([
-      fetchSupabaseTablePaginado('leads', 'fecha_agendada.desc.nullslast,created_at.desc', 1000),
-      fetchSupabaseTablePaginado('leads_no_calificados', 'created_at.desc.nullslast', 1000),
-      Promise.all(
-        pbxOffsets.map((offset) =>
-          fetchSupabaseTable(
-            `llamadas_pbx?select=id,uniqueid,nombre,extension,destino,duracion_segundos,estado,fecha_hora,audio_url,grabacion_url,pais&fecha_hora=not.is.null&order=fecha_hora.desc&offset=${offset}&limit=1000`
-          )
-        )
-      ).then((pages) => pages.flat()),
-      Promise.all(
-        celOffsets.map((offset) =>
-          fetchSupabaseTable(
-            `llamadas_celular?select=id,fecha,hora,destino,duracion,tipo,linea,usuario&order=fecha.desc.nullslast,hora.desc.nullslast&offset=${offset}&limit=1000`
-          )
-        )
-      ).then((pages) => pages.flat()),
+      fetchPbxEnCaliente(),     // 100% EN VIVO PBX api.red.com.sv
+      fetchCelularEnCaliente(), // 100% EN VIVO Celular kpi.red.com.sv
       fetchSupabaseTable('llamadas_teams?select=*&order=fecha_reunion.desc.nullslast'),
       Promise.all(
         waOffsets.map((offset) =>
@@ -282,90 +413,35 @@ app.get('/api/sync/datos-completos', async (req, res) => {
         .catch(() => []),
     ]);
 
-    // 3. Fusionar leads de Supabase con la API de Prospektia en vivo
-    // Garantiza que ningún lead calificado quede fuera y conserve su fecha/hora de reunión
+    // 3. Procesar leads DIRECTAMENTE desde Prospektia API (0 dependencia de tabla leads en Supabase)
     const mapaLeads = new Map<string, any>();
-    
-    // Primero agregar los de Supabase
-    leadsRaw.forEach((l: any) => {
-      const cod = String(l.codigo_prospecto || l.id || '').trim();
-      if (cod) mapaLeads.set(cod, { ...l });
-    });
-
-    // Luego complementar o enriquecer con los de Prospektia API
     const leadsProspektiaApi = prospektiaRes?.leads || [];
-    const leadsParaUpsertSupabase: any[] = [];
 
     leadsProspektiaApi.forEach((pl: any) => {
       const cod = String(pl.codigo_prospecto || pl.id || '').trim();
       if (!cod) return;
-
-      const existente = mapaLeads.get(cod);
       const fAg = pl.fecha_agendada ? String(pl.fecha_agendada).trim() : null;
       const hAg = pl.hora_agendada ? String(pl.hora_agendada).trim() : null;
 
-      if (!existente) {
-        // Lead nuevo en Prospektia que no estaba en Supabase
-        const nuevo = {
-          codigo_prospecto: cod,
-          nombre_prospecto: pl.nombre_prospecto || pl.nombre || '',
-          telefono: pl.telefono || '',
-          fecha_agendada: fAg,
-          hora_agendada: hAg,
-          fecha_creado: pl.fecha_creado || null,
-          hora_creado: pl.hora_creado || null,
-          tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
-          pais: pl.pais || 'SV',
-          asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
-          asesor_nombre: pl.asesor_nombre || null,
-          asesor_email: pl.asesor_email || null,
-          status: pl.status || 'en_proceso',
-          created_at: pl.created_at || (pl.fecha_creado ? `${pl.fecha_creado}T${pl.hora_creado || '00:00:00'}Z` : new Date().toISOString()),
-        };
-        if (esLeadCalificadoValido(nuevo)) {
-          mapaLeads.set(cod, nuevo);
-          leadsParaUpsertSupabase.push(nuevo);
-        } else {
-          // Si no es calificado, agregarlo a mapaLeads solo si ya existía para actualizarlo, pero no crearlo como nuevo lead agendado
-          mapaLeads.set(cod, nuevo);
-        }
-      } else {
-        // Si en Supabase no tenía fecha_agendada pero en Prospektia sí tiene, actualizar
-        let huboCambio = false;
-        if (fAg && (!existente.fecha_agendada || existente.fecha_agendada === 'null')) {
-          existente.fecha_agendada = fAg;
-          huboCambio = true;
-        }
-        if (hAg && (!existente.hora_agendada || existente.hora_agendada === 'null')) {
-          existente.hora_agendada = hAg;
-          huboCambio = true;
-        }
-        if (pl.nombre_prospecto && !existente.nombre_prospecto) {
-          existente.nombre_prospecto = pl.nombre_prospecto;
-          huboCambio = true;
-        }
-        if (huboCambio && esLeadCalificadoValido(existente)) {
-          leadsParaUpsertSupabase.push(existente);
-        }
-      }
+      const leadItem = {
+        codigo_prospecto: cod,
+        nombre_prospecto: pl.nombre_prospecto || pl.nombre || '',
+        telefono: pl.telefono || '',
+        fecha_agendada: fAg,
+        hora_agendada: hAg,
+        fecha_creado: pl.fecha_creado || null,
+        hora_creado: pl.hora_creado || null,
+        tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
+        pais: pl.pais || 'SV',
+        asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
+        asesor_nombre: pl.asesor_nombre || null,
+        asesor_email: pl.asesor_email || null,
+        status: pl.status || 'Agendado',
+        created_at: pl.created_at || (pl.fecha_creado ? `${pl.fecha_creado}T${pl.hora_creado || '00:00:00'}Z` : new Date().toISOString()),
+      };
+
+      mapaLeads.set(cod, leadItem);
     });
-
-    // Si detectamos leads nuevos o con fechas faltantes, sincronizarlos silenciosamente a Supabase
-    if (leadsParaUpsertSupabase.length > 0) {
-      (async () => {
-        try {
-          await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/leads`, {
-            method: 'POST',
-            headers: {
-              ...supabaseHeaders,
-              Prefer: 'resolution=merge-duplicates',
-            },
-            body: JSON.stringify(leadsParaUpsertSupabase),
-          });
-        } catch (_) {}
-      })();
-    }
-
     const todosLosLeads = Array.from(mapaLeads.values());
     const leadsCalificadosValidos: any[] = [];
     const leadsNoCalificadosTransferidos: any[] = [];
@@ -380,12 +456,8 @@ app.get('/api/sync/datos-completos', async (req, res) => {
 
     const leads = leadsCalificadosValidos;
 
-    // Fusionar Leads No Calificados de Supabase con Prospektia API para tener todos sin excepción
+    // Procesar Leads No Calificados de Prospektia API (sin tocar Supabase)
     const mapaNc = new Map<string, any>();
-    ncRaw.forEach((nc: any) => {
-      const k = String(nc.id || `${nc.client_id}_${nc.created_at}`).trim();
-      if (k) mapaNc.set(k, { ...nc });
-    });
     const prospektiaNcItems = Array.isArray(prospektiaNcRes) ? prospektiaNcRes : [];
     prospektiaNcItems.forEach((pnc: any) => {
       const k = String(pnc.id || `${pnc.client_id}_${pnc.created_at}`).trim();
@@ -405,7 +477,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       }
     });
 
-    // Transferir a No Calificados cualquier lead de leadsRaw que no cumpla los requisitos de cita agendada o nombre
+    // Transferir a No Calificados cualquier lead de Prospektia que no cumpla los requisitos de cita agendada o nombre
     leadsNoCalificadosTransferidos.forEach((l: any) => {
       const k = String(l.codigo_prospecto || l.id || '').trim();
       if (!k) return;
@@ -429,9 +501,9 @@ app.get('/api/sync/datos-completos', async (req, res) => {
 
     const leadsNoCalificados = Array.from(mapaNc.values());
 
-    // Todas las llamadas PBX y Celular se incluyen completas sin filtrar ni descartar ninguna extensión
-    const llamadasPbx = pbxPages;
-    const llamadasCelular = celPages;
+    // PBX y Celular provienen 100% de las APIs en vivo (sin Supabase)
+    const llamadasPbx = pbxDirecto;
+    const llamadasCelular = celDirecto;
     const llamadasWhatsapp = waRaw;
 
     // Helper para detectar país según teléfono o código
@@ -868,33 +940,6 @@ app.delete('/api/catalogo/:id', async (req, res) => {
 // ==========================================
 // 5. PROXY REAL DE AUDIO / GRABACIONES PBX
 // ==========================================
-const PBX_HOST = 'https://api.red.com.sv';
-const PBX_USER = 'DBOLAINES';
-const PBX_PASS = 'Intelfon1234';
-
-let pbxBackendToken: string | null = null;
-let pbxBackendTokenExp = 0;
-
-async function getPbxJwtBackend(): Promise<string> {
-  if (pbxBackendToken && Date.now() < pbxBackendTokenExp) {
-    return pbxBackendToken;
-  }
-  const r = await fetch(`${PBX_HOST}/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: PBX_USER, password: PBX_PASS }),
-  });
-  if (!r.ok) {
-    throw new Error(`PBX login failed HTTP ${r.status}`);
-  }
-  const data = await r.json();
-  const token = data.token || data.jwt || data.access_token;
-  if (!token) throw new Error('No token in PBX login');
-  pbxBackendToken = token;
-  pbxBackendTokenExp = Date.now() + 23 * 3600 * 1000;
-  return token;
-}
-
 app.get(['/api/audio-proxy', '/api/audio'], async (req, res) => {
   try {
     const rawAudioUrl = (req.query.url as string) || '';

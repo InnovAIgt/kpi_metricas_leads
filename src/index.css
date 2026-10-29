@@ -106,7 +106,34 @@ html:not(.dark) table td {
   color: #1e293b;
 }
 
+/* Elementos Slate 800 (pills neutrales, chips, badges secundarios y botones) */
+html:not(.dark) .bg-slate-800,
+html:not(.dark) .bg-slate-800\/90,
+html:not(.dark) .bg-slate-800\/80,
+html:not(.dark) .bg-slate-800\/60,
+html:not(.dark) .bg-slate-800\/50,
+html:not(.dark) .bg-slate-800\/40,
+html:not(.dark) .bg-slate-800\/30 {
+  background-color: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+html:not(.dark) .bg-slate-850 {
+  background-color: #f8fafc;
+}
+
 /* Textos y Jerarquía Tipográfica */
+html:not(.dark) h1.text-white,
+html:not(.dark) h2.text-white,
+html:not(.dark) h3.text-white,
+html:not(.dark) h4.text-white,
+html:not(.dark) td .text-white,
+html:not(.dark) th.text-white,
+html:not(.dark) tr.text-white {
+  color: #0f172a;
+}
+
 html:not(.dark) .text-slate-200 {
   color: #1e293b;
 }
@@ -117,6 +144,29 @@ html:not(.dark) .text-slate-300 {
 
 html:not(.dark) .text-slate-400 {
   color: #64748b;
+}
+
+/* Colores de badges de estado con alto contraste en modo claro */
+html:not(.dark) .text-rose-200,
+html:not(.dark) .text-rose-300 {
+  color: #be123c;
+}
+
+html:not(.dark) .text-emerald-300 {
+  color: #047857;
+}
+
+html:not(.dark) .text-amber-300 {
+  color: #b45309;
+}
+
+html:not(.dark) .text-indigo-300 {
+  color: #4338ca;
+}
+
+html:not(.dark) .text-sky-200,
+html:not(.dark) .text-sky-300 {
+  color: #0369a1;
 }
 
 /* Inputs, Selects y Buscadores en Modo Claro */
@@ -135,6 +185,7 @@ html:not(.dark) textarea::placeholder {
 
 /* Chips y Tarjetas de Estado Multicanal en Modo Claro */
 html:not(.dark) .bg-emerald-950,
+html:not(.dark) .bg-emerald-950\/20,
 html:not(.dark) .bg-emerald-950\/25,
 html:not(.dark) .bg-emerald-950\/60,
 html:not(.dark) .bg-emerald-950\/80 {
@@ -144,6 +195,7 @@ html:not(.dark) .bg-emerald-950\/80 {
 }
 
 html:not(.dark) .bg-amber-950,
+html:not(.dark) .bg-amber-950\/20,
 html:not(.dark) .bg-amber-950\/25,
 html:not(.dark) .bg-amber-950\/60,
 html:not(.dark) .bg-amber-950\/80 {
@@ -153,18 +205,23 @@ html:not(.dark) .bg-amber-950\/80 {
 }
 
 html:not(.dark) .bg-rose-950,
+html:not(.dark) .bg-rose-950\/20,
 html:not(.dark) .bg-rose-950\/25,
+html:not(.dark) .bg-rose-950\/40,
 html:not(.dark) .bg-rose-950\/60,
-html:not(.dark) .bg-rose-950\/80 {
+html:not(.dark) .bg-rose-950\/80,
+html:not(.dark) .bg-rose-950\/90 {
   background-color: #fff1f2;
   border-color: #fecdd3;
   color: #9f1239;
 }
 
 html:not(.dark) .bg-indigo-950,
+html:not(.dark) .bg-indigo-950\/20,
 html:not(.dark) .bg-indigo-950\/25,
 html:not(.dark) .bg-indigo-950\/50,
 html:not(.dark) .bg-indigo-950\/60,
+html:not(.dark) .bg-indigo-950\/70,
 html:not(.dark) .bg-indigo-950\/80 {
   background-color: #eef2ff;
   border-color: #c7d2fe;
@@ -172,6 +229,7 @@ html:not(.dark) .bg-indigo-950\/80 {
 }
 
 html:not(.dark) .bg-purple-950,
+html:not(.dark) .bg-purple-950\/20,
 html:not(.dark) .bg-purple-950\/25,
 html:not(.dark) .bg-purple-950\/60,
 html:not(.dark) .bg-purple-950\/80 {
@@ -181,20 +239,24 @@ html:not(.dark) .bg-purple-950\/80 {
 }
 
 html:not(.dark) .bg-sky-950,
-html:not(.dark) .bg-sky-950\/30 {
+html:not(.dark) .bg-sky-950\/30,
+html:not(.dark) .bg-sky-950\/80,
+html:not(.dark) .bg-sky-950\/90 {
   background-color: #f0f9ff;
   border-color: #bae6fd;
   color: #0369a1;
 }
 
 html:not(.dark) .bg-blue-950,
-html:not(.dark) .bg-blue-950\/60 {
+html:not(.dark) .bg-blue-950\/60,
+html:not(.dark) .bg-blue-950\/80 {
   background-color: #eff6ff;
   border-color: #bfdbfe;
   color: #1e40af;
 }
 
 /* Modales flotantes */
-html:not(.dark) .bg-black\/70 {
+html:not(.dark) .bg-black\/70,
+html:not(.dark) .bg-black\/60 {
   background-color: rgba(15, 23, 42, 0.45);
 }

@@ -184,7 +184,7 @@ async function getPbxJwtBackend(): Promise<string> {
 }
 
 // Generador de ventanas de 7 días (requisito estricto de PBX getCalls2 para no dar timeout)
-function generarVentanasPbx(diasAtras = 60): [string, string][] {
+function generarVentanasPbx(diasAtras = 30): [string, string][] {
   const rangos: [string, string][] = [];
   const hoy = new Date();
   const limite = new Date(hoy.getTime() - diasAtras * 24 * 3600 * 1000);
@@ -203,7 +203,7 @@ function generarVentanasPbx(diasAtras = 60): [string, string][] {
 async function fetchPbxEnCaliente(): Promise<any[]> {
   try {
     const token = await getPbxJwtBackend();
-    const ventanas = generarVentanasPbx(60); // 60 días hacia atrás hasta hoy
+    const ventanas = generarVentanasPbx(30); // 30 días hacia atrás hasta hoy (mes actual completo y fin de mes anterior)
     const promises: Promise<any[]>[] = [];
 
     for (const [d, h] of ventanas) {

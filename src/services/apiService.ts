@@ -473,6 +473,93 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
   return await sincronizarDirectoSupabase(inicio);
 }
 
+// Helper para consulta directa a PBX en cliente como fallback de ultra-resiliencia
+async function fetchPbxDirectoCliente(): Promise<any[]> {
+  try {
+    const loginRes = await fetch('https://api.red.com.sv/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'DBOLAINES', password: 'Intelfon1234' }),
+    });
+    if (!loginRes.ok) return [];
+    const loginData = await loginRes.json();
+    const token = loginData.token || loginData.jwt || loginData.access_token;
+    if (!token) return [];
+
+    const rangos: [string, string][] = [];
+    const hoy = new Date();
+    const limite = new Date(hoy.getTime() - 28 * 24 * 3600 * 1000);
+    let fin = new Date(hoy);
+    while (fin > limite) {
+      const inicio = new Date(fin.getTime() - 6 * 24 * 3600 * 1000);
+      const startObj = inicio < limite ? limite : inicio;
+      rangos.push([startObj.toISOString().slice(0, 10), fin.toISOString().slice(0, 10)]);
+      fin = new Date(startObj.getTime() - 24 * 3600 * 1000);
+    }
+
+    const promises: Promise<any[]>[] = [];
+    for (const [d, h] of rangos) {
+      for (const pais of ['SV', 'GT']) {
+        promises.push(
+          fetch(`https://api.red.com.sv/pbx/api/v1/getCalls2?desde=${d}&hasta=${h}&pais=${pais}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((res) => {
+              if (res && res.info && Array.isArray(res.info)) {
+                return res.info.map((c: any) => ({ ...c, pais }));
+              }
+              return [];
+            })
+            .catch(() => [])
+        );
+      }
+    }
+
+    const resultados = await Promise.all(promises);
+    const raw = resultados.flat();
+    return raw.map((c: any) => {
+      const ext = c.EXTENSION ? String(c.EXTENSION).trim() : '';
+      const durSec = Number(c.DURATION_SEC ?? Math.round(Number(c.DURACION_MINUTOS || 0) * 60));
+      const fIso = c.FECHA || (c.SOLO_FECHA ? String(c.SOLO_FECHA).slice(0, 10) + 'T00:00:00.000Z' : new Date().toISOString());
+      const pais = (c.pais || 'SV').toUpperCase();
+      const y = c.ANIO || (c.FECHA ? new Date(c.FECHA).getUTCFullYear() : 2026);
+      const m = String(c.MES || (c.FECHA ? new Date(c.FECHA).getUTCMonth() + 1 : 10)).padStart(2, '0');
+      const d = String(c.DIA || (c.FECHA ? new Date(c.FECHA).getUTCDate() : 1)).padStart(2, '0');
+      const fn = ext && c.uniqueid ? `Grabacion_Ext_${ext}_${c.uniqueid}.wav` : '';
+      const grabacionUrl = fn
+        ? (pais === 'GT'
+            ? `https://api.red.com.sv/pbx/api/v1/rawCalls?pais=GT&anio=${y}&mes=${m}&dia=${d}&archivo=${encodeURIComponent(fn)}`
+            : `https://api.red.com.sv/pbx/api/v1/getAudio/${y}/${m}/${d}/${fn}`)
+        : null;
+
+      return {
+        id: c.uniqueid || `pbx_${Date.now()}_${Math.random()}`,
+        uniqueid: c.uniqueid,
+        nombre: c.NOMBRE,
+        extension: ext,
+        destino: c.DESTINO ? String(c.DESTINO).trim() : '',
+        duracion_segundos: durSec,
+        duracion_minutos: Number(c.DURACION_MINUTOS || (durSec / 60).toFixed(2)),
+        duracion_hh_mm_ss: c.DURACION_HH_MM_SS,
+        estado: c.ESTADO || (durSec > 0 ? 'CONTESTADA' : 'NO CONTESTADA'),
+        fecha_hora: fIso,
+        fecha: fIso.slice(0, 10),
+        hora: fIso.slice(11, 19),
+        anio: y,
+        mes: Number(m),
+        dia: Number(d),
+        pais,
+        audio_url: grabacionUrl,
+        grabacion_url: grabacionUrl,
+      };
+    }).sort((a: any, b: any) => (b.fecha_hora || '').localeCompare(a.fecha_hora || ''));
+  } catch (err) {
+    console.error('Error en fetchPbxDirectoCliente:', err);
+    return [];
+  }
+}
+
 /**
  * Consulta directamente las tablas de Supabase vía REST
  * Garantiza que en Vercel siempre traiga la información 100% real sin datos quemados
@@ -488,6 +575,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       prospektiaRes,
       prospektiaNcRes,
       celRes,
+      pbxDirectoRes,
     ] = await Promise.all([
       fetch(`${url}/rest/v1/catalogo?select=*&order=id.asc`, { headers }).then((r) => r.ok ? r.json() : []),
       fetch(`${url}/rest/v1/llamadas_teams?select=*&order=fecha_reunion.desc.nullslast,id.desc`, { headers }).then((r) => r.ok ? r.json() : []),
@@ -514,6 +602,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       fetch('https://kpi.red.com.sv/api/historial-llamadas-ejecutivos', {
         headers: { 'X-API-KEY': 'mso_papi_2026_7f2b9c4d8e6a1b3f5d7c9e0a2b4c6d8f' },
       }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetchPbxDirectoCliente(), // PBX en vivo directo al API con CORS
     ]);
 
     const catalogo = Array.isArray(catalogoRes) ? catalogoRes : [];
@@ -568,7 +657,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     });
 
     const leadsNoCalificados = Array.from(mapaDirectoNc.values());
-    const llamadasPbx: any[] = [];
+    const llamadasPbx = Array.isArray(pbxDirectoRes) ? pbxDirectoRes : [];
     const llamadasCelular = Array.isArray(celRes?.data) ? celRes.data : [];
     const llamadasTeams = Array.isArray(teamsRes) ? teamsRes : [];
     const llamadasWhatsapp = Array.isArray(whatsappRes) ? whatsappRes : [];

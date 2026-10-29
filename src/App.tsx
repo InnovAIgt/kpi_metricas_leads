@@ -92,7 +92,20 @@ export default function App() {
   });
   const [rawPbx, setRawPbx] = useState<any[]>(() => {
     const saved = localStorage.getItem('kpi_raw_pbx_cache');
-    return saved ? JSON.parse(saved) : [];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const maxFecha = parsed[0]?.fecha_hora || parsed[0]?.fecha || '';
+          // Si el cache local está atascado en el 22 de octubre o antes, ignorarlo para no mostrar datos obsoletos
+          if (maxFecha && maxFecha <= '2026-10-23') {
+            return [];
+          }
+          return parsed;
+        }
+      } catch (_) {}
+    }
+    return [];
   });
   const [rawCelular, setRawCelular] = useState<any[]>(() => {
     const saved = localStorage.getItem('kpi_raw_cel_cache');

@@ -34,7 +34,10 @@ async function getPbxJwt(): Promise<string> {
   return token;
 }
 
-function generarVentanasPbx(diasAtras = 60): [string, string][] {
+export const maxDuration = 30; // Soporte extendido para Vercel Functions
+export const dynamic = 'force-dynamic';
+
+function generarVentanasPbx(diasAtras = 30): [string, string][] {
   const rangos: [string, string][] = [];
   const hoy = new Date();
   const limite = new Date(hoy.getTime() - diasAtras * 24 * 3600 * 1000);
@@ -52,7 +55,7 @@ function generarVentanasPbx(diasAtras = 60): [string, string][] {
 async function fetchPbxEnCaliente(): Promise<any[]> {
   try {
     const token = await getPbxJwt();
-    const ventanas = generarVentanasPbx(60);
+    const ventanas = generarVentanasPbx(30); // 30 días para no dar timeout en Vercel
     const promises: Promise<any[]>[] = [];
 
     for (const [d, h] of ventanas) {

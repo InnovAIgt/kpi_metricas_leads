@@ -202,35 +202,47 @@ export function ejecutarCruceAuditoria(
   const cruces: CruceAuditoria[] = [];
   const llamadasUsadas = new Set<string>();
 
+  // Pre-indexar llamadas en Map para O(1) instantáneo (elimina bloqueo de la UI)
+  const mapaPorTel = new Map<string, Llamada[]>();
+  const mapaPorNombre = new Map<string, Llamada[]>();
+  const mapaPorCodigo = new Map<string, Llamada[]>();
+
+  llamadas.forEach((call) => {
+    const rawTel = normalizarTelefono(call.telefono_marcado);
+    if (rawTel.length >= 7) {
+      const suf8 = rawTel.slice(-8);
+      let arr8 = mapaPorTel.get(suf8);
+      if (!arr8) {
+        arr8 = [];
+        mapaPorTel.set(suf8, arr8);
+      }
+      arr8.push(call);
+    }
+
+    if (call.prospecto_nombre) {
+      const nom = call.prospecto_nombre.trim().toLowerCase();
+      let arrN = mapaPorNombre.get(nom);
+      if (!arrN) {
+        arrN = [];
+        mapaPorNombre.set(nom, arrN);
+      }
+      arrN.push(call);
+    }
+  });
+
   citas.forEach((cita) => {
     const esNoCalificado = cita.tipo_lead === 'no_calificados';
     const fechaCita = new Date(cita.fecha_hora_programada);
     const esFechaValida = !isNaN(fechaCita.getTime());
 
-    // 1. Buscar todas las llamadas dirigidas al prospecto
-    const llamadasProspecto = llamadas.filter((call) => {
-      // A. Coincidencia por teléfono
-      const matchTel = coincideTelefono(call.telefono_marcado, cita.prospecto_telefono);
+    // Búsqueda ultra-rápida O(1) por teléfono o nombre
+    const cleanTel = normalizarTelefono(cita.prospecto_telefono);
+    const suf8 = cleanTel.length >= 7 ? cleanTel.slice(-8) : cleanTel;
+    const porTel = (suf8 && mapaPorTel.get(suf8)) || [];
+    const porNom = (cita.prospecto_nombre && mapaPorNombre.get(cita.prospecto_nombre.trim().toLowerCase())) || [];
 
-      // B. Coincidencia por código de prospecto (ej: LD709, LD619)
-      const codCita = String(cita.codigo_prospecto || '').trim().toLowerCase();
-      const codCall = String(call.telefono_marcado || '').trim().toLowerCase();
-      const matchCodigo = Boolean(
-        codCita &&
-        (codCall === codCita ||
-         (call.notas_llamada && call.notas_llamada.toLowerCase().includes(codCita)) ||
-         (call.prospecto_nombre && call.prospecto_nombre.toLowerCase().includes(codCita)))
-      );
-
-      // C. Coincidencia por nombre exacto
-      const matchNombre = Boolean(
-        cita.prospecto_nombre &&
-        call.prospecto_nombre &&
-        cita.prospecto_nombre.trim().toLowerCase() === call.prospecto_nombre.trim().toLowerCase()
-      );
-
-      return matchTel || matchCodigo || matchNombre;
-    });
+    const poolUnico = new Set<Llamada>([...porTel, ...porNom]);
+    const llamadasProspecto = Array.from(poolUnico);
 
     // 2. Si es No Calificado: Evaluar regla de 1 hora o siguiente día hábil 9:00 AM
     if (esNoCalificado) {

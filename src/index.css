@@ -1,1 +1,200 @@
 @import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  background-color: #f8fafc;
+  color: #0f172a;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+html.dark body {
+  background-color: #070b14;
+  color: #f1f5f9;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 4px;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+}
+
+/* ==========================================================================
+   MODO CLARO INTEGRAL (LIGHT THEME SYSTEM)
+   Aplica diseño moderno, contrastes limpios y lectura descansada en todo el sistema.
+   ========================================================================== */
+
+/* Contenedores y Tarjetas Principales */
+html:not(.dark) .bg-slate-900,
+html:not(.dark) .bg-slate-900\/90,
+html:not(.dark) .bg-slate-900\/80,
+html:not(.dark) .bg-slate-900\/50 {
+  background-color: #ffffff;
+  border-color: #e2e8f0;
+}
+
+/* Contenedores Secundarios y Cajas Internas */
+html:not(.dark) .bg-slate-950,
+html:not(.dark) .bg-slate-950\/90,
+html:not(.dark) .bg-slate-950\/80,
+html:not(.dark) .bg-slate-950\/70,
+html:not(.dark) .bg-slate-950\/60 {
+  background-color: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+/* Bordes y Divisores */
+html:not(.dark) .border-slate-800,
+html:not(.dark) .border-slate-800\/80,
+html:not(.dark) .border-slate-800\/60,
+html:not(.dark) .border-slate-800\/50,
+html:not(.dark) .border-slate-700,
+html:not(.dark) .border-slate-700\/80,
+html:not(.dark) .border-slate-700\/60 {
+  border-color: #e2e8f0;
+}
+
+html:not(.dark) .divide-slate-800,
+html:not(.dark) .divide-slate-800\/80,
+html:not(.dark) .divide-slate-800\/50,
+html:not(.dark) .divide-slate-700 {
+  border-color: #e2e8f0;
+}
+
+/* Tablas en Modo Claro */
+html:not(.dark) thead.bg-slate-950,
+html:not(.dark) thead {
+  background-color: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
+}
+
+html:not(.dark) tbody tr {
+  border-color: #f1f5f9;
+}
+
+html:not(.dark) tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+html:not(.dark) table td {
+  color: #1e293b;
+}
+
+/* Textos y Jerarquía Tipográfica */
+html:not(.dark) .text-slate-200 {
+  color: #1e293b;
+}
+
+html:not(.dark) .text-slate-300 {
+  color: #334155;
+}
+
+html:not(.dark) .text-slate-400 {
+  color: #64748b;
+}
+
+/* Inputs, Selects y Buscadores en Modo Claro */
+html:not(.dark) input:not([type="checkbox"]):not([type="radio"]),
+html:not(.dark) select,
+html:not(.dark) textarea {
+  background-color: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder {
+  color: #94a3b8;
+}
+
+/* Chips y Tarjetas de Estado Multicanal en Modo Claro */
+html:not(.dark) .bg-emerald-950,
+html:not(.dark) .bg-emerald-950\/25,
+html:not(.dark) .bg-emerald-950\/60,
+html:not(.dark) .bg-emerald-950\/80 {
+  background-color: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #065f46;
+}
+
+html:not(.dark) .bg-amber-950,
+html:not(.dark) .bg-amber-950\/25,
+html:not(.dark) .bg-amber-950\/60,
+html:not(.dark) .bg-amber-950\/80 {
+  background-color: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+html:not(.dark) .bg-rose-950,
+html:not(.dark) .bg-rose-950\/25,
+html:not(.dark) .bg-rose-950\/60,
+html:not(.dark) .bg-rose-950\/80 {
+  background-color: #fff1f2;
+  border-color: #fecdd3;
+  color: #9f1239;
+}
+
+html:not(.dark) .bg-indigo-950,
+html:not(.dark) .bg-indigo-950\/25,
+html:not(.dark) .bg-indigo-950\/50,
+html:not(.dark) .bg-indigo-950\/60,
+html:not(.dark) .bg-indigo-950\/80 {
+  background-color: #eef2ff;
+  border-color: #c7d2fe;
+  color: #3730a3;
+}
+
+html:not(.dark) .bg-purple-950,
+html:not(.dark) .bg-purple-950\/25,
+html:not(.dark) .bg-purple-950\/60,
+html:not(.dark) .bg-purple-950\/80 {
+  background-color: #faf5ff;
+  border-color: #e9d5ff;
+  color: #6b21a8;
+}
+
+html:not(.dark) .bg-sky-950,
+html:not(.dark) .bg-sky-950\/30 {
+  background-color: #f0f9ff;
+  border-color: #bae6fd;
+  color: #0369a1;
+}
+
+html:not(.dark) .bg-blue-950,
+html:not(.dark) .bg-blue-950\/60 {
+  background-color: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1e40af;
+}
+
+/* Modales flotantes */
+html:not(.dark) .bg-black\/70 {
+  background-color: rgba(15, 23, 42, 0.45);
+}

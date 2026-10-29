@@ -549,7 +549,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen bg-[#070b14] text-slate-100 overflow-hidden font-sans">
+    <div className="flex h-screen bg-slate-100 dark:bg-[#070b14] text-slate-900 dark:text-slate-100 overflow-hidden font-sans transition-colors duration-150">
       {/* Toast Notification */}
       {toast && (
         <div

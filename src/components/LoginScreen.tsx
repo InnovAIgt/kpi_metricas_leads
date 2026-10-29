@@ -10,8 +10,11 @@ import {
   AlertCircle,
   Zap,
   Users,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { ModoLeads } from '../types';
+import { useTheme } from '../context/ThemeContext';
 
 interface LoginScreenProps {
   onLoginSuccess: (
@@ -26,6 +29,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [modoSeleccionado, setModoSeleccionado] = useState<ModoLeads>('calificados');
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { tema, esOscuro, alternarTema } = useTheme();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,42 +83,54 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[#070b14] flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-rose-500 selection:text-white relative overflow-hidden">
+    <div className="min-h-screen bg-slate-50 dark:bg-[#070b14] text-slate-900 dark:text-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-rose-500 selection:text-white relative overflow-hidden transition-colors duration-150">
+      {/* Botón flotante de alternar tema */}
+      <div className="absolute top-4 right-4 z-20">
+        <button
+          type="button"
+          onClick={alternarTema}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 shadow-sm hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold cursor-pointer transition-all"
+        >
+          {esOscuro ? <Sun className="h-4 w-4 text-amber-500" /> : <Moon className="h-4 w-4 text-indigo-500" />}
+          <span>{esOscuro ? 'Modo Claro' : 'Modo Oscuro'}</span>
+        </button>
+      </div>
+
       {/* Luces y fondos decorativos */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-rose-600/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-rose-500/10 dark:bg-rose-600/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-indigo-500/10 dark:bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
         <div className="flex justify-center">
           <img
             src="/logo.png"
             alt="Logo"
-            className="h-16 w-16 rounded-full object-cover shadow-2xl border-2 border-red-500/40 shadow-red-950/60"
+            className="h-16 w-16 rounded-full object-cover shadow-xl border-2 border-red-500/40 shadow-red-950/20 dark:shadow-red-950/60"
           />
         </div>
-        <h2 className="mt-4 text-center text-2xl font-black text-white tracking-tight">
+        <h2 className="mt-4 text-center text-2xl font-black text-slate-900 dark:text-white tracking-tight">
           Auditoría de Citas & Cumplimiento
         </h2>
-        <p className="mt-1 text-center text-xs text-slate-400">
+        <p className="mt-1 text-center text-xs text-slate-500 dark:text-slate-400">
           Cruce Multicanal PBX, Celular, WhatsApp y Teams
         </p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md relative z-10 px-4 sm:px-0">
-        <div className="bg-slate-900/90 backdrop-blur-xl py-8 px-6 shadow-2xl rounded-2xl border border-slate-800 sm:px-10">
+        <div className="bg-white dark:bg-slate-900/90 backdrop-blur-xl py-8 px-6 shadow-xl dark:shadow-2xl rounded-2xl border border-slate-200 dark:border-slate-800 sm:px-10">
           {/* DOS ENTRADAS: SELECCIÓN DE ENTRADA (CALIFICADOS VS NO CALIFICADOS) */}
           <div className="mb-6">
-            <label className="block text-xs font-semibold text-slate-300 mb-2 text-center uppercase tracking-wider">
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2 text-center uppercase tracking-wider">
               Selecciona Modo de Entrada
             </label>
-            <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+            <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-slate-950 p-1.5 rounded-xl border border-slate-200 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => setModoSeleccionado('calificados')}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                   modoSeleccionado === 'calificados'
-                    ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                 }`}
               >
                 <Zap className="h-3.5 w-3.5" />
@@ -124,17 +140,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               <button
                 type="button"
                 onClick={() => setModoSeleccionado('no_calificados')}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                   modoSeleccionado === 'no_calificados'
-                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                 }`}
               >
                 <Users className="h-3.5 w-3.5" />
                 <span>No Calificados</span>
               </button>
             </div>
-            <p className="text-[11px] text-slate-400 text-center mt-2">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 text-center mt-2">
               {modoSeleccionado === 'calificados'
                 ? 'Audita los leads pactados y calificados de la tabla public.leads'
                 : 'Audita los leads de prospección directa de la tabla public.leads_no_calificados'}
@@ -143,18 +159,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
           <form className="space-y-4" onSubmit={handleSubmit}>
             {error && (
-              <div className="p-3 bg-rose-950/80 border border-rose-500/50 rounded-xl text-rose-200 text-xs flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+              <div className="p-3 bg-rose-50 dark:bg-rose-950/80 border border-rose-200 dark:border-rose-500/50 rounded-xl text-rose-700 dark:text-rose-200 text-xs flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0 text-rose-500 dark:text-rose-400" />
                 <span>{error}</span>
               </div>
             )}
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                 Usuario
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
                   <User className="h-4 w-4" />
                 </div>
                 <input
@@ -163,17 +179,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   value={usuario}
                   onChange={(e) => setUsuario(e.target.value)}
                   placeholder="Gabi"
-                  className="block w-full pl-9 pr-3 py-2 text-sm bg-slate-950 border border-slate-700/80 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
+                  className="block w-full pl-9 pr-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                 Contraseña
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
                   <KeyRound className="h-4 w-4" />
                 </div>
                 <input
@@ -182,32 +198,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••"
-                  className="block w-full pl-9 pr-3 py-2 text-sm bg-slate-950 border border-slate-700/80 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
+                  className="block w-full pl-9 pr-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 font-mono"
                 />
               </div>
             </div>
 
-            <div className="pt-2">
-              <button
-                type="submit"
-                disabled={cargando}
-                className="w-full flex justify-center items-center gap-2 py-2.5 px-4 border border-transparent rounded-xl shadow-lg text-sm font-bold text-white bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-500 hover:to-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-rose-500 transition-all disabled:opacity-50"
-              >
-                {cargando ? (
-                  <span>Iniciando sesión...</span>
-                ) : (
-                  <>
-                    <span>Entrar a {modoSeleccionado === 'calificados' ? 'Calificados' : 'No Calificados'}</span>
-                    <ArrowRight className="h-4 w-4" />
-                  </>
-                )}
-              </button>
-            </div>
+            <button
+              type="submit"
+              disabled={cargando}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-bold text-white bg-rose-600 hover:bg-rose-500 active:scale-[0.99] transition-all shadow-lg shadow-rose-600/30 disabled:opacity-50 cursor-pointer"
+            >
+              <span>{cargando ? 'Verificando...' : 'Iniciar Sesión'}</span>
+              <ArrowRight className="h-4 w-4" />
+            </button>
           </form>
-
-          <div className="mt-6 pt-4 border-t border-slate-800 text-center">
+          <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 text-center">
             <span className="text-[11px] text-slate-500">
-              Acceso seguro para auditores • Credencial: <code className="text-slate-300">Gabi</code> / <code className="text-slate-300">1234</code>
+              Acceso seguro para auditores • Credencial: <code className="text-slate-700 dark:text-slate-300">Gabi</code> / <code className="text-slate-700 dark:text-slate-300">1234</code>
             </span>
           </div>
         </div>

@@ -60,9 +60,9 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-2 bg-slate-900/90 border border-slate-800 p-2 rounded-xl text-xs">
-      <div className="flex items-center gap-1.5 text-slate-400 font-medium mr-1">
-        <Calendar className="h-3.5 w-3.5 text-rose-400" />
+    <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 p-2 rounded-xl text-xs shadow-xs">
+      <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400 font-medium mr-1">
+        <Calendar className="h-3.5 w-3.5 text-rose-500" />
         <span className="hidden sm:inline">{label}:</span>
       </div>
 
@@ -72,7 +72,7 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
           type="date"
           value={fechaInicio}
           onChange={(e) => onChangeInicio(e.target.value)}
-          className="bg-slate-950 border border-slate-700/80 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-rose-500"
+          className="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-rose-500"
         />
       </div>
 
@@ -82,12 +82,12 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
           type="date"
           value={fechaFin}
           onChange={(e) => onChangeFin(e.target.value)}
-          className="bg-slate-950 border border-slate-700/80 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-rose-500"
+          className="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-rose-500"
         />
       </div>
 
       {/* Botones de presets rápidos */}
-      <div className="flex flex-wrap items-center gap-1 ml-1 border-l border-slate-800 pl-2">
+      <div className="flex flex-wrap items-center gap-1 ml-1 border-l border-slate-200 dark:border-slate-800 pl-2">
         {presets.map((p) => (
           <button
             key={p.etiqueta}
@@ -95,8 +95,8 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
             onClick={p.aplicar}
             className={`px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
               p.esActivo
-                ? 'bg-rose-600 text-white shadow-sm'
-                : 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white'
+                ? 'bg-rose-600 text-white shadow-xs'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 dark:hover:text-white'
             }`}
           >
             {p.etiqueta}
@@ -108,8 +108,7 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
         <button
           type="button"
           onClick={onLimpiar}
-          className="flex items-center gap-1 text-[11px] px-2 py-1 bg-rose-950/60 border border-rose-800/60 rounded text-rose-300 hover:bg-rose-900/60 transition-all ml-auto sm:ml-0"
-          title="Quitar filtro de fechas"
+          className="flex items-center gap-1 text-[11px] text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 ml-auto cursor-pointer"
         >
           <X className="h-3 w-3" />
           <span>Restablecer</span>

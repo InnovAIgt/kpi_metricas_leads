@@ -72,7 +72,7 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
 
   return (
     <div className="relative inline-flex items-center gap-1.5" ref={popoverRef}>
-      <span className="font-semibold text-slate-300 select-none">{titulo}</span>
+      <span className="font-semibold text-slate-700 dark:text-slate-300 select-none">{titulo}</span>
       <button
         type="button"
         onClick={(e) => {
@@ -80,33 +80,33 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
           setAbierto(!abierto);
         }}
         title={`Filtrar por ${titulo}`}
-        className={`p-1 rounded transition-all hover:bg-slate-700/60 ${
+        className={`p-1 rounded transition-all hover:bg-slate-200 dark:hover:bg-slate-700/60 ${
           estaActivo
-            ? 'bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/50'
-            : 'text-slate-400 hover:text-slate-200'
+            ? 'bg-rose-500/20 text-rose-600 dark:text-rose-300 ring-1 ring-rose-500/50'
+            : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
         }`}
       >
-        <Filter className={`h-3 w-3 ${estaActivo ? 'text-rose-400 fill-rose-400/20' : ''}`} />
+        <Filter className={`h-3 w-3 ${estaActivo ? 'text-rose-500 fill-rose-500/20' : ''}`} />
       </button>
 
       {/* Popover desplegable con buscador dinámico y checklist */}
       {abierto && (
         <div
-          className={`absolute top-full mt-1.5 z-50 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2.5 text-xs font-normal normal-case tracking-normal ${
+          className={`absolute top-full mt-1.5 z-50 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl p-2.5 text-xs font-normal normal-case tracking-normal ${
             alineacion === 'right' ? 'right-0' : 'left-0'
           }`}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header del Filtro */}
-          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
-            <span className="font-bold text-white text-[11px] truncate">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
+            <span className="font-bold text-slate-900 dark:text-white text-[11px] truncate">
               Filtro: {titulo}
             </span>
             {estaActivo && (
               <button
                 type="button"
                 onClick={() => onCambiarSeleccion(clave, [])}
-                className="text-[10px] text-rose-400 hover:text-rose-300 flex items-center gap-0.5"
+                className="text-[10px] text-rose-500 dark:text-rose-400 hover:underline flex items-center gap-0.5"
               >
                 <X className="h-2.5 w-2.5" /> Limpiar
               </button>
@@ -121,33 +121,33 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
               placeholder={`Buscar en ${titulo}...`}
               value={busquedaLocal}
               onChange={(e) => setBusquedaLocal(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
+              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-rose-500"
               autoFocus
             />
           </div>
 
           {/* Acciones Rápidas */}
-          <div className="flex items-center justify-between text-[10px] text-slate-400 mb-2 px-1">
+          <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 mb-2 px-1">
             <button
               type="button"
               onClick={seleccionarTodos}
-              className="hover:text-white underline underline-offset-2"
+              className="hover:text-slate-900 dark:hover:text-white underline underline-offset-2"
             >
               Seleccionar todos
             </button>
             <button
               type="button"
               onClick={deseleccionarTodos}
-              className="hover:text-white underline underline-offset-2"
+              className="hover:text-slate-900 dark:hover:text-white underline underline-offset-2"
             >
               Deseleccionar todos
             </button>
           </div>
 
           {/* Checklist de Valores */}
-          <div className="max-h-48 overflow-y-auto space-y-0.5 pr-1 divide-y divide-slate-800/40">
+          <div className="max-h-48 overflow-y-auto space-y-0.5 pr-1 divide-y divide-slate-100 dark:divide-slate-800/40">
             {valoresFiltrados.length === 0 ? (
-              <div className="py-3 text-center text-slate-500 text-[11px]">
+              <div className="py-3 text-center text-slate-400 dark:text-slate-500 text-[11px]">
                 Sin coincidencias
               </div>
             ) : (
@@ -157,16 +157,16 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
                 return (
                   <label
                     key={val}
-                    className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-slate-800/70 cursor-pointer text-slate-200 select-none text-xs"
+                    className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800/70 cursor-pointer text-slate-800 dark:text-slate-200 select-none text-xs"
                   >
                     <input
                       type="checkbox"
                       checked={checked}
                       onChange={() => toggleValor(val)}
-                      className="rounded border-slate-700 bg-slate-950 text-rose-500 focus:ring-rose-500/20 h-3.5 w-3.5"
+                      className="rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-rose-500 focus:ring-rose-500/20 h-3.5 w-3.5"
                     />
                     <span className="truncate flex-1" title={val}>
-                      {val || <span className="italic text-slate-500">(Vacío)</span>}
+                      {val || <span className="italic text-slate-400 dark:text-slate-500">(Vacío)</span>}
                     </span>
                   </label>
                 );
@@ -174,11 +174,11 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
             )}
           </div>
 
-          <div className="pt-2 mt-2 border-t border-slate-800 flex justify-end">
+          <div className="pt-2 mt-2 border-t border-slate-200 dark:border-slate-800 flex justify-end">
             <button
               type="button"
               onClick={() => setAbierto(false)}
-              className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-[11px] font-semibold"
+              className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-[11px] font-semibold cursor-pointer"
             >
               Aplicar
             </button>

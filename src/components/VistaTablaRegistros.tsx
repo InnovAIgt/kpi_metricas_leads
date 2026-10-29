@@ -470,15 +470,15 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-xs dark:shadow-none">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-slate-800/80 border border-slate-700/60">
+            <div className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60">
               {renderIcono()}
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white tracking-wide">{titulo}</h2>
-              <p className="text-xs text-slate-400 mt-0.5">{subtitulo}</p>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-wide">{titulo}</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{subtitulo}</p>
             </div>
           </div>
 
@@ -489,12 +489,12 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                 onClick={() => setSoloConReunion(!soloConReunion)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
                   soloConReunion
-                    ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500 shadow-sm'
-                    : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-500 shadow-xs'
+                    : 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
                 }`}
                 title="Alternar entre ver todos los prospectos del período o solo aquellos con fecha pactada"
               >
-                <Check className={`h-3.5 w-3.5 ${soloConReunion ? 'text-emerald-400' : 'text-slate-500'}`} />
+                <Check className={`h-3.5 w-3.5 ${soloConReunion ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`} />
                 <span>{soloConReunion ? 'Solo Con Reunión Pactada (Filtro Activo)' : 'Ver Todos los Prospectos del Período'}</span>
               </button>
             )}
@@ -502,7 +502,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
               <button
                 type="button"
                 onClick={abrirModalTeamsNuevo}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium text-xs shadow-sm transition-all cursor-pointer"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium text-xs shadow-xs transition-all cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>Registrar Reunión Teams</span>
@@ -512,20 +512,20 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
               <button
                 type="button"
                 onClick={abrirModalLlamadaManual}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-md transition-all cursor-pointer"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>{icono === 'pbx' ? 'Registrar Llamada PBX' : 'Registrar Llamada Celular'}</span>
               </button>
             )}
-            <div className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs font-mono text-slate-300">
+            <div className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono text-slate-700 dark:text-slate-300">
               {filtrados.length} / {datos.length} registros
             </div>
             {filtrosActivosTotal > 0 && (
               <button
                 type="button"
                 onClick={handleLimpiarTodosFiltros}
-                className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-rose-950/60 border border-rose-800 text-rose-300 hover:bg-rose-900"
+                className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 dark:bg-rose-950/60 dark:border-rose-800 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900"
               >
                 <X className="h-3 w-3" /> Limpiar ({filtrosActivosTotal})
               </button>
@@ -557,17 +557,17 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
             placeholder="Buscar en todos los campos..."
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
+            className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg pl-9 pr-4 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-rose-500 shadow-xs"
           />
         </div>
       </div>
 
       {/* Aviso contextual de rango de fecha activo */}
       {(fechaInicio || fechaFin) && (
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-300">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs px-3.5 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300 shadow-xs">
           <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-            Filtro de fecha activo: <strong className="text-white font-mono">{fechaInicio || 'Inicio'}</strong> al <strong className="text-white font-mono">{fechaFin || 'Fin'}</strong> ({filtrados.length} de {datos.length} registros).
+            <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+            Filtro de fecha activo: <strong className="text-slate-900 dark:text-white font-mono">{fechaInicio || 'Inicio'}</strong> al <strong className="text-slate-900 dark:text-white font-mono">{fechaFin || 'Fin'}</strong> ({filtrados.length} de {datos.length} registros).
           </span>
           <button
             type="button"
@@ -575,7 +575,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
               setFechaInicio('');
               setFechaFin('');
             }}
-            className="text-xs font-semibold text-rose-400 hover:text-rose-300 underline cursor-pointer"
+            className="text-xs font-semibold text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
           >
             Quitar filtro y ver todos ({datos.length})
           </button>
@@ -583,14 +583,14 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
       )}
 
       {/* Tabla de Datos con Filtros en Cada Columna */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-xs dark:shadow-none">
         <div className="overflow-x-auto max-h-[650px]">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-950 text-slate-400 uppercase font-bold sticky top-0 z-20 border-b border-slate-800">
+          <table className="w-full text-left text-xs text-slate-700 dark:text-slate-300">
+            <thead className="bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 uppercase font-bold sticky top-0 z-20 border-b border-slate-200 dark:border-slate-800">
               {hayGrupos ? (
                 <>
                   {/* Fila 1: Grupos superiores y columnas sin grupo con rowSpan=2 */}
-                  <tr className="border-b border-slate-800/80">
+                  <tr className="border-b border-slate-200 dark:border-slate-800/80">
                     {headerEstructura.row1.map((item) => {
                       if (item.type === 'group') {
                         const esRetro = item.grupo.includes('RETROALIMENTACION');
@@ -669,29 +669,29 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                 </tr>
               )}
             </thead>
-            <tbody className="divide-y divide-slate-800/80 font-mono">
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800/80 font-mono">
               {filtrados.length === 0 ? (
                 <tr>
                   <td colSpan={columnas.length + (icono === 'teams' ? 1 : 0)} className="py-12 px-6 text-center">
                     <div className="max-w-md mx-auto space-y-3 font-sans">
-                      <div className="inline-flex p-3 rounded-full bg-slate-800/80 border border-slate-700 text-slate-400 mb-1">
-                        <AlertCircle className="h-6 w-6 text-amber-400" />
+                      <div className="inline-flex p-3 rounded-full bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 mb-1">
+                        <AlertCircle className="h-6 w-6 text-amber-500" />
                       </div>
-                      <p className="text-sm font-semibold text-white">
+                      <p className="text-sm font-semibold text-slate-900 dark:text-white">
                         No se encontraron registros en el rango seleccionado {fechaInicio && fechaFin ? `(${fechaInicio} al ${fechaFin})` : ''}
                       </p>
                       {icono === 'leads' ? (
-                        <div className="text-xs text-slate-300 space-y-1.5 bg-slate-950/60 p-3 rounded-lg border border-slate-800 text-left">
-                          <p className="font-semibold text-white">Estado de las fuentes de datos:</p>
+                        <div className="text-xs text-slate-700 dark:text-slate-300 space-y-1.5 bg-slate-50 dark:bg-slate-950/60 p-3 rounded-lg border border-slate-200 dark:border-slate-800 text-left">
+                          <p className="font-semibold text-slate-900 dark:text-white">Estado de las fuentes de datos:</p>
                           <p>
-                            • <strong className="text-emerald-400">Telefonía (PBX y Celular):</strong> Registros sincronizados en tiempo real hasta hoy ({getMesActualInfo().hoy}).
+                            • <strong className="text-emerald-600 dark:text-emerald-400">Telefonía (PBX y Celular):</strong> Registros sincronizados en tiempo real hasta hoy ({getMesActualInfo().hoy}).
                           </p>
                           <p>
-                            • <strong className="text-cyan-400">Leads Calificados (Prospektia API):</strong> El último lote de citas agendadas por la API externa fue del 29 de septiembre de 2026.
+                            • <strong className="text-cyan-600 dark:text-cyan-400">Leads Calificados (Prospektia API):</strong> El último lote de citas agendadas por la API externa fue del 29 de septiembre de 2026.
                           </p>
                         </div>
                       ) : (
-                        <p className="text-xs text-slate-400">
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
                           No hay eventos registrados en este período específico. Puedes alternar rápidamente con los siguientes accesos directos:
                         </p>
                       )}
@@ -703,7 +703,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                             setFechaInicio(ant.inicioMes);
                             setFechaFin(ant.finMes);
                           }}
-                          className="px-3 py-1.5 rounded-lg bg-indigo-950/80 border border-indigo-700/80 text-indigo-300 hover:bg-indigo-900 text-xs font-medium cursor-pointer transition-colors"
+                          className="px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950/80 dark:border-indigo-700/80 dark:text-indigo-300 dark:hover:bg-indigo-900 text-xs font-medium cursor-pointer transition-colors shadow-xs"
                         >
                           Ver Mes Anterior ({getMesAnteriorInfo().nombreMes})
                         </button>
@@ -714,7 +714,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                             setFechaInicio(act.inicioMes);
                             setFechaFin(act.finMes);
                           }}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-950/80 border border-emerald-700/80 text-emerald-300 hover:bg-emerald-900 text-xs font-medium cursor-pointer transition-colors"
+                          className="px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/80 dark:border-emerald-700/80 dark:text-emerald-300 dark:hover:bg-emerald-900 text-xs font-medium cursor-pointer transition-colors shadow-xs"
                         >
                           Ver Mes Actual ({getMesActualInfo().nombreMes})
                         </button>
@@ -724,7 +724,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                             setFechaInicio('');
                             setFechaFin('');
                           }}
-                          className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 text-xs font-medium cursor-pointer transition-colors"
+                          className="px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700 text-xs font-medium cursor-pointer transition-colors shadow-xs"
                         >
                           Ver Todos ({datos.length})
                         </button>
@@ -734,14 +734,14 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                 </tr>
               ) : (
                 filasPaginadas.map((fila, i) => (
-                  <tr key={fila.id || fila.uniqueid || i} className="hover:bg-slate-800/50 transition-colors">
+                  <tr key={fila.id || fila.uniqueid || i} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                     {columnas.map((col) => (
-                      <td key={col.clave} className="py-2.5 px-4 whitespace-nowrap">
+                      <td key={col.clave} className="py-2.5 px-4 whitespace-nowrap text-slate-800 dark:text-slate-200">
                         {col.render
                           ? col.render(fila[col.clave], fila)
                           : fila[col.clave] !== undefined && fila[col.clave] !== null
                           ? String(fila[col.clave])
-                          : <span className="text-slate-600 font-sans">-</span>}
+                          : <span className="text-slate-400 dark:text-slate-600 font-sans">-</span>}
                       </td>
                     ))}
                     {icono === 'teams' && (
@@ -749,7 +749,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                         <button
                           type="button"
                           onClick={() => abrirModalTeamsEditar(fila)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-purple-950/80 border border-purple-700/80 text-purple-300 hover:bg-purple-900 text-xs font-sans font-medium transition-colors cursor-pointer"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 dark:bg-purple-950/80 dark:border-purple-700/80 dark:text-purple-300 dark:hover:bg-purple-900 text-xs font-sans font-medium transition-colors cursor-pointer shadow-xs"
                         >
                           <Edit className="h-3 w-3" />
                           <span>{fila.evidencia_url ? 'Editar' : 'Ingresar Datos'}</span>
@@ -765,18 +765,18 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
         {/* Barra de Paginación Rápida */}
         {filtrados.length > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-slate-900/90 border-t border-slate-800 text-xs">
-            <div className="flex items-center gap-2 text-slate-400">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-slate-50 dark:bg-slate-900/90 border-t border-slate-200 dark:border-slate-800 text-xs">
+            <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
               <span>
-                Mostrando <strong className="text-white font-mono">{(paginaActual - 1) * filasPorPagina + 1}</strong> - <strong className="text-white font-mono">{Math.min(paginaActual * filasPorPagina, filtrados.length)}</strong> de <strong className="text-white font-mono">{filtrados.length}</strong> registros
+                Mostrando <strong className="text-slate-900 dark:text-white font-mono">{(paginaActual - 1) * filasPorPagina + 1}</strong> - <strong className="text-slate-900 dark:text-white font-mono">{Math.min(paginaActual * filasPorPagina, filtrados.length)}</strong> de <strong className="text-slate-900 dark:text-white font-mono">{filtrados.length}</strong> registros
               </span>
               {totalPaginas > 1 && (
-                <span className="text-slate-500">• Página {paginaActual} de {totalPaginas}</span>
+                <span className="text-slate-400 dark:text-slate-500">• Página {paginaActual} de {totalPaginas}</span>
               )}
             </div>
 
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5 text-slate-400">
+              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
                 <span>Por página:</span>
                 <select
                   value={filasPorPagina}
@@ -784,7 +784,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     setFilasPorPagina(Number(e.target.value));
                     setPaginaActual(1);
                   }}
-                  className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono focus:outline-none focus:border-red-500"
+                  className="bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-red-500 shadow-xs"
                 >
                   <option value={50}>50</option>
                   <option value={100}>100</option>
@@ -799,7 +799,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     type="button"
                     disabled={paginaActual === 1}
                     onClick={() => setPaginaActual(1)}
-                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-colors"
+                    className="px-2 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-colors shadow-xs"
                     title="Primera página"
                   >
                     ««
@@ -808,13 +808,13 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     type="button"
                     disabled={paginaActual === 1}
                     onClick={() => setPaginaActual((p) => Math.max(1, p - 1))}
-                    className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-colors"
+                    className="px-2.5 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-colors shadow-xs"
                     title="Página anterior"
                   >
                     « Anterior
                   </button>
 
-                  <div className="px-2 py-1 font-mono font-bold text-white bg-slate-950 border border-slate-700 rounded">
+                  <div className="px-2 py-1 font-mono font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded shadow-xs">
                     {paginaActual} / {totalPaginas}
                   </div>
 
@@ -822,7 +822,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     type="button"
                     disabled={paginaActual === totalPaginas}
                     onClick={() => setPaginaActual((p) => Math.min(totalPaginas, p + 1))}
-                    className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-colors"
+                    className="px-2.5 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-colors shadow-xs"
                     title="Página siguiente"
                   >
                     Siguiente »
@@ -831,7 +831,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     type="button"
                     disabled={paginaActual === totalPaginas}
                     onClick={() => setPaginaActual(totalPaginas)}
-                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-colors"
+                    className="px-2 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-colors shadow-xs"
                     title="Última página"
                   >
                     »»

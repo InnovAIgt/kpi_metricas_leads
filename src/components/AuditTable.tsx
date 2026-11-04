@@ -15,15 +15,21 @@ import {
   ChevronUp,
   FileCheck,
   PhoneForwarded,
+  Sparkles,
 } from 'lucide-react';
 import { CruceAuditoria, EstadoCumplimiento } from '../types';
 
 interface AuditTableProps {
   cruces: CruceAuditoria[];
   onAuditarCruce?: (cruceId: string, notas: string) => void;
+  onVerTranscripcion?: (llamada: any) => void;
 }
 
-export const AuditTable: React.FC<AuditTableProps> = ({ cruces, onAuditarCruce }) => {
+export const AuditTable: React.FC<AuditTableProps> = ({
+  cruces,
+  onAuditarCruce,
+  onVerTranscripcion,
+}) => {
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState<string>('todos');
   const [filtroVendedor, setFiltroVendedor] = useState<string>('todos');
@@ -327,6 +333,31 @@ export const AuditTable: React.FC<AuditTableProps> = ({ cruces, onAuditarCruce }
                                   <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">{item.explicacion}</p>
                                 </div>
                                 <div className="flex items-center gap-3">
+                                  {onVerTranscripcion && (item.fecha_llamada || item.llamada) && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onVerTranscripcion(
+                                          item.llamada
+                                            ? item.llamada
+                                            : {
+                                                uniqueid: item.id,
+                                                destino: item.telefono,
+                                                nombre: item.vendedor_nombre,
+                                                fecha_hora: item.fecha_llamada,
+                                                duracion_segundos: item.duracion_llamada_segundos,
+                                                estado: 'CONTESTADA',
+                                              }
+                                        );
+                                      }}
+                                      className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 dark:bg-indigo-950/80 dark:text-indigo-300 dark:border-indigo-700/60 dark:hover:bg-indigo-900 cursor-pointer transition-all shadow-xs"
+                                      title="Ver transcripción y análisis QA con IA de esta llamada"
+                                    >
+                                      <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
+                                      <span>Transcripción (IA)</span>
+                                    </button>
+                                  )}
                                   {item.llamada?.grabacion_url && (
                                     <button
                                       type="button"

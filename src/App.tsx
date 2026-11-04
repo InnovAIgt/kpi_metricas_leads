@@ -42,7 +42,8 @@ import { VendorScorecard } from './components/VendorScorecard';
 import { LoginScreen } from './components/LoginScreen';
 import { SupabaseConfigModal } from './components/SupabaseConfigModal';
 import { ReproductorAudioFlotante } from './components/ReproductorAudioFlotante';
-import { CheckCircle2, AlertCircle, Info, ExternalLink, Play, ArrowLeftRight, Phone, Video, Building2 } from 'lucide-react';
+import { ModalTranscripcionLlamada } from './components/ModalTranscripcionLlamada';
+import { CheckCircle2, AlertCircle, Info, ExternalLink, Play, ArrowLeftRight, Phone, Video, Building2, Sparkles } from 'lucide-react';
 
 export default function App() {
   // Autenticación de usuario (por defecto activo para mostrar los datos de inmediato)
@@ -146,6 +147,7 @@ export default function App() {
   const [sincronizando, setSincronizando] = useState(false);
   const [modalSupabaseAbierto, setModalSupabaseAbierto] = useState(false);
   const [llamadaReproduciendo, setLlamadaReproduciendo] = useState<any | null>(null);
+  const [llamadaParaTranscripcion, setLlamadaParaTranscripcion] = useState<any | null>(null);
   const [toast, setToast] = useState<{
     tipo: 'exito' | 'error' | 'info';
     mensaje: string;
@@ -686,6 +688,21 @@ export default function App() {
                       <span className="text-slate-600 text-xs italic">Sin audio</span>
                     );
                   },
+                },
+                {
+                  clave: 'transcripcion',
+                  etiqueta: 'Transcripción (IA)',
+                  render: (_val, fila) => (
+                    <button
+                      type="button"
+                      onClick={() => setLlamadaParaTranscripcion(fila)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-all bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 dark:bg-indigo-950/80 dark:border-indigo-700/60 dark:text-indigo-300 dark:hover:bg-indigo-900 shadow-xs"
+                      title="Ver transcripción y análisis QA con IA de esta llamada"
+                    >
+                      <Sparkles className="h-3 w-3 text-indigo-500 shrink-0" />
+                      <span>Transcripción</span>
+                    </button>
+                  ),
                 },
               ]}
             />
@@ -1298,6 +1315,8 @@ export default function App() {
               cruces={crucesAuditoria}
               tipoLeadActual={modoLeads}
               catalogo={catalogo}
+              onVerTranscripcion={(cruce) => setLlamadaParaTranscripcion(cruce)}
+              onEscucharAudio={(ll) => setLlamadaReproduciendo(ll)}
             />
           )}
 
@@ -1345,6 +1364,15 @@ export default function App() {
         llamada={llamadaReproduciendo}
         onClose={() => setLlamadaReproduciendo(null)}
       />
+
+      {/* Modal de Transcripción y Análisis QA de Llamada con IA */}
+      {llamadaParaTranscripcion && (
+        <ModalTranscripcionLlamada
+          llamada={llamadaParaTranscripcion}
+          onClose={() => setLlamadaParaTranscripcion(null)}
+          onEscucharAudio={(ll) => setLlamadaReproduciendo(ll)}
+        />
+      )}
     </div>
   );
 }

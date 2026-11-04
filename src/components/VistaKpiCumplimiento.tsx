@@ -14,6 +14,8 @@ import {
   ChevronDown,
   Info,
   AlertCircle,
+  Sparkles,
+  Volume2,
 } from 'lucide-react';
 import { CruceAuditoria, VendedorMetricas, ModoLeads } from '../types';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
@@ -30,12 +32,16 @@ interface VistaKpiCumplimientoProps {
   cruces: CruceAuditoria[];
   tipoLeadActual?: ModoLeads;
   catalogo?: any[];
+  onVerTranscripcion?: (llamada: any) => void;
+  onEscucharAudio?: (llamada: any) => void;
 }
 
 export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
   cruces,
   tipoLeadActual = 'calificados',
   catalogo = [],
+  onVerTranscripcion,
+  onEscucharAudio,
 }) => {
   const esNoCalificado = tipoLeadActual === 'no_calificados';
 
@@ -861,17 +867,56 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                                 </div>
 
                                 <div className="bg-slate-50 dark:bg-slate-950 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
-                                  <span className="text-slate-500 dark:text-slate-400 block text-[10px] uppercase font-bold">
-                                    Llamada / Registro Detectado
-                                  </span>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-slate-500 dark:text-slate-400 block text-[10px] uppercase font-bold">
+                                      Llamada / Registro Detectado
+                                    </span>
+                                    {cruce.fecha_llamada && onVerTranscripcion && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onVerTranscripcion({
+                                            uniqueid: cruce.llamada?.id || (cruce.llamada as any)?.uniqueid,
+                                            destino: cruce.telefono,
+                                            nombre: cruce.vendedor_nombre,
+                                            fecha_hora: cruce.fecha_llamada,
+                                            duracion_segundos: cruce.duracion_llamada_segundos,
+                                            estado: 'CONTESTADA',
+                                            ...cruce.llamada,
+                                          });
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 dark:bg-indigo-950/80 dark:border-indigo-700/60 dark:text-indigo-300 dark:hover:bg-indigo-900 cursor-pointer transition-all shadow-2xs"
+                                        title="Ver transcripción y análisis QA con IA de esta llamada"
+                                      >
+                                        <Sparkles className="h-3 w-3 text-indigo-500 shrink-0" />
+                                        <span>Transcripción (IA)</span>
+                                      </button>
+                                    )}
+                                  </div>
                                   <p className="text-slate-900 dark:text-white font-medium mt-0.5">
                                     {cruce.fecha_llamada
                                       ? new Date(cruce.fecha_llamada).toLocaleString('es-SV')
                                       : 'Ninguna llamada encontrada'}
                                   </p>
-                                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                                    Canal: {cruce.canal_utilizado || 'Ninguno'} • Duración: {cruce.duracion_llamada_segundos || 0}s
-                                  </p>
+                                  <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                    <span>
+                                      Canal: {cruce.canal_utilizado || 'Ninguno'} • Duración: {cruce.duracion_llamada_segundos || 0}s
+                                    </span>
+                                    {cruce.llamada && onEscucharAudio && Boolean(cruce.llamada.grabacion_url || cruce.llamada.audio_url || (cruce.llamada as any).uniqueid) && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onEscucharAudio(cruce.llamada);
+                                        }}
+                                        className="inline-flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline font-semibold"
+                                      >
+                                        <Volume2 className="h-3 w-3" />
+                                        <span>Escuchar</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
 
                                 <div className="bg-slate-50 dark:bg-slate-950 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">

@@ -1095,6 +1095,163 @@ app.post('/api/sync/trigger-edge-function', async (req, res) => {
   }
 });
 
+// ==============================================================================
+// 7. PROXY DE TRANSCRIPCIONES & ANÁLISIS QA DE LLAMADAS (desaIssabel)
+// Endpoint: http://200.35.189.133:3000/idata/api/v1/desaIssabel/getResumenLlamada
+// ==============================================================================
+const ISSABEL_RESUMEN_URL = 'http://200.35.189.133:3000/idata/api/v1/desaIssabel/getResumenLlamada';
+const cacheTranscripciones: { [key: string]: { data: any[]; timestamp: number } } = {};
+const CACHE_TRANS_TTL = 60000; // 1 minuto de cache
+
+app.get('/api/transcripciones/consultar', async (req, res) => {
+  try {
+    const {
+      uniqueid = '',
+      extension = '',
+      nombre = '',
+      destino = '',
+      fecha = '',
+      fechaInicial = '',
+      fechaFinal = '',
+      listar = 'false',
+    } = req.query as Record<string, string>;
+
+    // 1. Determinar rango de fechas para la consulta a la API de Issabel
+    let fIni = fechaInicial;
+    let fFin = fechaFinal;
+
+    if (!fIni || !fFin) {
+      if (fecha) {
+        const d = new Date(fecha.length === 10 ? `${fecha}T12:00:00Z` : fecha);
+        if (!isNaN(d.getTime())) {
+          const dAnt = new Date(d);
+          dAnt.setDate(dAnt.getDate() - 2);
+          const dPost = new Date(d);
+          dPost.setDate(dPost.getDate() + 2);
+          fIni = dAnt.toISOString().slice(0, 10);
+          fFin = dPost.toISOString().slice(0, 10);
+        }
+      }
+    }
+
+    if (!fIni || !fFin) {
+      const hoy = new Date();
+      const hace7 = new Date();
+      hace7.setDate(hace7.getDate() - 7);
+      fIni = hace7.toISOString().slice(0, 10);
+      fFin = hoy.toISOString().slice(0, 10);
+    }
+
+    const cacheKey = `${fIni}_${fFin}`;
+    let llamadasInfo: any[] = [];
+
+    if (cacheTranscripciones[cacheKey] && Date.now() - cacheTranscripciones[cacheKey].timestamp < CACHE_TRANS_TTL) {
+      llamadasInfo = cacheTranscripciones[cacheKey].data;
+    } else {
+      const targetUrl = `${ISSABEL_RESUMEN_URL}?fechaInicial=${fIni}&fechaFinal=${fFin}`;
+      const response = await fetch(targetUrl);
+      if (response.ok) {
+        const json = await response.json();
+        if (json && Array.isArray(json.info)) {
+          llamadasInfo = json.info;
+          cacheTranscripciones[cacheKey] = { data: llamadasInfo, timestamp: Date.now() };
+        }
+      }
+    }
+
+    // 2. Si se solicita listar o explorar todas las llamadas con filtros de nombre / extensión:
+    if (listar === 'true' || (!uniqueid && !destino && (nombre || extension))) {
+      let filtradas = llamadasInfo;
+      if (nombre) {
+        const nLower = nombre.toLowerCase().trim();
+        filtradas = filtradas.filter(
+          (c) => c.nombre && c.nombre.toLowerCase().includes(nLower)
+        );
+      }
+      if (extension) {
+        const extTrim = String(extension).trim();
+        filtradas = filtradas.filter(
+          (c) => String(c.extension).trim() === extTrim
+        );
+      }
+      return res.json({
+        exito: true,
+        total: filtradas.length,
+        items: filtradas,
+        fechaInicial: fIni,
+        fechaFinal: fFin,
+      });
+    }
+
+    // 3. Buscar coincidencia de una llamada específica
+    let match: any = null;
+
+    if (uniqueid) {
+      match = llamadasInfo.find((c) => String(c.uniqueid).trim() === String(uniqueid).trim());
+    }
+
+    // Fallbacks si no coincide el uniqueid exacto
+    if (!match && destino) {
+      const destClean = String(destino).replace(/[^0-9]/g, '').slice(-8);
+      match = llamadasInfo.find((c) => {
+        const cDest = String(c.destino || '').replace(/[^0-9]/g, '').slice(-8);
+        if (!cDest || cDest !== destClean) return false;
+        if (extension && String(c.extension).trim() === String(extension).trim()) return true;
+        if (nombre && c.nombre && c.nombre.toLowerCase().includes(nombre.toLowerCase())) return true;
+        return true;
+      });
+    }
+
+    // Si aún no hay match directo, buscar por extensión o nombre y fecha próxima
+    if (!match && (extension || nombre)) {
+      match = llamadasInfo.find((c) => {
+        if (extension && String(c.extension).trim() === String(extension).trim()) return true;
+        if (nombre && c.nombre && c.nombre.toLowerCase().includes(nombre.toLowerCase())) return true;
+        return false;
+      });
+    }
+
+    // 4. Si no se encontró ningún registro en el rango
+    if (!match) {
+      return res.json({
+        exito: true,
+        disponible: false,
+        motivo: 'no_encontrada',
+        mensaje: 'En 24 horas podrás consultar la transcripción de esta llamada',
+        detalle: 'La llamada aún no ha sido procesada o indexada por el motor de inteligencia artificial.',
+      });
+    }
+
+    // 5. Si se encontró, verificar si tiene transcripción
+    const tieneTranscripcion = Boolean(
+      match.transcripcion && String(match.transcripcion).trim().length > 5
+    );
+
+    if (!tieneTranscripcion) {
+      return res.json({
+        exito: true,
+        disponible: false,
+        motivo: 'en_proceso',
+        mensaje: 'En 24 horas podrás consultar la transcripción de esta llamada',
+        detalle: 'Las transcripciones y resúmenes QA de llamadas están disponibles 24 horas después de realizada la llamada.',
+        registro: match,
+      });
+    }
+
+    // 6. Transcripción y QA disponibles exitosamente
+    return res.json({
+      exito: true,
+      disponible: true,
+      registro: match,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      exito: false,
+      mensaje: 'Error al consultar API de transcripciones: ' + (err?.message || String(err)),
+    });
+  }
+});
+
 // Vite Middleware para desarrollo o estáticos en producción
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {

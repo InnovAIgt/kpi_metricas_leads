@@ -692,17 +692,38 @@ export default function App() {
                 {
                   clave: 'transcripcion',
                   etiqueta: 'Transcripción (IA)',
-                  render: (_val, fila) => (
-                    <button
-                      type="button"
-                      onClick={() => setLlamadaParaTranscripcion(fila)}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-all bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 dark:bg-indigo-950/80 dark:border-indigo-700/60 dark:text-indigo-300 dark:hover:bg-indigo-900 shadow-xs"
-                      title="Ver transcripción y análisis QA con IA de esta llamada"
-                    >
-                      <Sparkles className="h-3 w-3 text-indigo-500 shrink-0" />
-                      <span>Transcripción</span>
-                    </button>
-                  ),
+                  render: (_val, fila) => {
+                    const dur = Number(fila.duracion_segundos || fila.duracion || 0);
+                    const estado = String(fila.estado || '').toUpperCase();
+                    const noContestada =
+                      estado.includes('NO CONTESTADA') ||
+                      estado.includes('OCUPADA') ||
+                      estado.includes('FALLIDA') ||
+                      dur === 0;
+
+                    if (noContestada) {
+                      return (
+                        <span
+                          className="text-slate-400 dark:text-slate-500 text-[11px] italic"
+                          title="Llamada no contestada o fallida (sin diálogo de voz)"
+                        >
+                          Sin voz (0s)
+                        </span>
+                      );
+                    }
+
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => setLlamadaParaTranscripcion(fila)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-all bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 dark:bg-indigo-950/80 dark:border-indigo-700/60 dark:text-indigo-300 dark:hover:bg-indigo-900 shadow-xs"
+                        title="Ver transcripción y análisis QA con IA de esta llamada"
+                      >
+                        <Sparkles className="h-3 w-3 text-indigo-500 shrink-0" />
+                        <span>Transcripción</span>
+                      </button>
+                    );
+                  },
                 },
               ]}
             />

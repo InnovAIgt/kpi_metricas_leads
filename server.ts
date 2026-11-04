@@ -1114,7 +1114,21 @@ app.get('/api/transcripciones/consultar', async (req, res) => {
       fechaInicial = '',
       fechaFinal = '',
       listar = 'false',
+      estado = '',
+      duracion = '',
     } = req.query as Record<string, string>;
+
+    // Detección inteligente de troncales / extensión invertida:
+    // Si la extensión tiene más de 5 dígitos (ej. 22990404) y el destino es 3-4 dígitos (ej. 6074), invertir.
+    let cleanExt = String(extension || '').trim();
+    let cleanDest = String(destino || '').trim();
+    let cleanNombre = String(nombre || '').trim();
+
+    if (cleanExt.length > 5 && cleanDest.length >= 3 && cleanDest.length <= 4) {
+      const temp = cleanExt;
+      cleanExt = cleanDest;
+      cleanDest = temp;
+    }
 
     // 1. Determinar rango de fechas para la consulta a la API de Issabel
     let fIni = fechaInicial;
@@ -1125,9 +1139,9 @@ app.get('/api/transcripciones/consultar', async (req, res) => {
         const d = new Date(fecha.length === 10 ? `${fecha}T12:00:00Z` : fecha);
         if (!isNaN(d.getTime())) {
           const dAnt = new Date(d);
-          dAnt.setDate(dAnt.getDate() - 2);
+          dAnt.setDate(dAnt.getDate() - 5);
           const dPost = new Date(d);
-          dPost.setDate(dPost.getDate() + 2);
+          dPost.setDate(dPost.getDate() + 3);
           fIni = dAnt.toISOString().slice(0, 10);
           fFin = dPost.toISOString().slice(0, 10);
         }
@@ -1136,9 +1150,9 @@ app.get('/api/transcripciones/consultar', async (req, res) => {
 
     if (!fIni || !fFin) {
       const hoy = new Date();
-      const hace7 = new Date();
-      hace7.setDate(hace7.getDate() - 7);
-      fIni = hace7.toISOString().slice(0, 10);
+      const hace15 = new Date();
+      hace15.setDate(hace15.getDate() - 15);
+      fIni = hace15.toISOString().slice(0, 10);
       fFin = hoy.toISOString().slice(0, 10);
     }
 
@@ -1160,18 +1174,17 @@ app.get('/api/transcripciones/consultar', async (req, res) => {
     }
 
     // 2. Si se solicita listar o explorar todas las llamadas con filtros de nombre / extensión:
-    if (listar === 'true' || (!uniqueid && !destino && (nombre || extension))) {
+    if (listar === 'true' || (!uniqueid && !cleanDest && (cleanNombre || cleanExt))) {
       let filtradas = llamadasInfo;
-      if (nombre) {
-        const nLower = nombre.toLowerCase().trim();
+      if (cleanNombre) {
+        const nLower = cleanNombre.toLowerCase().trim();
         filtradas = filtradas.filter(
           (c) => c.nombre && c.nombre.toLowerCase().includes(nLower)
         );
       }
-      if (extension) {
-        const extTrim = String(extension).trim();
+      if (cleanExt) {
         filtradas = filtradas.filter(
-          (c) => String(c.extension).trim() === extTrim
+          (c) => String(c.extension).trim() === cleanExt
         );
       }
       return res.json({
@@ -1183,6 +1196,28 @@ app.get('/api/transcripciones/consultar', async (req, res) => {
       });
     }
 
+    // Función auxiliar para obtener llamadas con transcripción confirmada
+    const obtenerLlamadasRelacionadas = (extTarget: string, nomTarget: string) => {
+      const conTrans = llamadasInfo.filter(
+        (c) => Boolean(c.transcripcion && String(c.transcripcion).trim().length > 10)
+      );
+
+      // Coincidencia por misma extensión o asesor
+      let rel = conTrans.filter((c) => {
+        if (extTarget && String(c.extension).trim() === extTarget) return true;
+        if (nomTarget && c.nombre && c.nombre.toLowerCase().includes(nomTarget.toLowerCase())) return true;
+        return false;
+      });
+
+      // Si no hay de esa extensión, devolver las mejores transcripciones del periodo
+      if (rel.length === 0) {
+        rel = conTrans.slice(0, 8);
+      } else {
+        rel = rel.slice(0, 8);
+      }
+      return rel;
+    };
+
     // 3. Buscar coincidencia de una llamada específica
     let match: any = null;
 
@@ -1190,28 +1225,47 @@ app.get('/api/transcripciones/consultar', async (req, res) => {
       match = llamadasInfo.find((c) => String(c.uniqueid).trim() === String(uniqueid).trim());
     }
 
-    // Fallbacks si no coincide el uniqueid exacto
-    if (!match && destino) {
-      const destClean = String(destino).replace(/[^0-9]/g, '').slice(-8);
-      match = llamadasInfo.find((c) => {
-        const cDest = String(c.destino || '').replace(/[^0-9]/g, '').slice(-8);
-        if (!cDest || cDest !== destClean) return false;
-        if (extension && String(c.extension).trim() === String(extension).trim()) return true;
-        if (nombre && c.nombre && c.nombre.toLowerCase().includes(nombre.toLowerCase())) return true;
-        return true;
-      });
+    // Fallback 1: Buscar por teléfono destino limpio (8 dígitos)
+    if (!match && cleanDest) {
+      const destClean = cleanDest.replace(/[^0-9]/g, '').slice(-8);
+      if (destClean.length >= 7) {
+        match = llamadasInfo.find((c) => {
+          const cDest = String(c.destino || '').replace(/[^0-9]/g, '').slice(-8);
+          if (cDest && cDest === destClean) {
+            if (cleanExt && String(c.extension).trim() === cleanExt) return true;
+            if (cleanNombre && c.nombre && c.nombre.toLowerCase().includes(cleanNombre.toLowerCase())) return true;
+            return true;
+          }
+          return false;
+        });
+      }
     }
 
-    // Si aún no hay match directo, buscar por extensión o nombre y fecha próxima
-    if (!match && (extension || nombre)) {
+    // Fallback 2: Buscar por extensión y proximidad horaria
+    if (!match && cleanExt && fecha) {
+      const fHoraTarget = fecha.slice(0, 16); // YYYY-MM-DDTHH:mm
       match = llamadasInfo.find((c) => {
-        if (extension && String(c.extension).trim() === String(extension).trim()) return true;
-        if (nombre && c.nombre && c.nombre.toLowerCase().includes(nombre.toLowerCase())) return true;
+        if (String(c.extension).trim() !== cleanExt) return false;
+        if (c.fecha_hora && c.fecha_hora.slice(0, 16) === fHoraTarget) return true;
         return false;
       });
     }
 
-    // 4. Si no se encontró ningún registro en el rango
+    // 4. Si la llamada fue NO CONTESTADA, OCUPADA o FALLIDA (sin voz humana)
+    const estadoUpper = String(estado).toUpperCase();
+    const durNum = Number(duracion || 0);
+    if ((estadoUpper.includes('NO CONTESTADA') || estadoUpper.includes('OCUPADA') || estadoUpper.includes('FALLIDA') || durNum === 0) && (!match || !match.transcripcion)) {
+      return res.json({
+        exito: true,
+        disponible: false,
+        motivo: 'no_contestada',
+        mensaje: 'Esta llamada no fue contestada (sin conversación de voz para transcribir)',
+        detalle: `El conmutador registró la llamada como ${estadoUpper || 'Sin contestar'} (0s), por lo que no existió diálogo con el cliente para analizar.`,
+        llamadasRelacionadas: obtenerLlamadasRelacionadas(cleanExt, cleanNombre),
+      });
+    }
+
+    // 5. Si no se encontró ningún registro directo en la base de Issabel
     if (!match) {
       return res.json({
         exito: true,
@@ -1219,10 +1273,11 @@ app.get('/api/transcripciones/consultar', async (req, res) => {
         motivo: 'no_encontrada',
         mensaje: 'En 24 horas podrás consultar la transcripción de esta llamada',
         detalle: 'La llamada aún no ha sido procesada o indexada por el motor de inteligencia artificial.',
+        llamadasRelacionadas: obtenerLlamadasRelacionadas(cleanExt, cleanNombre),
       });
     }
 
-    // 5. Si se encontró, verificar si tiene transcripción
+    // 6. Si se encontró, verificar si tiene transcripción
     const tieneTranscripcion = Boolean(
       match.transcripcion && String(match.transcripcion).trim().length > 5
     );
@@ -1235,20 +1290,71 @@ app.get('/api/transcripciones/consultar', async (req, res) => {
         mensaje: 'En 24 horas podrás consultar la transcripción de esta llamada',
         detalle: 'Las transcripciones y resúmenes QA de llamadas están disponibles 24 horas después de realizada la llamada.',
         registro: match,
+        llamadasRelacionadas: obtenerLlamadasRelacionadas(cleanExt, cleanNombre),
       });
     }
 
-    // 6. Transcripción y QA disponibles exitosamente
+    // 7. Transcripción y QA disponibles exitosamente
     return res.json({
       exito: true,
       disponible: true,
       registro: match,
+      llamadasRelacionadas: obtenerLlamadasRelacionadas(cleanExt, cleanNombre).filter(
+        (c) => c.uniqueid !== match.uniqueid
+      ),
     });
   } catch (err: any) {
     return res.status(500).json({
       exito: false,
       mensaje: 'Error al consultar API de transcripciones: ' + (err?.message || String(err)),
     });
+  }
+});
+
+// Endpoint de catálogo de asesores con transcripciones disponibles
+app.get('/api/transcripciones/catalogo-ejecutivos', async (_req, res) => {
+  try {
+    const fIni = '2026-10-01';
+    const fFin = '2026-11-05';
+    const cacheKey = `catalogo_${fIni}_${fFin}`;
+
+    let data: any[] = [];
+    if (cacheTranscripciones[cacheKey] && Date.now() - cacheTranscripciones[cacheKey].timestamp < 300000) {
+      data = cacheTranscripciones[cacheKey].data;
+    } else {
+      const response = await fetch(`${ISSABEL_RESUMEN_URL}?fechaInicial=${fIni}&fechaFinal=${fFin}`);
+      if (response.ok) {
+        const json = await response.json();
+        data = Array.isArray(json.info) ? json.info : [];
+        cacheTranscripciones[cacheKey] = { data, timestamp: Date.now() };
+      }
+    }
+
+    const conTrans = data.filter((c) => Boolean(c.transcripcion && c.transcripcion.trim().length > 10));
+    const conteoPorEjecutivo: Record<string, { nombre: string; extension: string; total: number; pais: string; sample: any }> = {};
+
+    conTrans.forEach((c) => {
+      const key = `${c.extension || 'ext'}_${c.nombre || 'nom'}`;
+      if (!conteoPorEjecutivo[key]) {
+        conteoPorEjecutivo[key] = {
+          nombre: c.nombre || `Ext. ${c.extension}`,
+          extension: c.extension || '',
+          total: 0,
+          pais: c.pais || 'GT',
+          sample: c,
+        };
+      }
+      conteoPorEjecutivo[key].total += 1;
+    });
+
+    const lista = Object.values(conteoPorEjecutivo).sort((a, b) => b.total - a.total);
+    return res.json({
+      exito: true,
+      total_con_transcripcion: conTrans.length,
+      ejecutivos: lista,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ exito: false, mensaje: err?.message });
   }
 });
 

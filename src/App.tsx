@@ -43,7 +43,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { SupabaseConfigModal } from './components/SupabaseConfigModal';
 import { ReproductorAudioFlotante } from './components/ReproductorAudioFlotante';
 import { ModalTranscripcionLlamada } from './components/ModalTranscripcionLlamada';
-import { CheckCircle2, AlertCircle, Info, ExternalLink, Play, ArrowLeftRight, Phone, Video, Building2, Sparkles } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Info, ExternalLink, Play, ArrowLeftRight, Phone, Video, Building2, Sparkles, Headphones } from 'lucide-react';
 
 export default function App() {
   // Autenticación de usuario (por defecto activo para mostrar los datos de inmediato)
@@ -648,50 +648,8 @@ export default function App() {
                   ),
                 },
                 {
-                  clave: 'audio_url',
-                  etiqueta: 'Audio / Grabación',
-                  render: (val, fila) => {
-                    const audio = val || fila.grabacion_url || fila.audio_url;
-                    const tieneAudio = Boolean(
-                      audio || (fila.uniqueid && (fila.extension || fila.nombre))
-                    );
-                    const estaReproduciendo =
-                      llamadaReproduciendo?.uniqueid === fila.uniqueid ||
-                      llamadaReproduciendo?.id === fila.id;
-
-                    return tieneAudio ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLlamadaReproduciendo(fila);
-                        }}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
-                          estaReproduciendo
-                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400'
-                            : 'bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 hover:bg-indigo-900 hover:text-indigo-200'
-                        }`}
-                        title="Reproducir audio en reproductor flotante sin salir de la página"
-                      >
-                        {estaReproduciendo ? (
-                          <>
-                            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
-                            <span>Escuchando</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play className="h-3 w-3 fill-indigo-400" />
-                            <span>Escuchar</span>
-                          </>
-                        )}
-                      </button>
-                    ) : (
-                      <span className="text-slate-600 text-xs italic">Sin audio</span>
-                    );
-                  },
-                },
-                {
-                  clave: 'transcripcion',
-                  etiqueta: 'Transcripción (IA)',
+                  clave: 'consultar',
+                  etiqueta: 'Audio & Transcripción',
                   render: (_val, fila) => {
                     const dur = Number(fila.duracion_segundos || fila.duracion || 0);
                     const estado = String(fila.estado || '').toUpperCase();
@@ -705,7 +663,7 @@ export default function App() {
                       return (
                         <span
                           className="text-slate-400 dark:text-slate-500 text-[11px] italic"
-                          title="Llamada no contestada o fallida (sin diálogo de voz)"
+                          title="Llamada no contestada o fallida (sin diálogo ni audio)"
                         >
                           Sin voz (0s)
                         </span>
@@ -716,11 +674,11 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setLlamadaParaTranscripcion(fila)}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer transition-all bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 dark:bg-indigo-950/80 dark:border-indigo-700/60 dark:text-indigo-300 dark:hover:bg-indigo-900 shadow-xs"
-                        title="Ver transcripción y análisis QA con IA de esta llamada"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm shadow-indigo-600/30 hover:shadow-indigo-600/50 hover:scale-[1.02] active:scale-[0.98]"
+                        title="Escuchar audio y leer la transcripción en la misma ventana"
                       >
-                        <Sparkles className="h-3 w-3 text-indigo-500 shrink-0" />
-                        <span>Transcripción</span>
+                        <Headphones className="h-3.5 w-3.5 shrink-0" />
+                        <span>Consultar Llamada</span>
                       </button>
                     );
                   },

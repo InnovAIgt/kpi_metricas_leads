@@ -16,6 +16,7 @@ import {
   AlertCircle,
   Sparkles,
   Volume2,
+  Headphones,
 } from 'lucide-react';
 import { CruceAuditoria, VendedorMetricas, ModoLeads } from '../types';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
@@ -886,11 +887,11 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                                             ...cruce.llamada,
                                           });
                                         }}
-                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 dark:bg-indigo-950/80 dark:border-indigo-700/60 dark:text-indigo-300 dark:hover:bg-indigo-900 cursor-pointer transition-all shadow-2xs"
-                                        title="Ver transcripción y análisis QA con IA de esta llamada"
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm shadow-indigo-600/30 cursor-pointer transition-all"
+                                        title="Escuchar audio y leer la transcripción en la misma ventana"
                                       >
-                                        <Sparkles className="h-3 w-3 text-indigo-500 shrink-0" />
-                                        <span>Transcripción (IA)</span>
+                                        <Headphones className="h-3 w-3 shrink-0" />
+                                        <span>Consultar Llamada</span>
                                       </button>
                                     )}
                                   </div>

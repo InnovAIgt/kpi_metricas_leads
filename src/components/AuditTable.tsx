@@ -16,6 +16,7 @@ import {
   FileCheck,
   PhoneForwarded,
   Sparkles,
+  Headphones,
 } from 'lucide-react';
 import { CruceAuditoria, EstadoCumplimiento } from '../types';
 
@@ -351,11 +352,11 @@ export const AuditTable: React.FC<AuditTableProps> = ({
                                               }
                                         );
                                       }}
-                                      className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 dark:bg-indigo-950/80 dark:text-indigo-300 dark:border-indigo-700/60 dark:hover:bg-indigo-900 cursor-pointer transition-all shadow-xs"
-                                      title="Ver transcripción y análisis QA con IA de esta llamada"
+                                      className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm shadow-indigo-600/30 cursor-pointer font-bold transition-all"
+                                      title="Escuchar audio y leer la transcripción en la misma ventana"
                                     >
-                                      <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
-                                      <span>Transcripción (IA)</span>
+                                      <Headphones className="h-3.5 w-3.5 shrink-0" />
+                                      <span>Consultar Llamada</span>
                                     </button>
                                   )}
                                   {item.llamada?.grabacion_url && (

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   X,
   FileText,
@@ -19,9 +19,17 @@ import {
   Smile,
   CheckCircle2,
   Volume2,
-  ArrowRight,
+  VolumeX,
+  Play,
+  Pause,
+  RotateCcw,
+  RotateCw,
+  Download,
   Headphones,
+  Sliders,
+  Radio,
 } from 'lucide-react';
+import { cargarAudioRealPbx } from '../services/audioPbxService';
 
 export interface TranscripcionRegistro {
   nombre: string;
@@ -43,6 +51,8 @@ export interface TranscripcionRegistro {
   fuente_llamada?: string;
   calificacion?: string;
   resumen_qa?: string | null;
+  audio_url?: string;
+  grabacion_url?: string;
 }
 
 interface ModalTranscripcionLlamadaProps {
@@ -54,8 +64,10 @@ interface ModalTranscripcionLlamadaProps {
 export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps> = ({
   llamada,
   onClose,
-  onEscucharAudio,
 }) => {
+  // ==========================================
+  // ESTADO DE TRANSCRIPCIÓN Y QA
+  // ==========================================
   const [cargando, setCargando] = useState<boolean>(true);
   const [disponible, setDisponible] = useState<boolean>(false);
   const [registro, setRegistro] = useState<TranscripcionRegistro | null>(null);
@@ -69,20 +81,84 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
   const [busquedaTexto, setBusquedaTexto] = useState<string>('');
   const [copiado, setCopiado] = useState<boolean>(false);
 
-  // Filtro dinámico por Nombre / Extensión / Fecha
+  // Filtros dinámicos
   const [filtroNombre, setFiltroNombre] = useState<string>('');
   const [filtroExtension, setFiltroExtension] = useState<string>('');
   const [filtroFecha, setFiltroFecha] = useState<string>('');
   const [llamadasFiltradas, setLlamadasFiltradas] = useState<TranscripcionRegistro[]>([]);
   const [buscandoFiltro, setBuscandoFiltro] = useState<boolean>(false);
 
-  // Llamadas relacionadas con transcripción disponible y catálogo de asesores
+  // Llamadas relacionadas y catálogo de asesores
   const [llamadasRelacionadas, setLlamadasRelacionadas] = useState<TranscripcionRegistro[]>([]);
   const [ejecutivosDisponibles, setEjecutivosDisponibles] = useState<
     Array<{ nombre: string; extension: string; total: number; pais: string; sample: any }>
   >([]);
 
-  // Cargar catálogo de asesores con transcripciones disponibles
+  // ==========================================
+  // REPRODUCTOR INTEGRADO DE AUDIO (EN LA MISMA VENTANA)
+  // ==========================================
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [cargandoAudio, setCargandoAudio] = useState<boolean>(false);
+  const [reproduciendo, setReproduciendo] = useState<boolean>(false);
+  const [tiempoActual, setTiempoActual] = useState<number>(0);
+  const [duracionTotal, setDuracionTotal] = useState<number>(0);
+  const [volumen, setVolumen] = useState<number>(1);
+  const [muteado, setMuteado] = useState<boolean>(false);
+  const [velocidad, setVelocidad] = useState<number>(1);
+  const [errorAudio, setErrorAudio] = useState<string | null>(null);
+  const [blobAudioUrl, setBlobAudioUrl] = useState<string | null>(null);
+  const [directAudioUrl, setDirectAudioUrl] = useState<string>('');
+
+  // Formato mm:ss
+  const formatTiempo = (segundos: number): string => {
+    if (isNaN(segundos) || segundos < 0) return '00:00';
+    const mins = Math.floor(segundos / 60);
+    const secs = Math.floor(segundos % 60);
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  // Cargar audio real de la llamada seleccionada
+  const cargarAudioDeLlamada = useCallback(async (item: any) => {
+    setCargandoAudio(true);
+    setErrorAudio(null);
+    setReproduciendo(false);
+    setTiempoActual(0);
+    setDuracionTotal(Number(item.duracion_segundos || item.duracion || 0));
+
+    try {
+      const res = await cargarAudioRealPbx(item);
+      setDirectAudioUrl(res.directUrl || '');
+
+      if (res.blobUrl) {
+        setBlobAudioUrl((prev) => {
+          if (prev && prev.startsWith('blob:')) {
+            try {
+              URL.revokeObjectURL(prev);
+            } catch (_) {}
+          }
+          return res.blobUrl;
+        });
+        setErrorAudio(null);
+        setCargandoAudio(false);
+      } else {
+        setBlobAudioUrl(null);
+        setCargandoAudio(false);
+        setErrorAudio(
+          res.error ||
+            'No hay grabación de audio disponible para esta llamada en la PBX.'
+        );
+      }
+    } catch (err: any) {
+      setBlobAudioUrl(null);
+      setCargandoAudio(false);
+      setErrorAudio(
+        err?.message ||
+          'No se pudo conectar con el servidor PBX para obtener el audio.'
+      );
+    }
+  }, []);
+
+  // Cargar catálogo de ejecutivos disponibles
   useEffect(() => {
     fetch('/api/transcripciones/catalogo-ejecutivos')
       .then((r) => (r.ok ? r.json() : null))
@@ -94,10 +170,10 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
       .catch(() => {});
   }, []);
 
+  // Inicializar llamada actual (audio + transcripción)
   useEffect(() => {
     if (!llamada) return;
 
-    // Inversión inteligente si viene de troncal (extensión > 5 dígitos y destino de 3-4 dígitos)
     let ext = String(llamada.extension || '').trim();
     let dest = String(llamada.destino || '').trim();
     let nom = String(llamada.nombre || llamada.asesor_nombre || llamada.usuario || '').trim();
@@ -108,10 +184,8 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
       dest = temp;
     }
 
-    // Normalizar fecha
     const f = llamada.fecha || (llamada.fecha_hora ? String(llamada.fecha_hora).slice(0, 10) : new Date().toISOString().slice(0, 10));
 
-    // Si el nombre es genérico pero la extensión es conocida (ej. 6056 -> GHERRERA, 6074 -> SFIGUEROA)
     if ((!nom || nom.toLowerCase().includes('asesor')) && ext) {
       const conocido = ejecutivosDisponibles.find((e) => e.extension === ext);
       if (conocido) nom = conocido.nombre;
@@ -122,8 +196,73 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
     setFiltroFecha(f);
 
     consultarTranscripcionLlamada(llamada, ext, dest, nom, f);
-  }, [llamada]);
+    cargarAudioDeLlamada({ ...llamada, extension: ext, destino: dest, nombre: nom });
+  }, [llamada, cargarAudioDeLlamada]);
 
+  // Limpieza de blob de audio al desmontar
+  useEffect(() => {
+    return () => {
+      if (blobAudioUrl && blobAudioUrl.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(blobAudioUrl);
+        } catch (_) {}
+      }
+    };
+  }, [blobAudioUrl]);
+
+  // Controles del audio HTML5
+  const togglePlayAudio = () => {
+    if (!audioRef.current) return;
+    if (reproduciendo) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play().catch((err) => {
+        console.error('Error al reproducir audio:', err);
+      });
+    }
+  };
+
+  const saltarTiempo = (deltaSegundos: number) => {
+    if (!audioRef.current) return;
+    const nuevo = Math.max(0, Math.min(audioRef.current.currentTime + deltaSegundos, duracionTotal));
+    audioRef.current.currentTime = nuevo;
+    setTiempoActual(nuevo);
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setTiempoActual(val);
+    if (audioRef.current) {
+      audioRef.current.currentTime = val;
+    }
+  };
+
+  const cambiarVelocidad = (nuevaVelocidad: number) => {
+    setVelocidad(nuevaVelocidad);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = nuevaVelocidad;
+    }
+  };
+
+  const toggleMute = () => {
+    const nuevoMute = !muteado;
+    setMuteado(nuevoMute);
+    if (audioRef.current) {
+      audioRef.current.muted = nuevoMute;
+    }
+  };
+
+  const cambiarVolumen = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setVolumen(val);
+    if (audioRef.current) {
+      audioRef.current.volume = val;
+      audioRef.current.muted = val === 0;
+      setMuteado(val === 0);
+    }
+  };
+
+  // Consulta API de transcripción
   const consultarTranscripcionLlamada = async (
     item: any,
     overrideExt?: string,
@@ -173,7 +312,6 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
           setPestanaActiva('transcripcion');
         }
       } else {
-        // Fallback básico para mostrar cabecera
         setRegistro({
           nombre: nom || 'Asesor PBX',
           extension: ext || '',
@@ -182,7 +320,7 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
           duracion_hh_mm_ss: item.duracion_hh_mm_ss || '',
           fecha_hora: item.fecha_hora || item.fecha || '',
           uniqueid: item.uniqueid || '',
-          pais: item.pais || 'GT',
+          pais: item.pais || 'SV',
           transcripcion: null,
           resumen_qa: null,
         });
@@ -238,6 +376,8 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
       setMensajeEstado('En 24 horas podrás consultar la transcripción de esta llamada');
       setDetalleEstado('Esta grabación aún se encuentra en cola de procesamiento de IA.');
     }
+    // Cargar también el audio de esta llamada seleccionada
+    cargarAudioDeLlamada(item);
   };
 
   const handleCopiarTexto = () => {
@@ -270,18 +410,48 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
     : 'N/D';
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 dark:bg-black/80 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
-        {/* 1. Header Principal */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/80">
+    <div className="fixed inset-0 z-50 bg-black/70 dark:bg-black/85 flex items-center justify-center p-2 sm:p-4 backdrop-blur-xs animate-in fade-in duration-150">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-4xl max-h-[94vh] flex flex-col shadow-2xl overflow-hidden">
+        
+        {/* ELEMENTO AUDIO OCULTO DE HTML5 */}
+        {blobAudioUrl && (
+          <audio
+            ref={audioRef}
+            src={blobAudioUrl}
+            onTimeUpdate={() => {
+              if (audioRef.current) {
+                setTiempoActual(audioRef.current.currentTime);
+              }
+            }}
+            onLoadedMetadata={() => {
+              if (audioRef.current && audioRef.current.duration) {
+                setDuracionTotal(audioRef.current.duration);
+              }
+            }}
+            onPlay={() => setReproduciendo(true)}
+            onPause={() => setReproduciendo(false)}
+            onEnded={() => {
+              setReproduciendo(false);
+              setTiempoActual(0);
+            }}
+            onError={(e) => {
+              console.error('Error al reproducir audio blob:', e);
+              setErrorAudio('Error al reproducir el formato de audio de la PBX.');
+              setReproduciendo(false);
+            }}
+          />
+        )}
+
+        {/* 1. HEADER PRINCIPAL */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-950/90">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-600 dark:bg-indigo-950/60 dark:border-indigo-700/60 dark:text-indigo-400 shrink-0 shadow-xs">
-              <Sparkles className="h-5 w-5" />
+            <div className="p-2.5 rounded-xl bg-indigo-600 text-white shrink-0 shadow-md shadow-indigo-600/30">
+              <Headphones className="h-5 w-5" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">
-                  Transcripción & Resumen de Calidad (IA)
+                  Consulta de Llamada (Audio & Transcripción IA)
                 </h3>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60">
                   desaIssabel API
@@ -304,14 +474,14 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            title="Cerrar modal"
+            title="Cerrar ventana"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* 2. Barra de Metadatos de la Llamada */}
-        <div className="px-5 py-2.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+        {/* 2. BARRA DE METADATOS RÁPIDOS */}
+        <div className="px-5 py-2 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
           <div className="flex items-center gap-2">
             <User className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
             <div className="truncate">
@@ -363,8 +533,174 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
           </div>
         </div>
 
-        {/* 3. Filtro Superior con Accesos Directos a Ejecutivos con Transcripción */}
-        <div className="px-5 py-2.5 bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 space-y-2 text-xs">
+        {/* =========================================================================
+            3. REPRODUCTOR DE AUDIO INTEGRADO EN LA MISMA VENTANA (ESCUCHAR + LEER)
+            ========================================================================= */}
+        <div className="px-5 py-3 bg-gradient-to-r from-indigo-950/70 via-slate-900 to-indigo-950/70 border-b border-indigo-900/50 text-white space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            
+            {/* Controles de Reproducción Izquierda */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => saltarTiempo(-5)}
+                disabled={!blobAudioUrl}
+                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-30 cursor-pointer transition-colors"
+                title="Retroceder 5 segundos"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={togglePlayAudio}
+                disabled={cargandoAudio || !blobAudioUrl}
+                className={`h-10 w-10 rounded-full flex items-center justify-center font-bold transition-all shadow-md cursor-pointer ${
+                  cargandoAudio
+                    ? 'bg-slate-700 text-slate-400 cursor-wait'
+                    : reproduciendo
+                    ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-emerald-500/40 ring-2 ring-emerald-300'
+                    : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-indigo-600/40 hover:scale-105'
+                }`}
+                title={reproduciendo ? 'Pausar audio' : 'Reproducir audio de la llamada'}
+              >
+                {cargandoAudio ? (
+                  <RefreshCw className="h-5 w-5 animate-spin" />
+                ) : reproduciendo ? (
+                  <Pause className="h-5 w-5 fill-slate-950" />
+                ) : (
+                  <Play className="h-5 w-5 fill-white ml-0.5" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => saltarTiempo(5)}
+                disabled={!blobAudioUrl}
+                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-30 cursor-pointer transition-colors"
+                title="Adelantar 5 segundos"
+              >
+                <RotateCw className="h-4 w-4" />
+              </button>
+
+              {/* Indicador de estado y animación de onda de audio */}
+              <div className="ml-2 flex items-center gap-2">
+                {reproduciendo ? (
+                  <div className="flex items-center gap-0.5 h-4">
+                    <span className="w-1 bg-emerald-400 rounded-full animate-bounce h-3" />
+                    <span className="w-1 bg-emerald-400 rounded-full animate-bounce [animation-delay:150ms] h-4" />
+                    <span className="w-1 bg-emerald-400 rounded-full animate-bounce [animation-delay:300ms] h-2" />
+                    <span className="w-1 bg-emerald-400 rounded-full animate-bounce [animation-delay:450ms] h-4" />
+                  </div>
+                ) : (
+                  <Radio className="h-4 w-4 text-slate-400" />
+                )}
+                <span className="text-xs font-semibold text-slate-200">
+                  {cargandoAudio
+                    ? 'Cargando grabación PBX...'
+                    : reproduciendo
+                    ? 'Escuchando llamada en vivo'
+                    : blobAudioUrl
+                    ? 'Grabación lista para escuchar'
+                    : 'Sin grabación de voz'}
+                </span>
+              </div>
+            </div>
+
+            {/* Controles de Velocidad, Volumen y Descarga Derecha */}
+            <div className="flex items-center gap-3">
+              {/* Selector de Velocidad */}
+              <div className="flex items-center gap-1 bg-slate-800/80 p-0.5 rounded-lg border border-slate-700/60 text-[10px] font-bold">
+                {[0.75, 1, 1.25, 1.5, 2].map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => cambiarVelocidad(v)}
+                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                      velocidad === v
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {v}x
+                  </button>
+                ))}
+              </div>
+
+              {/* Volumen y Silencio */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={toggleMute}
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                  title={muteado ? 'Activar sonido' : 'Silenciar'}
+                >
+                  {muteado || volumen === 0 ? (
+                    <VolumeX className="h-4 w-4 text-rose-400" />
+                  ) : (
+                    <Volume2 className="h-4 w-4" />
+                  )}
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={muteado ? 0 : volumen}
+                  onChange={cambiarVolumen}
+                  className="w-16 h-1 accent-indigo-500 bg-slate-700 rounded-lg cursor-pointer"
+                  title={`Volumen: ${Math.round(volumen * 100)}%`}
+                />
+              </div>
+
+              {/* Descargar archivo WAV directo si existe */}
+              {blobAudioUrl && (
+                <a
+                  href={blobAudioUrl}
+                  download={`Grabacion_${registro?.extension || llamada.extension}_${registro?.uniqueid || llamada.uniqueid}.wav`}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 cursor-pointer transition-colors"
+                  title="Descargar archivo WAV de audio"
+                >
+                  <Download className="h-4 w-4" />
+                </a>
+              )}
+            </div>
+          </div>
+
+          {/* Línea de tiempo / Scrubber Slider */}
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs text-indigo-300 font-bold shrink-0">
+                {formatTiempo(tiempoActual)}
+              </span>
+
+              <input
+                type="range"
+                min="0"
+                max={duracionTotal || 1}
+                step="0.5"
+                value={tiempoActual}
+                onChange={handleSeek}
+                disabled={!blobAudioUrl}
+                className="flex-1 h-2 bg-slate-700/80 rounded-lg accent-emerald-400 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              />
+
+              <span className="font-mono text-xs text-slate-400 shrink-0">
+                {formatTiempo(duracionTotal)}
+              </span>
+            </div>
+
+            {errorAudio && (
+              <p className="text-[11px] text-amber-300/90 flex items-center gap-1 pt-0.5">
+                <AlertCircle className="h-3 w-3 shrink-0" />
+                <span>{errorAudio}</span>
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* 4. FILTROS RÁPIDOS Y SELECTOR DE ASESORES */}
+        <div className="px-5 py-2 bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 space-y-1.5 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <form onSubmit={handleBuscarPorFiltros} className="flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1 text-slate-500 dark:text-slate-400 font-semibold text-[11px]">
@@ -377,28 +713,28 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
                 placeholder="Ext. (ej. 6056)"
                 value={filtroExtension}
                 onChange={(e) => setFiltroExtension(e.target.value)}
-                className="w-24 px-2 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                className="w-24 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
               />
 
               <input
                 type="text"
-                placeholder="Nombre (ej. GHERRERA)"
+                placeholder="Nombre (ej. AACOSTA)"
                 value={filtroNombre}
                 onChange={(e) => setFiltroNombre(e.target.value)}
-                className="w-36 px-2 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                className="w-36 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
               />
 
               <input
                 type="date"
                 value={filtroFecha}
                 onChange={(e) => setFiltroFecha(e.target.value)}
-                className="px-2 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
               />
 
               <button
                 type="submit"
                 disabled={buscandoFiltro}
-                className="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50 shadow-xs"
+                className="px-2.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50 shadow-xs"
               >
                 <Search className="h-3 w-3" />
                 <span>{buscandoFiltro ? 'Buscando...' : 'Buscar'}</span>
@@ -416,7 +752,7 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
             )}
           </div>
 
-          {/* Chips rápidos de Asesores con Transcripciones Confirmadas */}
+          {/* Chips rápidos de Asesores */}
           {ejecutivosDisponibles.length > 0 && (
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
               <span className="text-[10px] text-slate-400 uppercase font-bold shrink-0">
@@ -438,7 +774,6 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
                         : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-indigo-400 dark:hover:border-indigo-600'
                     }`}
-                    title={`Ver transcripciones de ${ej.nombre} (${ej.total} llamadas)`}
                   >
                     <span>{ej.nombre}</span>
                     <span
@@ -455,8 +790,8 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
           )}
         </div>
 
-        {/* 4. Selector de Pestañas */}
-        <div className="flex items-center justify-between px-5 pt-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        {/* 5. SELECTOR DE PESTAÑAS */}
+        <div className="flex items-center justify-between px-5 pt-2.5 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
           <div className="flex items-center gap-4">
             <button
               type="button"
@@ -468,7 +803,7 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
               }`}
             >
               <FileText className="h-3.5 w-3.5" />
-              <span>Transcripción de Audio</span>
+              <span>Transcripción de Audio (Texto)</span>
             </button>
 
             <button
@@ -483,7 +818,7 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
               <Award className="h-3.5 w-3.5" />
               <span>Análisis & Calidad QA</span>
               {registro?.calificacion && registro.calificacion !== 'No calificado' && (
-                <span className="px-1.5 py-0.2 rounded text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                <span className="px-1.5 py-0.2 rounded text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-bold">
                   {registro.calificacion}
                 </span>
               )}
@@ -500,187 +835,95 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
                 }`}
               >
                 <Filter className="h-3.5 w-3.5" />
-                <span>Llamadas Encontradas ({llamadasFiltradas.length})</span>
+                <span>Otras Llamadas ({llamadasFiltradas.length})</span>
               </button>
             )}
           </div>
-
-          {onEscucharAudio && (
-            <button
-              type="button"
-              onClick={() => onEscucharAudio(llamada)}
-              className="inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-semibold cursor-pointer pb-2.5"
-            >
-              <Volume2 className="h-3.5 w-3.5" />
-              <span>Reproducir Audio</span>
-            </button>
-          )}
         </div>
 
-        {/* 5. Contenido del Modal */}
+        {/* 6. CONTENIDO INFERIOR: TEXTO O QA MIENTRAS EL AUDIO SUENA */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {cargando ? (
-            /* Estado de Carga */
-            <div className="py-16 text-center space-y-3">
+            <div className="py-12 text-center space-y-3">
               <div className="inline-block p-3 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-700/60">
                 <RefreshCw className="h-7 w-7 text-indigo-500 animate-spin" />
               </div>
               <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                Consultando servidor de transcripciones de IA...
+                Consultando transcripción y resumen de calidad...
               </h4>
-              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-                Conectando con <code className="font-mono text-indigo-600 dark:text-indigo-300">desaIssabel/getResumenLlamada</code> para recuperar el texto y análisis del audio.
-              </p>
             </div>
           ) : !disponible ? (
-            /* =========================================================================
-               ESTADO NO DISPONIBLE (REGLA DE 24 HORAS SOLICITADA POR EL USUARIO)
-               ========================================================================= */
-            <div className="py-6 px-4 space-y-5 max-w-2xl mx-auto">
-              <div className="text-center space-y-3">
-                <div className="inline-flex items-center justify-center h-14 w-14 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-700/50 shadow-inner">
-                  <Clock className="h-7 w-7 text-amber-500 animate-pulse" />
+            /* AVISO DE 24 HORAS CON TARJETAS RELACIONADAS */
+            <div className="py-4 px-4 space-y-4 max-w-2xl mx-auto">
+              <div className="text-center space-y-2">
+                <div className="inline-flex items-center justify-center h-12 w-12 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-700/50 shadow-inner">
+                  <Clock className="h-6 w-6 text-amber-500 animate-pulse" />
                 </div>
-
-                <div className="space-y-1">
-                  <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-                    Procesamiento de IA Diferido
-                  </span>
-                  <h3 className="text-lg font-extrabold text-slate-900 dark:text-white">
-                    {mensajeEstado || 'En 24 horas podrás consultar la transcripción de esta llamada'}
-                  </h3>
-                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed max-w-lg mx-auto">
-                    {detalleEstado ||
-                      'Las transcripciones completas y el análisis de calidad con IA se procesan automáticamente 24 horas después de realizada la llamada en la PBX.'}
-                  </p>
-                </div>
-
-                {/* Tarjeta resumen de la llamada actual */}
-                <div className="bg-slate-50 dark:bg-slate-950 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 text-left text-xs space-y-2 shadow-xs">
-                  <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
-                    <span className="font-semibold text-slate-700 dark:text-slate-300">Estado de esta llamada:</span>
-                    <span className="font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1">
-                      <span className="h-2 w-2 rounded-full bg-amber-500" />
-                      En espera de procesamiento (24h)
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-slate-600 dark:text-slate-400 text-[11px]">
-                    <div>
-                      <strong>Ejecutivo:</strong> {registro?.nombre || llamada.nombre || 'Asesor PBX'}
-                    </div>
-                    <div>
-                      <strong>Extensión:</strong> {registro?.extension || llamada.extension || '-'}
-                    </div>
-                    <div>
-                      <strong>Destino:</strong> {registro?.destino || llamada.destino || '-'}
-                    </div>
-                    <div>
-                      <strong>Duración:</strong> {duracionTexto}
-                    </div>
-                    <div>
-                      <strong>Fecha:</strong> {fechaFormateada}
-                    </div>
-                    <div>
-                      <strong>Unique ID:</strong> {registro?.uniqueid || llamada.uniqueid || '-'}
-                    </div>
-                  </div>
-                </div>
+                <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
+                  {mensajeEstado || 'En 24 horas podrás consultar la transcripción de esta llamada'}
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-300 max-w-lg mx-auto">
+                  {detalleEstado ||
+                    'Las transcripciones completas se procesan 24 horas después de realizada la llamada en la PBX.'}
+                </p>
               </div>
 
-              {/* LISTA DE LLAMADAS CON TRANSCRIPCIÓN DISPONIBLE DE ESTE ASESOR / PBX */}
+              {/* LISTA DE LLAMADAS RELACIONADAS CON AUDIO Y TRANSCRIPCIÓN DISPONIBLE */}
               {llamadasRelacionadas.length > 0 && (
-                <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1 rounded-md bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400">
-                        <Sparkles className="h-4 w-4" />
-                      </div>
-                      <h4 className="text-xs font-bold text-slate-900 dark:text-white">
-                        Llamadas con Transcripción Listas para Ver ({llamadasRelacionadas.length})
-                      </h4>
-                    </div>
+                    <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <Sparkles className="h-4 w-4 text-indigo-500" />
+                      <span>Otras llamadas con audio y transcripción listos ({llamadasRelacionadas.length}):</span>
+                    </span>
                     <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
-                      Haz clic en cualquiera para abrirla
+                      Haz clic para reproducir y leer
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {llamadasRelacionadas.map((rel, idx) => {
-                      const durSec = rel.duracion_segundos || 0;
-                      return (
-                        <div
-                          key={rel.uniqueid || idx}
-                          onClick={() => handleSeleccionarDeLista(rel)}
-                          className="p-3 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/50 transition-all cursor-pointer flex flex-col justify-between group shadow-2xs"
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold text-indigo-950 dark:text-indigo-200 text-xs group-hover:text-indigo-600 dark:group-hover:text-indigo-300">
-                              {rel.nombre || `Ext. ${rel.extension}`}
-                            </span>
-                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                              Ext. {rel.extension}
-                            </span>
-                          </div>
-
-                          <div className="my-1.5 flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-400">
-                            <span>
-                              Destino: <strong className="font-mono text-slate-800 dark:text-slate-200">{rel.destino}</strong>
-                            </span>
-                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                              {durSec}s ({Math.round(Number(durSec) / 60)}m)
-                            </span>
-                          </div>
-
-                          <div className="pt-1.5 border-t border-indigo-100 dark:border-indigo-900/60 flex items-center justify-between text-[10px]">
-                            <span className="text-slate-500 font-mono">
-                              {rel.fecha_hora
-                                ? new Date(rel.fecha_hora).toLocaleDateString('es-SV', {
-                                    month: 'short',
-                                    day: 'numeric',
-                                  })
-                                : ''}
-                            </span>
-                            <span className="text-indigo-600 dark:text-indigo-400 font-bold group-hover:underline flex items-center gap-1">
-                              <span>Ver Transcripción</span>
-                              <ChevronRight className="h-3 w-3" />
-                            </span>
-                          </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {llamadasRelacionadas.map((rel, idx) => (
+                      <div
+                        key={rel.uniqueid || idx}
+                        onClick={() => handleSeleccionarDeLista(rel)}
+                        className="p-3 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/50 transition-all cursor-pointer flex flex-col justify-between group shadow-2xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-indigo-950 dark:text-indigo-200 text-xs group-hover:text-indigo-600 dark:group-hover:text-indigo-300">
+                            {rel.nombre || `Ext. ${rel.extension}`}
+                          </span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                            Ext. {rel.extension}
+                          </span>
                         </div>
-                      );
-                    })}
+                        <div className="my-1 flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-400">
+                          <span>Destino: <strong>{rel.destino}</strong></span>
+                          <span>{rel.duracion_segundos}s</span>
+                        </div>
+                        <div className="pt-1 border-t border-indigo-100 dark:border-indigo-900/60 flex items-center justify-between text-[10px]">
+                          <span className="text-slate-500 font-mono">
+                            {rel.fecha_hora ? new Date(rel.fecha_hora).toLocaleDateString('es-SV') : ''}
+                          </span>
+                          <span className="text-indigo-600 dark:text-indigo-400 font-bold group-hover:underline flex items-center gap-1">
+                            <span>Consultar Llamada</span>
+                            <ChevronRight className="h-3 w-3" />
+                          </span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
-
-              <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => consultarTranscripcionLlamada(llamada)}
-                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  <span>Reintentar Consulta</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 font-medium text-xs cursor-pointer transition-colors"
-                >
-                  Cerrar
-                </button>
-              </div>
             </div>
           ) : pestanaActiva === 'lista' ? (
-            /* =========================================================================
-               PESTAÑA: OTRAS LLAMADAS ENCONTRADAS POR FILTRO (NOMBRE / EXTENSIÓN)
-               ========================================================================= */
+            /* PESTAÑA: LISTA DE LLAMADAS FILTRADAS */
             <div className="space-y-3">
               <div className="flex items-center justify-between pb-1">
                 <h4 className="text-xs font-bold text-slate-900 dark:text-white">
-                  Llamadas encontradas para {filtroNombre || (filtroExtension ? `Ext. ${filtroExtension}` : 'el filtro')} ({llamadasFiltradas.length})
+                  Llamadas encontradas ({llamadasFiltradas.length})
                 </h4>
                 <span className="text-[11px] text-slate-500">
-                  Haz clic en cualquiera para abrir su transcripción
+                  Selecciona una llamada para cargar su audio y transcripción simultáneamente
                 </span>
               </div>
 
@@ -711,11 +954,6 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
                             <span className="font-mono text-slate-500 text-[10px]">
                               Ext. {item.extension} → {item.destino}
                             </span>
-                            {item.calificacion && item.calificacion !== 'No calificado' && (
-                              <span className="px-1.5 py-0.2 rounded text-[10px] bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 font-semibold">
-                                {item.calificacion}
-                              </span>
-                            )}
                           </div>
                           <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
                             {item.fecha_hora ? new Date(item.fecha_hora).toLocaleString('es-SV') : item.fecha} •{' '}
@@ -724,35 +962,24 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        {tieneT ? (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                            Transcripción Lista
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                            En espera (24h)
-                          </span>
-                        )}
-                        <ChevronRight className="h-4 w-4 text-slate-400" />
-                      </div>
+                      <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-600 text-white flex items-center gap-1">
+                        <Headphones className="h-3 w-3" />
+                        <span>Consultar</span>
+                      </span>
                     </div>
                   );
                 })}
               </div>
             </div>
           ) : pestanaActiva === 'qa' ? (
-            /* =========================================================================
-               PESTAÑA: ANÁLISIS & CALIDAD QA (EMOCIONES, NOTAS, CALIFICACIÓN)
-               ========================================================================= */
+            /* PESTAÑA: ANÁLISIS QA */
             <div className="space-y-4">
-              {/* Tarjeta Resumen QA */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                   <span className="text-[10px] font-bold text-slate-400 uppercase block">Calificación</span>
                   <div className="mt-1 flex items-baseline gap-2">
                     <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400">
-                      {registro?.calificacion || '8/10'}
+                      {registro?.calificacion || '9/10'}
                     </span>
                     <span className="text-xs text-slate-500">Evaluación de IA</span>
                   </div>
@@ -777,7 +1004,6 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
                 </div>
               </div>
 
-              {/* Contenido HTML de Resumen QA */}
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-3">
                 <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-100 dark:border-slate-800 pb-2">
                   <Award className="h-4 w-4 text-indigo-500" />
@@ -797,11 +1023,8 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
               </div>
             </div>
           ) : (
-            /* =========================================================================
-               PESTAÑA: TRANSCRIPCIÓN COMPLETA DE AUDIO
-               ========================================================================= */
+            /* PESTAÑA: TRANSCRIPCIÓN COMPLETA (LECTURA MIENTRAS SE ESCUCHA) */
             <div className="space-y-3">
-              {/* Barra de herramientas de texto */}
               <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
                 <div className="flex items-center gap-2">
                   <div className="relative">
@@ -818,39 +1041,36 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
                     <button
                       type="button"
                       onClick={() => setBusquedaTexto('')}
-                      className="text-xs text-slate-400 hover:text-slate-600"
+                      className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
                     >
                       Limpiar
                     </button>
                   )}
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleCopiarTexto}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 cursor-pointer transition-colors"
-                  >
-                    {copiado ? (
-                      <>
-                        <Check className="h-3.5 w-3.5 text-emerald-500" />
-                        <span>¡Copiado!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-3.5 w-3.5 text-slate-500" />
-                        <span>Copiar Transcripción</span>
-                      </>
-                    )}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={handleCopiarTexto}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 cursor-pointer transition-colors"
+                >
+                  {copiado ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-emerald-500" />
+                      <span>¡Copiado!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5 text-slate-500" />
+                      <span>Copiar Transcripción</span>
+                    </>
+                  )}
+                </button>
               </div>
 
               {/* Caja de Texto de Transcripción */}
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 text-slate-800 dark:text-slate-200 text-xs leading-relaxed max-h-[50vh] overflow-y-auto whitespace-pre-wrap font-sans">
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 text-slate-800 dark:text-slate-200 text-xs leading-relaxed max-h-[46vh] overflow-y-auto whitespace-pre-wrap font-sans select-text">
                 {registro?.transcripcion ? (
                   busquedaTexto.trim() ? (
-                    // Resaltar coincidencias de búsqueda
                     registro.transcripcion
                       .split(new RegExp(`(${busquedaTexto.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))
                       .map((chunk, i) =>
@@ -876,22 +1096,20 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
           )}
         </div>
 
-        {/* 6. Footer con Estado de Sincronización */}
-        <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/80 flex items-center justify-between text-xs">
+        {/* 7. FOOTER */}
+        <div className="px-5 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-950/90 flex items-center justify-between text-xs">
           <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-[11px]">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            <span>Servidor desaIssabel sincronizado en caliente</span>
+            <span>Audio & Transcripción unificados en una sola ventana</span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 font-semibold cursor-pointer text-xs transition-colors"
-            >
-              Cerrar
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 font-semibold cursor-pointer text-xs transition-colors"
+          >
+            Cerrar
+          </button>
         </div>
       </div>
     </div>

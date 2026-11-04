@@ -1138,11 +1138,11 @@ app.get('/api/transcripciones/consultar', async (req, res) => {
       if (fecha) {
         const d = new Date(fecha.length === 10 ? `${fecha}T12:00:00Z` : fecha);
         if (!isNaN(d.getTime())) {
-          const dAnt = new Date(d);
-          dAnt.setDate(dAnt.getDate() - 5);
+          const y = d.getUTCFullYear();
+          const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+          fIni = `${y}-${m}-01`;
           const dPost = new Date(d);
-          dPost.setDate(dPost.getDate() + 3);
-          fIni = dAnt.toISOString().slice(0, 10);
+          dPost.setDate(dPost.getDate() + 4);
           fFin = dPost.toISOString().slice(0, 10);
         }
       }

@@ -306,11 +306,9 @@ export const ModalTranscripcionLlamada: React.FC<ModalTranscripcionLlamadaProps>
         setLlamadasRelacionadas(data.llamadasRelacionadas);
       }
 
-      if (data.registro) {
+      if (data.disponible && data.registro) {
         setRegistro(data.registro);
-        if (data.disponible) {
-          setPestanaActiva('transcripcion');
-        }
+        setPestanaActiva('transcripcion');
       } else {
         setRegistro({
           nombre: nom || 'Asesor PBX',

@@ -137,17 +137,30 @@ export default async function handler(req: any, res: any) {
       match = llamadasInfo.find((c) => String(c.uniqueid).trim() === idClean);
     }
 
-    // Fallback 1: Buscar por teléfono destino limpio
+    // Fallback 1: Buscar por teléfono destino limpio con validación estricta de fecha y asesor
     if (!match && cleanDest) {
       const destClean = cleanDest.replace(/[^0-9]/g, '').slice(-8);
+      const targetDia = fecha ? fecha.slice(0, 10) : '';
+
       if (destClean.length >= 7) {
         match = llamadasInfo.find((c) => {
           const cDest = String(c.destino || '').replace(/[^0-9]/g, '').slice(-8);
-          if (cDest && cDest === destClean) {
-            if (cleanExt && String(c.extension).trim() === cleanExt) return true;
-            if (cleanNombre && c.nombre && c.nombre.toLowerCase().includes(cleanNombre.toLowerCase())) return true;
-            return true;
+          if (!cDest || cDest !== destClean) return false;
+
+          // Si hay fecha target, debe coincidir exactamente el mismo día (YYYY-MM-DD)
+          if (targetDia) {
+            const cDia = String(c.fecha || c.fecha_hora || '').slice(0, 10);
+            if (cDia && cDia !== targetDia) return false;
           }
+
+          // Debe coincidir la extensión o el asesor para no cruzar llamadas de otros ejecutivos
+          const coincideExt = Boolean(cleanExt && String(c.extension).trim() === cleanExt);
+          const coincideNom = Boolean(cleanNombre && c.nombre && c.nombre.toLowerCase().includes(cleanNombre.toLowerCase()));
+
+          if (cleanExt || cleanNombre) {
+            return coincideExt || coincideNom;
+          }
+
           return false;
         });
       }

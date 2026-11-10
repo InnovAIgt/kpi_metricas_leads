@@ -55,7 +55,7 @@ function generarVentanasPbx(diasAtras = 30): [string, string][] {
 async function fetchPbxEnCaliente(): Promise<any[]> {
   try {
     const token = await getPbxJwt();
-    const ventanas = generarVentanasPbx(30); // 30 días para no dar timeout en Vercel
+    const ventanas = generarVentanasPbx(45); // 45 días para cubrir todo el mes anterior completo (octubre) y actual (noviembre)
     const promises: Promise<any[]>[] = [];
 
     for (const [d, h] of ventanas) {

@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
@@ -203,7 +203,7 @@ function generarVentanasPbx(diasAtras = 30): [string, string][] {
 async function fetchPbxEnCaliente(): Promise<any[]> {
   try {
     const token = await getPbxJwtBackend();
-    const ventanas = generarVentanasPbx(30); // 30 días hacia atrás hasta hoy (mes actual completo y fin de mes anterior)
+    const ventanas = generarVentanasPbx(45); // 45 días hacia atrás para cubrir todo el mes anterior completo (octubre) y mes actual (noviembre)
     const promises: Promise<any[]>[] = [];
 
     for (const [d, h] of ventanas) {

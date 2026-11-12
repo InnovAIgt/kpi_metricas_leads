@@ -25,6 +25,16 @@ export interface MesInfo {
 }
 
 /**
+ * Formatea una fecha JS en YYYY-MM-DD usando la hora local del dispositivo (sin desfase UTC)
+ */
+export function formatLocalDate(d: Date = new Date()): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
  * Obtiene dinámicamente toda la información del mes actual del sistema
  */
 export function getMesActualInfo(baseDate?: Date | string): MesInfo {
@@ -33,12 +43,12 @@ export function getMesActualInfo(baseDate?: Date | string): MesInfo {
   const mes = d.getMonth() + 1;
   const mesStr = String(mes).padStart(2, '0');
   const mesTarget = `${anio}-${mesStr}`;
-  const nombreMes = NOMBRES_MESES[mes - 1] || 'Octubre';
+  const nombreMes = NOMBRES_MESES[mes - 1] || 'Mes Actual';
 
   const inicioMes = `${anio}-${mesStr}-01`;
   const ultimoDiaNum = new Date(anio, mes, 0).getDate();
   const finMes = `${anio}-${mesStr}-${String(ultimoDiaNum).padStart(2, '0')}`;
-  const hoy = d.toISOString().slice(0, 10);
+  const hoy = formatLocalDate(new Date());
 
   return {
     anio,
@@ -75,32 +85,32 @@ export function getRangoSemanaActual(baseDate?: Date | string): { inicio: string
   const domingo = new Date(lunes);
   domingo.setDate(lunes.getDate() + 6);
 
-  const format = (d: Date) => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
   return {
-    inicio: format(lunes),
-    fin: format(domingo),
+    inicio: formatLocalDate(lunes),
+    fin: formatLocalDate(domingo),
   };
 }
 
 /**
- * Obtiene el rango por defecto del mes actual dinámico
+ * Rango por defecto al abrir la app: desde el día 1 del mes actual hasta el día de hoy
  */
-export function getRangoDefaultLeads(): { inicio: string; fin: string } {
+export function getRangoMesActualAlDia(): { inicio: string; fin: string } {
   const info = getMesActualInfo();
   return {
     inicio: info.inicioMes,
-    fin: info.finMes,
+    fin: info.hoy,
   };
 }
 
 /**
- * Obtiene el rango del mes actual dinámico
+ * Obtiene el rango por defecto dinámico (del 1 del mes actual hasta el día de hoy)
+ */
+export function getRangoDefaultLeads(): { inicio: string; fin: string } {
+  return getRangoMesActualAlDia();
+}
+
+/**
+ * Obtiene el rango del mes actual completo dinámico
  */
 export function getRangoMesActual(): { inicio: string; fin: string } {
   const info = getMesActualInfo();
@@ -122,7 +132,7 @@ export function getRangoMesAnterior(): { inicio: string; fin: string } {
 }
 
 /**
- * Valida si una fecha es futura/próxima (estrictamente mayor a hoy, no hoy ni en el pasado).
+ * Valida si una fecha es futura/próxima (estrictamente mayor a hoy en hora local, no hoy ni en el pasado).
  */
 export function esFechaProxima(fechaStrOVal?: string | null): boolean {
   if (!fechaStrOVal) return false;
@@ -130,7 +140,7 @@ export function esFechaProxima(fechaStrOVal?: string | null): boolean {
   const f = str.slice(0, 10);
   if (!f || f.length < 10) return false;
 
-  const hoyStr = new Date().toISOString().slice(0, 10);
+  const hoyStr = formatLocalDate(new Date());
   return f > hoyStr;
 }
 

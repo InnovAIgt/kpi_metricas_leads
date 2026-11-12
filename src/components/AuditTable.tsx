@@ -15,10 +15,12 @@ import {
   ChevronUp,
   FileCheck,
   PhoneForwarded,
-  Sparkles,
   Headphones,
+  Download,
 } from 'lucide-react';
 import { CruceAuditoria, EstadoCumplimiento } from '../types';
+import { exportarTablaAExcel, formatearSubtituloExportacion } from '../utils/excelExport';
+import { formatLocalDate } from '../utils/dateHelpers';
 
 interface AuditTableProps {
   cruces: CruceAuditoria[];
@@ -37,6 +39,7 @@ export const AuditTable: React.FC<AuditTableProps> = ({
   const [cruceExpandido, setCruceExpandido] = useState<string | null>(null);
   const [notasSupervisor, setNotasSupervisor] = useState<{ [id: string]: string }>({});
   const [reproduciendoAudio, setReproduciendoAudio] = useState<string | null>(null);
+  const [exportando, setExportando] = useState(false);
 
   // Lista única de vendedores para el selector
   const listaVendedores = Array.from(new Set(cruces.map((c) => c.vendedor_nombre))).filter(Boolean);
@@ -201,9 +204,46 @@ export const AuditTable: React.FC<AuditTableProps> = ({
               </select>
             </div>
 
-            <span className="text-xs text-slate-500 dark:text-slate-400 ml-auto">
+            <span className="text-xs text-slate-500 dark:text-slate-400 ml-auto tabular-nums">
               Mostrando <strong className="text-slate-900 dark:text-white">{crucesFiltrados.length}</strong> registros
             </span>
+
+            <button
+              type="button"
+              onClick={async () => {
+                setExportando(true);
+                try {
+                  await exportarTablaAExcel(`Detalle_Cruces_${formatLocalDate()}`, {
+                    name: 'Cruces Auditoría',
+                    title: 'Detalle de Cruces de Auditoría',
+                    subtitle: formatearSubtituloExportacion({
+                      totalFilas: crucesFiltrados.length,
+                      modo: 'Cruces Filtrados',
+                    }),
+                    accentHex: '1E293B',
+                    columns: [
+                      { header: 'Prospecto', key: 'prospecto_nombre', width: 26 },
+                      { header: 'Teléfono', key: 'telefono', width: 16 },
+                      { header: 'Vendedor', key: 'vendedor_nombre', width: 24 },
+                      { header: 'Cita Programada', key: 'fecha_cita', value: (c) => (c.fecha_cita ? c.fecha_cita.replace('T', ' ').slice(0, 16) : '-'), align: 'center' },
+                      { header: 'Llamada Real', key: 'fecha_llamada', value: (c) => (c.fecha_llamada ? c.fecha_llamada.replace('T', ' ').slice(0, 16) : 'Sin registro'), align: 'center' },
+                      { header: 'Duración', key: 'duracion_llamada_segundos', value: (c) => formatearSegundos(c.duracion_llamada_segundos), align: 'center' },
+                      { header: 'Desfase (min)', key: 'desfase_minutos', value: (c) => c.desfase_minutos ?? '-', align: 'right' },
+                      { header: 'Cumplimiento', key: 'estado_cumplimiento', semantic: 'status', align: 'center' },
+                      { header: 'Diagnóstico', key: 'explicacion', width: 42 },
+                    ],
+                    rows: crucesFiltrados,
+                  });
+                } finally {
+                  setExportando(false);
+                }
+              }}
+              disabled={exportando || crucesFiltrados.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -211,7 +251,7 @@ export const AuditTable: React.FC<AuditTableProps> = ({
       {/* Main Table */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xs dark:shadow-none">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-700 dark:text-slate-300">
+          <table className="w-full text-left text-xs text-slate-700 dark:text-slate-300 tabular-nums">
             <thead className="bg-slate-50 dark:bg-slate-950/80 text-slate-600 dark:text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-800">
               <tr>
                 <th className="px-4 py-3 font-semibold">Prospecto / Contacto</th>
@@ -393,7 +433,7 @@ export const AuditTable: React.FC<AuditTableProps> = ({
                               {reproduciendoAudio === item.id && (
                                 <div className="p-2.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/40 flex items-center justify-between">
                                   <div className="flex items-center gap-2">
-                                    <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
+                                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
                                     <span className="text-xs text-indigo-800 dark:text-indigo-200">
                                       Reproduciendo audio de llamada ({item.llamada?.proveedor}): 0:14 /{' '}
                                       {formatearSegundos(item.duracion_llamada_segundos)}

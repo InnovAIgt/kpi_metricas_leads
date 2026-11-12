@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { Shield, Search, Check, Save, AlertCircle, RefreshCw, X } from 'lucide-react';
+import { Shield, Search, Download } from 'lucide-react';
 import { Cita, ModoLeads } from '../types';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
 import { DateRangeFilter } from './DateRangeFilter';
-import { getRangoDefaultLeads } from '../utils/dateHelpers';
+import { getRangoDefaultLeads, formatLocalDate } from '../utils/dateHelpers';
+import { exportarLibroExcel, formatearSubtituloExportacion } from '../utils/excelExport';
 
 interface VistaKpiSlaProps {
   citas: Cita[];
@@ -17,6 +18,7 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
   tipoLeadActual = 'calificados',
 }) => {
   const [busqueda, setBusqueda] = useState('');
+  const [exportando, setExportando] = useState(false);
   const rangoInicial = getRangoDefaultLeads();
   const [fechaInicio, setFechaInicio] = useState(rangoInicial.inicio);
   const [fechaFin, setFechaFin] = useState(rangoInicial.fin);
@@ -129,6 +131,80 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
   const e2Ok = citasConFecha.filter((c) => c.kpi_sla_etapa_2).length;
   const e3Ok = citasConFecha.filter((c) => c.kpi_sla_etapa_3).length;
 
+  const handleExportarExcel = async () => {
+    setExportando(true);
+    try {
+      const fTotal = filtrados.length;
+      const fe1 = filtrados.filter((c) => c.kpi_sla_etapa_1).length;
+      const fe2 = filtrados.filter((c) => c.kpi_sla_etapa_2).length;
+      const fe3 = filtrados.filter((c) => c.kpi_sla_etapa_3).length;
+
+      await exportarLibroExcel(
+        `KPI_2_SLA_Etapas_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        [
+          {
+            name: 'Resumen SLA Etapas',
+            title: 'KPI 2: Resumen SLA de Etapas',
+            subtitle: formatearSubtituloExportacion({
+              fechaInicio,
+              fechaFin,
+              totalFilas: fTotal,
+              modo: tipoLeadActual === 'no_calificados' ? 'Leads No Calificados' : 'Leads Calificados',
+            }),
+            accentHex: 'D97706',
+            columns: [
+              { header: 'Etapa', key: 'etapa', width: 32 },
+              { header: 'Cumplen', key: 'cumplen', align: 'right' },
+              { header: 'Total Filtrados', key: 'total', align: 'right' },
+              { header: '% Cumplimiento', key: 'pct', numFmt: '0%', align: 'right' },
+            ],
+            rows: [
+              { etapa: 'SLA Etapa 1 (Primer Contacto)', cumplen: fe1, total: fTotal, pct: fTotal > 0 ? fe1 / fTotal : 0 },
+              { etapa: 'SLA Etapa 2 (Seguimiento Inicial)', cumplen: fe2, total: fTotal, pct: fTotal > 0 ? fe2 / fTotal : 0 },
+              { etapa: 'SLA Etapa 3 (Cierre / Oferta)', cumplen: fe3, total: fTotal, pct: fTotal > 0 ? fe3 / fTotal : 0 },
+            ],
+          },
+          {
+            name: 'Detalle Leads SLA',
+            title: 'Detalle de SLA por Lead',
+            subtitle: formatearSubtituloExportacion({
+              fechaInicio,
+              fechaFin,
+              totalFilas: fTotal,
+              modo: tipoLeadActual === 'no_calificados' ? 'Leads No Calificados' : 'Leads Calificados',
+              extra: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
+            }),
+            accentHex: '1E293B',
+            columns: [
+              { header: 'Código', key: 'codigo_prospecto', value: (c) => c.codigo_prospecto || c.id },
+              { header: 'Prospecto / Lead', key: 'prospecto_nombre', width: 28 },
+              { header: 'Teléfono', key: 'prospecto_telefono', width: 16 },
+              { header: 'Asesor', key: 'vendedor_nombre', width: 24 },
+              {
+                header: 'Fecha / Hora',
+                key: 'fecha_hora_programada',
+                value: (c) =>
+                  c.fecha_agendada && c.hora_agendada
+                    ? `${c.fecha_agendada} ${c.hora_agendada}`
+                    : c.fecha_hora_programada
+                    ? c.fecha_hora_programada.replace('T', ' ').slice(0, 16)
+                    : 'N/D',
+                align: 'center',
+              },
+              { header: 'País', key: 'pais', value: (c) => c.pais || 'SV', align: 'center' },
+              { header: 'SLA Etapa 1', key: 'kpi_sla_etapa_1', value: (c) => (c.kpi_sla_etapa_1 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
+              { header: 'SLA Etapa 2', key: 'kpi_sla_etapa_2', value: (c) => (c.kpi_sla_etapa_2 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
+              { header: 'SLA Etapa 3', key: 'kpi_sla_etapa_3', value: (c) => (c.kpi_sla_etapa_3 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
+            ],
+            rows: filtrados,
+          },
+        ]
+      );
+    } finally {
+      setExportando(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -143,13 +219,25 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
               Selecciona con Sí / No si el asesor cumplió el SLA en cada etapa. Se persiste de forma reactiva en <code className="text-amber-600 dark:text-amber-300 font-mono">public.{tipoLeadActual === 'no_calificados' ? 'leads_no_calificados' : 'leads'}</code>.
             </p>
           </div>
-          <div className="text-xs font-mono text-slate-700 dark:text-slate-400 bg-slate-100 dark:bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800">
-            {filtrados.length} / {total} Leads
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleExportarExcel}
+              disabled={exportando || filtrados.length === 0}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              title="Descargar resumen y detalle filtrado en Excel (.xlsx)"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+            </button>
+            <div className="text-xs font-mono tabular-nums text-slate-700 dark:text-slate-400 bg-slate-100 dark:bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800">
+              {filtrados.length} / {total} Leads
+            </div>
           </div>
         </div>
 
         {/* Resumen SLA */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-4">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-4 tabular-nums">
           <div className="bg-slate-50 dark:bg-slate-950/60 p-3 rounded-lg border border-slate-200 dark:border-slate-800">
             <span className="text-xs text-slate-600 dark:text-slate-400">Total Leads</span>
             <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">{total}</p>

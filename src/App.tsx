@@ -8,8 +8,6 @@ import {
   Cita,
   Llamada,
   ParametrosAuditoria,
-  FiltroFecha,
-  SupabaseConfig,
   VistaApp,
   ModoLeads,
 } from './types';
@@ -19,7 +17,12 @@ import {
   calcularResumenKPIs,
   calcularMetricasPorVendedor,
 } from './utils/matchingEngine';
-import { esDelMesActual, esDelMesAnterior, getMesActualInfo } from './utils/dateHelpers';
+import {
+  esDelMesActual,
+  formatLocalDate,
+  getMesActualInfo,
+  getRangoDefaultLeads,
+} from './utils/dateHelpers';
 import { esLeadCalificadoValido } from './utils/leadValidation';
 import {
   sincronizarDatosDesdeBackend,
@@ -30,20 +33,33 @@ import {
   guardarLlamadaManualBackend,
   triggerEdgeFunction,
 } from './services/apiService';
+import { exportarLibroExcel, formatearSubtituloExportacion } from './utils/excelExport';
 import { Sidebar } from './components/Sidebar';
+import { VistaDashboard } from './components/VistaDashboard';
 import { VistaCriterios } from './components/VistaCriterios';
 import { VistaKpiCumplimiento } from './components/VistaKpiCumplimiento';
 import { VistaKpiSla } from './components/VistaKpiSla';
 import { VistaKpiRetroalimentacion } from './components/VistaKpiRetroalimentacion';
 import { VistaTablaRegistros } from './components/VistaTablaRegistros';
 import { VistaCatalogoCrud } from './components/VistaCatalogoCrud';
+import { DateRangeFilter } from './components/DateRangeFilter';
 import { MetricsOverview } from './components/MetricsOverview';
 import { VendorScorecard } from './components/VendorScorecard';
 import { LoginScreen } from './components/LoginScreen';
 import { SupabaseConfigModal } from './components/SupabaseConfigModal';
 import { ReproductorAudioFlotante } from './components/ReproductorAudioFlotante';
 import { ModalTranscripcionLlamada } from './components/ModalTranscripcionLlamada';
-import { CheckCircle2, AlertCircle, Info, ExternalLink, Play, ArrowLeftRight, Phone, Video, Building2, Sparkles, Headphones } from 'lucide-react';
+import {
+  CheckCircle2,
+  AlertCircle,
+  Info,
+  ExternalLink,
+  Phone,
+  Video,
+  Building2,
+  Headphones,
+  Download,
+} from 'lucide-react';
 
 export default function App() {
   // Autenticación de usuario (por defecto activo para mostrar los datos de inmediato)
@@ -61,8 +77,8 @@ export default function App() {
     return saved === 'no_calificados' ? 'no_calificados' : 'calificados';
   });
 
-  // Vista activa del nuevo menú
-  const [vistaActiva, setVistaActiva] = useState<VistaApp>('kpi_cumplimiento');
+  // Vista activa del menú (arranca en el Dashboard ejecutivo del modo actual)
+  const [vistaActiva, setVistaActiva] = useState<VistaApp>('dashboard');
 
   // Datos separados por categoría
   const [citasCalificadas, setCitasCalificadas] = useState<Cita[]>(() => {
@@ -137,13 +153,40 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
 
-  // Parámetros de auditoría (5 min antes/después, 8am-6pm lun-vie)
+  // Parámetros de auditoría (±15 min antes/después, >30 min retraso grave, 8am-6pm lun-vie)
   const [parametros, setParametros] = useState<ParametrosAuditoria>(() => {
-    const saved = localStorage.getItem('kpi_parametros_auditoria');
-    return saved ? JSON.parse(saved) : PARAMETROS_DEFAULT;
+    const savedV2 = localStorage.getItem('kpi_parametros_auditoria_v2');
+    if (savedV2) {
+      try {
+        return { ...PARAMETROS_DEFAULT, ...JSON.parse(savedV2) };
+      } catch (_) {}
+    }
+    const savedLegacy = localStorage.getItem('kpi_parametros_auditoria');
+    if (savedLegacy) {
+      try {
+        const legacy = JSON.parse(savedLegacy);
+        // Migrar automáticamente el antiguo preset 5/5/15 al nuevo estándar 15/15/30
+        if (
+          legacy.tolerancia_anticipacion_minutos === 5 &&
+          legacy.tolerancia_retraso_a_tiempo_minutos === 5 &&
+          legacy.umbral_retraso_grave_minutos === 15
+        ) {
+          return PARAMETROS_DEFAULT;
+        }
+        return { ...PARAMETROS_DEFAULT, ...legacy };
+      } catch (_) {}
+    }
+    return PARAMETROS_DEFAULT;
   });
 
-  const [filtroFecha, setFiltroFecha] = useState<FiltroFecha>('este_mes');
+  // Rango dinámico para Resumen KPIs (del 1 del mes actual a hoy)
+  const [fechaInicioResumen, setFechaInicioResumen] = useState<string>(
+    () => getRangoDefaultLeads().inicio
+  );
+  const [fechaFinResumen, setFechaFinResumen] = useState<string>(
+    () => getRangoDefaultLeads().fin
+  );
+  const [exportandoResumen, setExportandoResumen] = useState(false);
   const [sincronizando, setSincronizando] = useState(false);
   const [modalSupabaseAbierto, setModalSupabaseAbierto] = useState(false);
   const [llamadaReproduciendo, setLlamadaReproduciendo] = useState<any | null>(null);
@@ -190,10 +233,10 @@ export default function App() {
     cargarDatosDesdeBackend();
   }, []);
 
-  const cargarDatosDesdeBackend = async () => {
+  const cargarDatosDesdeBackend = async (forzar = false) => {
     setSincronizando(true);
     try {
-      const data = await sincronizarDatosDesdeBackend();
+      const data = await sincronizarDatosDesdeBackend(forzar);
 
       // 1. ACTUALIZAR DE INMEDIATO EL ESTADO EN MEMORIA DE REACT (PRIORITARIO)
       if (Array.isArray(data.catalogo)) setCatalogo(data.catalogo);
@@ -236,14 +279,15 @@ export default function App() {
 
   const handleSincronizarManual = async () => {
     mostrarToast('Sincronizando con PBX en vivo y Supabase...', 'info');
+    const mesActual = getMesActualInfo();
     try {
       await triggerEdgeFunction({
-        pbx_desde: `${new Date().toISOString().slice(0, 7)}-01`,
-        pbx_hasta: new Date().toISOString().slice(0, 10),
+        pbx_desde: mesActual.inicioMes,
+        pbx_hasta: mesActual.hoy,
         pbx_pais: 'AMBOS',
       });
     } catch (_) {}
-    await cargarDatosDesdeBackend();
+    await cargarDatosDesdeBackend(true);
     mostrarToast('Datos sincronizados en vivo correctamente.', 'exito');
   };
 
@@ -286,7 +330,7 @@ export default function App() {
     const ok = await guardarCatalogoItemBackend(item);
     if (ok) {
       mostrarToast('Catálogo actualizado en Supabase', 'exito');
-      await cargarDatosDesdeBackend();
+      await cargarDatosDesdeBackend(true);
       return true;
     }
     mostrarToast('Error al guardar en catálogo', 'error');
@@ -297,7 +341,7 @@ export default function App() {
     const ok = await eliminarCatalogoItemBackend(id);
     if (ok) {
       mostrarToast('Asesor eliminado del catálogo', 'exito');
-      await cargarDatosDesdeBackend();
+      await cargarDatosDesdeBackend(true);
       return true;
     }
     mostrarToast('Error al eliminar asesor', 'error');
@@ -329,7 +373,7 @@ export default function App() {
         }
       });
       // Sincronizar en segundo plano para refrescar auditoría y cruces
-      cargarDatosDesdeBackend();
+      cargarDatosDesdeBackend(true);
       return true;
     }
     mostrarToast('Error al guardar datos de la reunión Teams', 'error');
@@ -399,6 +443,7 @@ export default function App() {
           fuente: 'Manual',
         };
         setLlamadas((prev) => [nuevaLlamada, ...prev]);
+        cargarDatosDesdeBackend(true);
 
         return true;
       } else {
@@ -411,94 +456,118 @@ export default function App() {
     }
   };
 
-  const hayLeadsEnMesActual = useMemo(() => {
-    return citasActivas.some((c) =>
-      esDelMesActual(c, [
-        'fecha_agendada',
-        'fecha_creado',
-        'created_at',
-        'fecha_hora_programada',
-      ])
-    );
-  }, [citasActivas]);
+  // Motor de Cruce Inteligente completo (cada vista aplica su DateRangeFilter sin recortar históricos)
+  const crucesAuditoriaTodos = useMemo(() => {
+    return ejecutarCruceAuditoria(citasActivas, llamadas, parametros);
+  }, [citasActivas, llamadas, parametros]);
 
-  // Filtrado temporal global (mes actual dinámico, mes anterior o histórico)
-  const citasFiltradas = useMemo(() => {
-    if (filtroFecha === 'todos') return citasActivas;
-    const ahora = new Date();
-    const hoyStr = ahora.toISOString().slice(0, 10);
-
-    return citasActivas.filter((c) => {
-      if (filtroFecha === 'hoy') {
-        const f1 = c.fecha_agendada || '';
-        const f2 = c.fecha_hora_programada ? c.fecha_hora_programada.slice(0, 10) : '';
-        const f3 = c.fecha_creado ? c.fecha_creado.slice(0, 10) : '';
-        return f1 === hoyStr || f2 === hoyStr || f3 === hoyStr;
-      }
-      if (filtroFecha === 'este_mes') {
-        if (!hayLeadsEnMesActual) return true; // Si la API externa no ha publicado leads en el mes actual, mostrar los más recientes
-        return esDelMesActual(c, [
-          'fecha_agendada',
-          'fecha_creado',
-          'created_at',
-          'fecha_hora_programada',
-        ]);
-      }
-      if (filtroFecha === 'mes_anterior') {
-        return esDelMesAnterior(c, [
-          'fecha_agendada',
-          'fecha_creado',
-          'created_at',
-          'fecha_hora_programada',
-        ]);
-      }
+  // Cruces filtrados específicamente para la vista "Resumen KPIs"
+  const crucesResumenFiltrados = useMemo(() => {
+    if (!fechaInicioResumen && !fechaFinResumen) return crucesAuditoriaTodos;
+    return crucesAuditoriaTodos.filter((c) => {
+      const raw =
+        c.fecha_cita ||
+        c.cita?.fecha_agendada ||
+        c.cita?.fecha_hora_programada ||
+        c.cita?.fecha_creado ||
+        c.cita?.created_at ||
+        '';
+      const match = String(raw).match(/^(\d{4}-\d{2}-\d{2})/);
+      const f = match ? match[1] : '';
+      if (!f) return false;
+      if (fechaInicioResumen && f < fechaInicioResumen) return false;
+      if (fechaFinResumen && f > fechaFinResumen) return false;
       return true;
     });
-  }, [citasActivas, filtroFecha, hayLeadsEnMesActual]);
-
-  const llamadasFiltradas = useMemo(() => {
-    if (filtroFecha === 'todos') return llamadas;
-    const ahora = new Date();
-    const hoyStr = ahora.toISOString().slice(0, 10);
-
-    return llamadas.filter((call) => {
-      const fechaCall = call.fecha_hora_inicio ? call.fecha_hora_inicio.slice(0, 10) : '';
-      if (filtroFecha === 'hoy') return fechaCall === hoyStr;
-      if (filtroFecha === 'este_mes') {
-        if (!hayLeadsEnMesActual) return true;
-        return esDelMesActual(call, [
-          'fecha_hora_inicio',
-          'fecha_hora',
-          'fecha',
-          'calldate',
-          'created_at',
-        ]);
-      }
-      if (filtroFecha === 'mes_anterior') {
-        return esDelMesAnterior(call, [
-          'fecha_hora_inicio',
-          'fecha_hora',
-          'fecha',
-          'calldate',
-          'created_at',
-        ]);
-      }
-      return true;
-    });
-  }, [llamadas, filtroFecha, hayLeadsEnMesActual]);
-
-  // Motor de Cruce Inteligente (auditoría ±5 min, comparación telefónica y de asesor)
-  const crucesAuditoria = useMemo(() => {
-    return ejecutarCruceAuditoria(citasFiltradas, llamadasFiltradas, parametros);
-  }, [citasFiltradas, llamadasFiltradas, parametros]);
+  }, [crucesAuditoriaTodos, fechaInicioResumen, fechaFinResumen]);
 
   const resumenKPIs = useMemo(() => {
-    return calcularResumenKPIs(crucesAuditoria);
-  }, [crucesAuditoria]);
+    return calcularResumenKPIs(crucesResumenFiltrados);
+  }, [crucesResumenFiltrados]);
 
   const metricasVendedores = useMemo(() => {
-    return calcularMetricasPorVendedor(crucesAuditoria);
-  }, [crucesAuditoria]);
+    return calcularMetricasPorVendedor(crucesResumenFiltrados);
+  }, [crucesResumenFiltrados]);
+
+  const handleExportarResumenExcel = async () => {
+    setExportandoResumen(true);
+    try {
+      const modoLabel =
+        modoLeads === 'calificados' ? 'Leads Calificados' : 'Leads No Calificados';
+      const subtitulo = formatearSubtituloExportacion({
+        fechaInicio: fechaInicioResumen,
+        fechaFin: fechaFinResumen,
+        totalFilas: crucesResumenFiltrados.length,
+        modo: `Resumen KPIs (${modoLabel})`,
+      });
+      await exportarLibroExcel(
+        `Resumen_KPIs_${modoLeads}_${fechaInicioResumen || 'inicio'}_${fechaFinResumen || formatLocalDate()}`,
+        [
+          {
+            name: 'Resumen KPIs',
+            title: `Resumen Ejecutivo de KPIs — ${modoLabel}`,
+            subtitle: subtitulo,
+            accentHex: 'E11D48',
+            columns: [
+              { header: 'Métrica', key: 'metrica', width: 38 },
+              { header: 'Resultado', key: 'resultado', width: 22, align: 'center' },
+            ],
+            rows: [
+              { metrica: 'Total Citas / Leads Auditados', resultado: resumenKPIs.total_citas },
+              { metrica: 'Llamadas a Tiempo (Verde)', resultado: resumenKPIs.citas_llamadas_a_tiempo },
+              { metrica: 'Tasa de Cumplimiento General', resultado: `${resumenKPIs.tasa_cumplimiento_general}%` },
+              { metrica: 'Citas No Atendidas (No Llamó)', resultado: resumenKPIs.citas_no_atendidas },
+              { metrica: 'Citas Pendientes / Próximas', resultado: resumenKPIs.citas_pendientes || 0 },
+              { metrica: 'Llamadas con Retraso / Otro Día', resultado: resumenKPIs.citas_con_retraso },
+              { metrica: 'Llamadas Insuficientes / Cortas', resultado: resumenKPIs.citas_llamada_insuficiente },
+              { metrica: 'Desfase / Respuesta Promedio', resultado: `${resumenKPIs.promedio_tiempo_respuesta_minutos} min` },
+              { metrica: 'Horas Totales en Llamadas', resultado: `${resumenKPIs.duracion_total_llamadas_horas} hrs` },
+            ],
+          },
+          {
+            name: 'Ranking Asesores',
+            title: `Scorecard por Asesor — ${modoLabel}`,
+            subtitle: subtitulo,
+            accentHex: 'D97706',
+            columns: [
+              { header: 'Asesor / Ejecutivo', key: 'vendedor_nombre', width: 28 },
+              { header: 'Rol', key: 'rol', width: 18 },
+              { header: 'Total Leads', key: 'total_citas', align: 'right' },
+              { header: 'A Tiempo', key: 'citas_a_tiempo', align: 'right' },
+              { header: 'Tarde Leve', key: 'citas_tarde_leve', align: 'right' },
+              { header: 'Retraso Grave', key: 'citas_tarde_grave', align: 'right' },
+              { header: 'No Llamó', key: 'citas_no_llamo', align: 'right' },
+              { header: '% Cumplimiento', key: 'tasa_cumplimiento_pct', value: (r) => r.tasa_cumplimiento_pct / 100, numFmt: '0%', align: 'right' },
+              { header: 'Desfase Medio (min)', key: 'promedio_desfase_minutos', align: 'right' },
+              { header: 'Score', key: 'score_rendimiento', semantic: 'status', align: 'center' },
+            ],
+            rows: metricasVendedores,
+          },
+          {
+            name: 'Detalle Cruces',
+            title: `Detalle de Cruces — ${modoLabel}`,
+            subtitle: subtitulo,
+            accentHex: '1E293B',
+            columns: [
+              { header: 'País', key: 'pais', value: (r) => r.pais || r.cita?.pais || 'SV', width: 10, align: 'center' },
+              { header: 'Prospecto', key: 'prospecto_nombre', width: 26 },
+              { header: 'Teléfono', key: 'telefono', width: 16 },
+              { header: 'Asesor', key: 'vendedor_nombre', width: 26 },
+              { header: 'Fecha Objetivo', key: 'fecha_cita', value: (r) => r.fecha_cita || '-', width: 20 },
+              { header: 'Fecha Llamada', key: 'fecha_llamada', value: (r) => r.fecha_llamada || '-', width: 20 },
+              { header: 'Canal', key: 'canal_utilizado', value: (r) => r.canal_utilizado || 'Sin llamada', width: 14 },
+              { header: 'Desfase (min)', key: 'desfase_minutos', value: (r) => r.desfase_minutos ?? '', align: 'right' },
+              { header: 'Estado', key: 'estado_cumplimiento', semantic: 'status', align: 'center' },
+              { header: 'Explicación', key: 'explicacion', width: 42 },
+            ],
+            rows: crucesResumenFiltrados,
+          },
+        ]
+      );
+    } finally {
+      setExportandoResumen(false);
+    }
+  };
 
   // Conteos del mes actual para la barra lateral (muestra cantidad del mes o total disponible si no hay en el mes)
   const conteosMes = useMemo(() => {
@@ -555,7 +624,7 @@ export default function App() {
       {/* Toast Notification */}
       {toast && (
         <div
-          className={`fixed bottom-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-2xl border transition-all animate-bounce ${
+          className={`fixed bottom-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-2xl border transition-all ${
             toast.tipo === 'exito'
               ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
               : toast.tipo === 'error'
@@ -591,13 +660,29 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Contenido Dinámico */}
         <main className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* VISTA 0: DASHBOARD EJECUTIVO */}
+          {vistaActiva === 'dashboard' && (
+            <VistaDashboard
+              crucesTodos={crucesAuditoriaTodos}
+              citasActivas={citasActivas}
+              llamadas={llamadas}
+              catalogo={catalogo}
+              parametros={parametros}
+              modoLeads={modoLeads}
+              onNavegar={(vista) => setVistaActiva(vista)}
+              onVerTranscripcion={(cruce) => setLlamadaParaTranscripcion(cruce)}
+              onSincronizar={handleSincronizarManual}
+              sincronizando={sincronizando}
+            />
+          )}
+
           {/* VISTA 1: CRITERIOS */}
           {vistaActiva === 'criterios' && (
             <VistaCriterios
               parametros={parametros}
               onActualizarParametros={(nuevos) => {
                 setParametros(nuevos);
-                localStorage.setItem('kpi_parametros_auditoria', JSON.stringify(nuevos));
+                localStorage.setItem('kpi_parametros_auditoria_v2', JSON.stringify(nuevos));
                 mostrarToast('Criterios de auditoría actualizados.', 'exito');
               }}
             />
@@ -611,7 +696,7 @@ export default function App() {
               icono="pbx"
               datos={rawPbx}
               catalogo={catalogo}
-              leadsDisponibles={rawLeads}
+              leadsDisponibles={modoLeads === 'calificados' ? rawLeads : rawLeadsNoCalificados}
               onGuardarLlamadaManual={handleGuardarLlamadaManual}
               columnas={[
                 { clave: 'uniqueid', etiqueta: 'Unique ID' },
@@ -619,8 +704,10 @@ export default function App() {
                 {
                   clave: 'nombre',
                   etiqueta: 'Asesor / Nombre',
+                  exportValue: (val, fila) =>
+                    fila.asesor_nombre || val || (fila.extension ? `Ext. ${fila.extension}` : 'Línea PBX'),
                   render: (val, fila) => (
-                    <span className="font-medium text-slate-200">
+                    <span className="font-medium text-slate-900 dark:text-slate-200">
                       {fila.asesor_nombre || val || (fila.extension ? `Ext. ${fila.extension}` : 'Línea PBX')}
                     </span>
                   ),
@@ -630,22 +717,30 @@ export default function App() {
                 {
                   clave: 'duracion_segundos',
                   etiqueta: 'Duración',
+                  exportValue: (val) => `${val || 0}s (${Math.round((val || 0) / 60)}m)`,
                   render: (val) => `${val || 0}s (${Math.round((val || 0) / 60)}m)`,
                 },
                 {
                   clave: 'estado',
                   etiqueta: 'Estado',
-                  render: (val) => (
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        val?.toLowerCase() === 'answered'
-                          ? 'bg-emerald-950 text-emerald-300'
-                          : 'bg-rose-950 text-rose-300'
-                      }`}
-                    >
-                      {val || 'Sin contestar'}
-                    </span>
-                  ),
+                  exportValue: (val) => val || 'Sin contestar',
+                  render: (val) => {
+                    const st = String(val || '').toUpperCase();
+                    const esOk =
+                      (st.includes('CONTESTADA') && !st.includes('NO CONTESTADA')) ||
+                      st === 'ANSWERED';
+                    return (
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                          esOk
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800/50'
+                            : 'bg-rose-100 text-rose-800 border-rose-200 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-800/50'
+                        }`}
+                      >
+                        {val || 'Sin contestar'}
+                      </span>
+                    );
+                  },
                 },
                 {
                   clave: 'consultar',
@@ -695,7 +790,7 @@ export default function App() {
               icono="celular"
               datos={rawCelular}
               catalogo={catalogo}
-              leadsDisponibles={rawLeads}
+              leadsDisponibles={modoLeads === 'calificados' ? rawLeads : rawLeadsNoCalificados}
               onGuardarLlamadaManual={handleGuardarLlamadaManual}
               columnas={[
                 { clave: 'id', etiqueta: 'ID' },
@@ -704,8 +799,9 @@ export default function App() {
                 {
                   clave: 'usuario',
                   etiqueta: 'Usuario / Asesor',
+                  exportValue: (val, fila) => fila.asesor_nombre || val || 'Ejecutivo Celular',
                   render: (val, fila) => (
-                    <span className="font-medium text-slate-200">
+                    <span className="font-medium text-slate-900 dark:text-slate-200">
                       {fila.asesor_nombre || val || 'Ejecutivo Celular'}
                     </span>
                   ),
@@ -715,9 +811,10 @@ export default function App() {
                 {
                   clave: 'duracion',
                   etiqueta: 'Duración',
+                  exportValue: (val) => (!val || val === '0' || val === '0s' ? '0s' : typeof val === 'string' && val.includes(':') ? val : `${val}s`),
                   render: (val) => {
                     if (!val || val === '0' || val === '0s') {
-                      return <span className="text-slate-500">0s (Sin respuesta)</span>;
+                      return <span className="text-slate-400 dark:text-slate-500">0s (Sin respuesta)</span>;
                     }
                     return typeof val === 'string' && val.includes(':') ? val : `${val}s`;
                   },
@@ -726,8 +823,9 @@ export default function App() {
                 {
                   clave: 'tipo',
                   etiqueta: 'Tipo',
+                  exportValue: (val) => val || 'Saliente',
                   render: (val) => (
-                    <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 font-medium">
+                    <span className="px-2 py-0.5 rounded text-[10px] bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 font-medium">
                       {val || 'Saliente'}
                     </span>
                   ),
@@ -749,12 +847,14 @@ export default function App() {
                 {
                   clave: 'numero_ejecutivo',
                   etiqueta: 'Cel. Asesor',
+                  exportValue: (val, fila) => fila.asesor_nombre || val || 'Asesor WhatsApp',
                   render: (val, fila) => fila.asesor_nombre || val || 'Asesor WhatsApp',
                 },
                 { clave: 'numero_cliente', etiqueta: 'Cel. Cliente', render: (val) => val || 'N/D' },
                 {
                   clave: 'duracion_segundos',
                   etiqueta: 'Duración',
+                  exportValue: (val) => `${val || 0}s`,
                   render: (val) => `${val || 0}s`,
                 },
                 {
@@ -780,7 +880,7 @@ export default function App() {
                   clave: 'codigo_prospecto',
                   etiqueta: 'Código',
                   render: (val) => (
-                    <span className="font-mono font-bold text-amber-300">
+                    <span className="font-mono font-bold text-amber-700 dark:text-amber-300">
                       {val || '-'}
                     </span>
                   ),
@@ -788,8 +888,10 @@ export default function App() {
                 {
                   clave: 'nombre_prospecto',
                   etiqueta: 'Prospecto',
+                  exportValue: (val, fila) =>
+                    val || (fila.codigo_prospecto ? `Prospecto ${fila.codigo_prospecto}` : 'Prospecto Sin Nombre'),
                   render: (val, fila) => (
-                    <span className="font-semibold text-slate-100">
+                    <span className="font-semibold text-slate-900 dark:text-slate-100">
                       {val || (fila.codigo_prospecto ? `Prospecto ${fila.codigo_prospecto}` : 'Prospecto Sin Nombre')}
                     </span>
                   ),
@@ -797,8 +899,9 @@ export default function App() {
                 {
                   clave: 'telefono',
                   etiqueta: 'Teléfono',
+                  exportValue: (val, fila) => val || fila.celular || fila.movil || 'Sin teléfono',
                   render: (val, fila) => (
-                    <span className="font-mono text-slate-200">
+                    <span className="font-mono text-slate-800 dark:text-slate-200">
                       {val || fila.celular || fila.movil || 'Sin teléfono'}
                     </span>
                   ),
@@ -806,28 +909,29 @@ export default function App() {
                 {
                   clave: 'tipo_reunion',
                   etiqueta: 'Tipo de Reunión',
+                  exportValue: (val) => String(val || 'Llamada Telefonica').trim(),
                   render: (val) => {
                     const tipo = String(val || 'Llamada Telefonica').trim();
                     const tipoLower = tipo.toLowerCase();
                     if (tipoLower.includes('teams') || tipoLower.includes('virtual')) {
                       return (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-950/80 text-blue-300 border border-blue-700/50 whitespace-nowrap">
-                          <Video className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/80 dark:text-blue-300 dark:border-blue-700/50 whitespace-nowrap">
+                          <Video className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400 shrink-0" />
                           <span>{tipo}</span>
                         </span>
                       );
                     }
                     if (tipoLower.includes('presencial')) {
                       return (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-purple-950/80 text-purple-300 border border-purple-700/50 whitespace-nowrap">
-                          <Building2 className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/80 dark:text-purple-300 dark:border-purple-700/50 whitespace-nowrap">
+                          <Building2 className="h-3.5 w-3.5 text-purple-500 dark:text-purple-400 shrink-0" />
                           <span>{tipo}</span>
                         </span>
                       );
                     }
                     return (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-700/50 whitespace-nowrap">
-                        <Phone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-700/50 whitespace-nowrap">
+                        <Phone className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
                         <span>{tipo}</span>
                       </span>
                     );
@@ -837,14 +941,15 @@ export default function App() {
                   clave: 'fecha_agendada',
                   etiqueta: 'Fecha Reunión (Agendada)',
                   esFecha: true,
+                  exportValue: (val) => (val && val !== 'null' ? String(val).slice(0, 10) : ''),
                   render: (val) => {
                     const fecha = val && val !== 'null' ? String(val).slice(0, 10) : '';
                     return fecha ? (
-                      <span className="font-mono font-bold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800/40">
+                      <span className="font-mono font-bold text-emerald-700 bg-emerald-50 border-emerald-200 dark:text-emerald-400 dark:bg-emerald-950/60 px-2 py-0.5 rounded border dark:border-emerald-800/40">
                         {fecha}
                       </span>
                     ) : (
-                      <span className="text-slate-500 italic text-[11px]">
+                      <span className="text-slate-400 dark:text-slate-500 italic text-[11px]">
                         Sin reunión pactada
                       </span>
                     );
@@ -853,14 +958,15 @@ export default function App() {
                 {
                   clave: 'hora_agendada',
                   etiqueta: 'Hora Reunión (Agendada)',
+                  exportValue: (val) => (val && val !== 'null' ? String(val).slice(0, 8) : '-'),
                   render: (val) => {
                     const hora = val && val !== 'null' ? String(val).slice(0, 8) : '';
                     return hora ? (
-                      <span className="font-mono font-bold text-emerald-300 bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-800/30">
+                      <span className="font-mono font-bold text-emerald-700 bg-emerald-50 border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/50 px-2 py-0.5 rounded border dark:border-emerald-800/30">
                         {hora}
                       </span>
                     ) : (
-                      <span className="text-slate-500 text-[11px]">-</span>
+                      <span className="text-slate-400 dark:text-slate-500 text-[11px]">-</span>
                     );
                   },
                 },
@@ -868,8 +974,9 @@ export default function App() {
                   clave: 'fecha_creado',
                   etiqueta: 'Fecha Creación',
                   esFecha: true,
+                  exportValue: (val, fila) => val || (fila.created_at ? String(fila.created_at).slice(0, 10) : 'N/D'),
                   render: (val, fila) => (
-                    <span className="font-mono text-slate-300">
+                    <span className="font-mono text-slate-700 dark:text-slate-300">
                       {val || (fila.created_at ? String(fila.created_at).slice(0, 10) : 'N/D')}
                     </span>
                   ),
@@ -877,8 +984,10 @@ export default function App() {
                 {
                   clave: 'hora_creado',
                   etiqueta: 'Hora Creación',
+                  exportValue: (val, fila) =>
+                    val ? String(val).slice(0, 8) : fila.created_at ? String(fila.created_at).slice(11, 19) : 'N/D',
                   render: (val, fila) => (
-                    <span className="font-mono text-slate-300">
+                    <span className="font-mono text-slate-700 dark:text-slate-300">
                       {val ? String(val).slice(0, 8) : (fila.created_at ? String(fila.created_at).slice(11, 19) : 'N/D')}
                     </span>
                   ),
@@ -886,8 +995,9 @@ export default function App() {
                 {
                   clave: 'asesor_nombre',
                   etiqueta: 'Asesor Asignado',
+                  exportValue: (val, fila) => val || fila.asesor_id || 'Asesor General',
                   render: (val, fila) => (
-                    <span className="font-medium text-slate-200">
+                    <span className="font-medium text-slate-900 dark:text-slate-200">
                       {val || fila.asesor_id || 'Asesor General'}
                     </span>
                   ),
@@ -895,11 +1005,12 @@ export default function App() {
                 {
                   clave: 'pais',
                   etiqueta: 'País',
+                  exportValue: (val) => val || 'SV',
                   render: (val) => (
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
                       val === 'GT'
-                        ? 'bg-cyan-950 text-cyan-300 border border-cyan-800/40'
-                        : 'bg-indigo-950 text-indigo-300 border border-indigo-800/40'
+                        ? 'bg-cyan-50 text-cyan-800 border-cyan-200 dark:bg-cyan-950 dark:text-cyan-300 dark:border-cyan-800/40'
+                        : 'bg-indigo-50 text-indigo-800 border-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800/40'
                     }`}>
                       {val || 'SV'}
                     </span>
@@ -908,8 +1019,9 @@ export default function App() {
                 {
                   clave: 'status',
                   etiqueta: 'Status',
+                  exportValue: (val) => val || 'Agendado',
                   render: (val) => (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-800/40">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-300 border dark:border-emerald-800/40">
                       {val || 'Agendado'}
                     </span>
                   ),
@@ -919,6 +1031,7 @@ export default function App() {
                   clave: 'kpi_retroalimentacion_etapa_1',
                   etiqueta: 'ETAPA 1',
                   grupo: 'KPI RETROALIMENTACION',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
                   render: (val, fila) => (
                     <button
                       type="button"
@@ -933,8 +1046,8 @@ export default function App() {
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
                         val
-                          ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
-                          : 'bg-rose-950 text-rose-300 border-rose-500/50'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
                       }`}
                     >
                       {val ? 'Sí' : 'No'}
@@ -945,6 +1058,7 @@ export default function App() {
                   clave: 'kpi_retroalimentacion_etapa_2',
                   etiqueta: 'ETAPA 2',
                   grupo: 'KPI RETROALIMENTACION',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
                   render: (val, fila) => (
                     <button
                       type="button"
@@ -959,8 +1073,8 @@ export default function App() {
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
                         val
-                          ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
-                          : 'bg-rose-950 text-rose-300 border-rose-500/50'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
                       }`}
                     >
                       {val ? 'Sí' : 'No'}
@@ -971,6 +1085,7 @@ export default function App() {
                   clave: 'kpi_retroalimentacion_etapa_3',
                   etiqueta: 'ETAPA 3',
                   grupo: 'KPI RETROALIMENTACION',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
                   render: (val, fila) => (
                     <button
                       type="button"
@@ -985,8 +1100,8 @@ export default function App() {
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
                         val
-                          ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
-                          : 'bg-rose-950 text-rose-300 border-rose-500/50'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
                       }`}
                     >
                       {val ? 'Sí' : 'No'}
@@ -997,6 +1112,7 @@ export default function App() {
                   clave: 'kpi_retroalimentacion_etapa_4',
                   etiqueta: 'ETAPA 4',
                   grupo: 'KPI RETROALIMENTACION',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
                   render: (val, fila) => (
                     <button
                       type="button"
@@ -1011,8 +1127,8 @@ export default function App() {
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
                         val
-                          ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
-                          : 'bg-rose-950 text-rose-300 border-rose-500/50'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
                       }`}
                     >
                       {val ? 'Sí' : 'No'}
@@ -1024,6 +1140,7 @@ export default function App() {
                   clave: 'kpi_sla_etapa_1',
                   etiqueta: 'ETAPA 1',
                   grupo: 'KPI SLA',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
                   render: (val, fila) => (
                     <button
                       type="button"
@@ -1038,8 +1155,8 @@ export default function App() {
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
                         val
-                          ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
-                          : 'bg-rose-950 text-rose-300 border-rose-500/50'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
                       }`}
                     >
                       {val ? 'Sí' : 'No'}
@@ -1050,6 +1167,7 @@ export default function App() {
                   clave: 'kpi_sla_etapa_2',
                   etiqueta: 'ETAPA 2',
                   grupo: 'KPI SLA',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
                   render: (val, fila) => (
                     <button
                       type="button"
@@ -1064,8 +1182,8 @@ export default function App() {
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
                         val
-                          ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
-                          : 'bg-rose-950 text-rose-300 border-rose-500/50'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
                       }`}
                     >
                       {val ? 'Sí' : 'No'}
@@ -1076,6 +1194,7 @@ export default function App() {
                   clave: 'kpi_sla_etapa_3',
                   etiqueta: 'ETAPA 3',
                   grupo: 'KPI SLA',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
                   render: (val, fila) => (
                     <button
                       type="button"
@@ -1090,8 +1209,8 @@ export default function App() {
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
                         val
-                          ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
-                          : 'bg-rose-950 text-rose-300 border-rose-500/50'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
                       }`}
                     >
                       {val ? 'Sí' : 'No'}
@@ -1114,7 +1233,7 @@ export default function App() {
                   clave: 'client_id',
                   etiqueta: 'Client ID',
                   render: (val) => (
-                    <span className="font-mono font-bold text-cyan-300">
+                    <span className="font-mono font-bold text-cyan-700 dark:text-cyan-300">
                       {val || '-'}
                     </span>
                   ),
@@ -1123,7 +1242,7 @@ export default function App() {
                   clave: 'client_name',
                   etiqueta: 'Cliente / Prospecto',
                   render: (val) => (
-                    <span className="font-semibold text-slate-100">
+                    <span className="font-semibold text-slate-900 dark:text-slate-100">
                       {val || '-'}
                     </span>
                   ),
@@ -1132,7 +1251,7 @@ export default function App() {
                   clave: 'telefono',
                   etiqueta: 'Teléfono',
                   render: (val) => (
-                    <span className="font-mono text-slate-200">
+                    <span className="font-mono text-slate-800 dark:text-slate-200">
                       {val || 'Sin teléfono'}
                     </span>
                   ),
@@ -1140,8 +1259,10 @@ export default function App() {
                 {
                   clave: 'created_at_sv',
                   etiqueta: 'Fecha/Hora Ingreso',
+                  exportValue: (val, fila) =>
+                    val || (fila.fecha && fila.hora ? `${fila.fecha} ${fila.hora}` : 'N/D'),
                   render: (val, fila) => (
-                    <span className="font-mono text-emerald-300 font-medium">
+                    <span className="font-mono text-emerald-700 dark:text-emerald-300 font-medium">
                       {val || (fila.fecha && fila.hora ? `${fila.fecha} ${fila.hora}` : 'N/D')}
                     </span>
                   ),
@@ -1150,8 +1271,9 @@ export default function App() {
                   clave: 'fecha',
                   etiqueta: 'Fecha',
                   esFecha: true,
+                  exportValue: (val, fila) => val || (fila.created_at ? String(fila.created_at).slice(0, 10) : 'N/D'),
                   render: (val, fila) => (
-                    <span className="font-mono text-slate-300">
+                    <span className="font-mono text-slate-700 dark:text-slate-300">
                       {val || (fila.created_at ? String(fila.created_at).slice(0, 10) : 'N/D')}
                     </span>
                   ),
@@ -1159,8 +1281,9 @@ export default function App() {
                 {
                   clave: 'hora',
                   etiqueta: 'Hora',
+                  exportValue: (val, fila) => val || (fila.created_at ? String(fila.created_at).slice(11, 19) : 'N/D'),
                   render: (val, fila) => (
-                    <span className="font-mono text-slate-300">
+                    <span className="font-mono text-slate-700 dark:text-slate-300">
                       {val || (fila.created_at ? String(fila.created_at).slice(11, 19) : 'N/D')}
                     </span>
                   ),
@@ -1185,14 +1308,15 @@ export default function App() {
                 {
                   clave: 'pais',
                   etiqueta: 'País',
+                  exportValue: (val, fila) => val || fila.pais || 'SV',
                   render: (val, fila) => {
                     const p = val || fila.pais || 'SV';
                     return (
                       <span
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold ${
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold border ${
                           p === 'GT'
-                            ? 'bg-sky-950 text-sky-300 border border-sky-800/60'
-                            : 'bg-blue-950 text-blue-300 border border-blue-800/60'
+                            ? 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950 dark:text-sky-300 dark:border-sky-800/60'
+                            : 'bg-blue-50 text-blue-800 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800/60'
                         }`}
                       >
                         {p === 'GT' ? '🇬🇹 GT' : '🇸🇻 SV'}
@@ -1203,19 +1327,24 @@ export default function App() {
                 {
                   clave: 'codigo_prospecto',
                   etiqueta: 'Código Lead',
-                  render: (val) => <span className="font-bold text-white">{val || '-'}</span>,
+                  render: (val) => (
+                    <span className="font-bold text-slate-900 dark:text-white">{val || '-'}</span>
+                  ),
                 },
                 {
                   clave: 'cliente',
                   etiqueta: 'Cliente / Prospecto',
+                  exportValue: (val, fila) =>
+                    val || (fila.codigo_prospecto ? `Prospecto ${fila.codigo_prospecto}` : 'Cliente Virtual'),
                   render: (val, fila) =>
                     val || (fila.codigo_prospecto ? `Prospecto ${fila.codigo_prospecto}` : 'Cliente Virtual'),
                 },
                 {
                   clave: 'ejecutivo',
                   etiqueta: 'Ejecutivo Teams',
+                  exportValue: (val, fila) => fila.ejecutivo_nombre || val || 'Ejecutivo Teams',
                   render: (val, fila) => (
-                    <span className="font-medium text-purple-300">
+                    <span className="font-medium text-purple-700 dark:text-purple-300">
                       {fila.ejecutivo_nombre || val || 'Ejecutivo Teams'}
                     </span>
                   ),
@@ -1225,17 +1354,23 @@ export default function App() {
                 {
                   clave: 'estado_teams',
                   etiqueta: 'Estado de Reunión',
+                  exportValue: (val) => val || 'Pendiente de realizar',
                   render: (val) => {
                     const st = val || 'Pendiente de realizar';
-                    let estilo = 'bg-slate-800 text-slate-400 border-slate-700';
+                    let estilo =
+                      'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700';
                     if (st.includes('evidencia') || (st.includes('hizo') && !st.includes('sin'))) {
-                      estilo = 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60';
+                      estilo =
+                        'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-800/60';
                     } else if (st.includes('sin evidencia')) {
-                      estilo = 'bg-amber-950/80 text-amber-300 border-amber-800/60';
+                      estilo =
+                        'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-800/60';
                     } else if (st.includes('No') || st.includes('Cancel')) {
-                      estilo = 'bg-rose-950/80 text-rose-300 border-rose-800/60';
+                      estilo =
+                        'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/80 dark:text-rose-300 dark:border-rose-800/60';
                     } else if (st.includes('Reprog')) {
-                      estilo = 'bg-blue-950/80 text-blue-300 border-blue-800/60';
+                      estilo =
+                        'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/80 dark:text-blue-300 dark:border-blue-800/60';
                     }
                     return (
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${estilo}`}>
@@ -1247,18 +1382,19 @@ export default function App() {
                 {
                   clave: 'evidencia_url',
                   etiqueta: 'Evidencia Teams',
+                  exportValue: (val) => val || 'Sin enlace',
                   render: (val) =>
                     val ? (
                       <a
                         href={val}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-purple-400 hover:text-purple-300 underline inline-flex items-center gap-1 font-sans"
+                        className="text-purple-600 dark:text-purple-400 hover:text-purple-500 dark:hover:text-purple-300 underline inline-flex items-center gap-1 font-sans"
                       >
                         <ExternalLink className="h-3 w-3" /> Ver Evidencia
                       </a>
                     ) : (
-                      <span className="text-slate-600 italic">Sin enlace</span>
+                      <span className="text-slate-400 dark:text-slate-600 italic">Sin enlace</span>
                     ),
                 },
               ]}
@@ -1277,23 +1413,63 @@ export default function App() {
           {/* VISTA 8: RESUMEN KPIS */}
           {vistaActiva === 'resumen_kpis' && (
             <div className="space-y-6">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+                    Resumen Global de KPIs y Desempeño
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Cruce consolidado de{' '}
+                    {modoLeads === 'calificados' ? 'Leads Calificados' : 'Leads No Calificados'}{' '}
+                    con rango por defecto del 1 del mes al día de hoy.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleExportarResumenExcel}
+                  disabled={exportandoResumen}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition-all disabled:opacity-50 cursor-pointer shrink-0"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>{exportandoResumen ? 'Generando...' : 'Descargar Excel'}</span>
+                </button>
+              </div>
+
+              <DateRangeFilter
+                fechaInicio={fechaInicioResumen}
+                fechaFin={fechaFinResumen}
+                onChangeInicio={setFechaInicioResumen}
+                onChangeFin={setFechaFinResumen}
+                onLimpiar={() => {
+                  const def = getRangoDefaultLeads();
+                  setFechaInicioResumen(def.inicio);
+                  setFechaFinResumen(def.fin);
+                }}
+                label={`Filtrar Período (${crucesResumenFiltrados.length} de ${crucesAuditoriaTodos.length} registros)`}
+              />
+
               <MetricsOverview
                 kpis={resumenKPIs}
-                cruces={crucesAuditoria}
+                cruces={crucesResumenFiltrados}
                 parametros={parametros}
                 onVerDetalleCruce={() => setVistaActiva('kpi_cumplimiento')}
                 onCambiarTab={() => {}}
               />
-              <VendorScorecard vendedores={metricasVendedores} />
+              <VendorScorecard
+                vendedores={metricasVendedores}
+                fechaInicio={fechaInicioResumen}
+                fechaFin={fechaFinResumen}
+              />
             </div>
           )}
 
-          {/* VISTA 9: KPI 1 - CUMPLIMIENTO LEADS (+/- 5 MIN) CON LISTA DE VENDEDORES & DIAGNÓSTICO */}
+          {/* VISTA 9: KPI 1 - CUMPLIMIENTO LEADS (+/- 15 MIN) CON LISTA DE VENDEDORES & DIAGNÓSTICO */}
           {vistaActiva === 'kpi_cumplimiento' && (
             <VistaKpiCumplimiento
-              cruces={crucesAuditoria}
+              cruces={crucesAuditoriaTodos}
               tipoLeadActual={modoLeads}
               catalogo={catalogo}
+              parametros={parametros}
               onVerTranscripcion={(cruce) => setLlamadaParaTranscripcion(cruce)}
               onEscucharAudio={(ll) => setLlamadaReproduciendo(ll)}
             />
@@ -1333,7 +1509,7 @@ export default function App() {
         }}
         onGuardar={() => {}}
         onDatosActualizados={() => {
-          cargarDatosDesdeBackend();
+          cargarDatosDesdeBackend(true);
           mostrarToast('Datos de Supabase actualizados tras sincronización', 'exito');
         }}
       />

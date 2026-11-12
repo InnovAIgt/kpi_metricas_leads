@@ -1,5 +1,60 @@
 import { Cita, Llamada } from '../types';
 import { esLeadCalificadoValido } from '../utils/leadValidation';
+import { formatLocalDate } from '../utils/dateHelpers';
+
+function stripFakeUtcZ(val?: string | null): string {
+  if (!val) return '';
+  let s = String(val).trim();
+  if (!s) return '';
+  s = s.replace(/\s+/, 'T').replace(/(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/i, '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T00:00:00`;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return `${s}:00`;
+  return s.slice(0, 19);
+}
+
+function utcToSvWallClock(val?: string | null): string {
+  if (!val) return '';
+  const raw = String(val).trim();
+  if (!raw) return '';
+  if (/(Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) {
+      const sv = new Date(d.getTime() - 6 * 3600 * 1000);
+      const y = sv.getUTCFullYear();
+      const m = String(sv.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(sv.getUTCDate()).padStart(2, '0');
+      const hh = String(sv.getUTCHours()).padStart(2, '0');
+      const mm = String(sv.getUTCMinutes()).padStart(2, '0');
+      const ss = String(sv.getUTCSeconds()).padStart(2, '0');
+      return `${y}-${m}-${day}T${hh}:${mm}:${ss}`;
+    }
+  }
+  return stripFakeUtcZ(raw);
+}
+
+function esPbxContestada(estado: any, durSec: number): boolean {
+  const est = String(estado || '').toUpperCase().trim();
+  const esNoCont =
+    est.includes('NO CONTEST') ||
+    est.includes('NO ANSWER') ||
+    est.includes('BUSY') ||
+    est.includes('OCUPAD') ||
+    est.includes('FALLID') ||
+    est.includes('FAIL');
+  if (esNoCont) return false;
+  if (est === 'ANSWERED' || est.includes('CONTESTADA')) return true;
+  return durSec > 25;
+}
+
+function normalizarHoraStr(hora?: string | null, fallback = '00:00:00'): string {
+  if (!hora) return fallback;
+  const parts = String(hora).trim().split(':');
+  if (parts.length < 2) return fallback;
+  const hh = String(parseInt(parts[0], 10) || 0).padStart(2, '0');
+  const mm = String(parseInt(parts[1], 10) || 0).padStart(2, '0');
+  const ss = String(parseInt(parts[2] || '0', 10) || 0).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
 
 export interface DatosSyncBackend {
   citasCalificadas: Cita[];
@@ -40,10 +95,11 @@ function getSupabaseConfig() {
  * Consulta el endpoint proxy del backend (/api/sync/datos-completos)
  * donde las credenciales de Supabase están 100% protegidas en variables de entorno.
  */
-export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> {
+export async function sincronizarDatosDesdeBackend(forzar = false): Promise<DatosSyncBackend> {
   const inicio = performance.now();
   try {
-    const res = await fetch('/api/sync/datos-completos');
+    const endpoint = forzar ? '/api/sync/datos-completos?forzar=true' : '/api/sync/datos-completos';
+    const res = await fetch(endpoint, { cache: 'no-store' });
     if (res.ok) {
       const json = await res.json();
       if (json.exito && json.datos) {
@@ -111,7 +167,7 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
           const tieneCitaAgendada = Boolean(fAgendada && fAgendada.length >= 8);
 
           // Si tiene fecha agendada pactada, se usa esa fecha y hora
-          const fechaDef = fAgendada || fCreado || fCreatedAt || new Date().toISOString().slice(0, 10);
+          const fechaDef = fAgendada || fCreado || fCreatedAt || formatLocalDate();
           let horaDef = hAgendada || hCreado || hCreatedAt || '09:00:00';
           if (horaDef.length === 5) horaDef += ':00';
 
@@ -224,7 +280,7 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
             });
           } else {
             // No cumple criterios de calificado (sin reunión, emoji, inicial o apodo) -> va a No Calificados
-            const fRef = fechaCreado || (lead.created_at ? String(lead.created_at).slice(0, 10) : new Date().toISOString().slice(0, 10));
+            const fRef = fechaCreado || (lead.created_at ? String(lead.created_at).slice(0, 10) : formatLocalDate());
             let hRef = horaCreado || (lead.created_at ? String(lead.created_at).slice(11, 19) : '09:00:00');
             if (hRef.length === 5) hRef += ':00';
             const fIsoNoCal = `${fRef}T${hRef}`;
@@ -281,7 +337,9 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
           lead.hora = parsed.hora;
           lead.fecha_hora_programada = parsed.fechaIso;
 
-          const asesor = lead.advisor_name || lead.asesor || 'Asesor Asignado';
+          const asesorRaw = lead.advisor_name || lead.asesor || '';
+          const asesor = resolverAsesor(asesorRaw, asesorRaw || 'Asesor Asignado');
+          lead.advisor_name = asesor;
 
           const nombreCliente =
             lead.client_name ||
@@ -325,9 +383,10 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
           const durSec =
             Number(call.duracion_segundos || 0) ||
             Number(call.duracion_minutos || 0) * 60;
-          const fechaInicio =
+          const fechaInicioRaw =
             call.fecha_hora ||
-            (call.fecha ? `${call.fecha}T${call.hora || '00:00:00'}` : new Date().toISOString());
+            (call.fecha ? `${String(call.fecha).slice(0, 10)}T${normalizarHoraStr(call.hora)}` : `${formatLocalDate()}T00:00:00`);
+          const fechaInicio = stripFakeUtcZ(fechaInicioRaw);
 
           const ext = String(call.extension || '').trim();
           const asesor =
@@ -343,10 +402,7 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
             fecha_hora_inicio: fechaInicio,
             fecha_hora_fin: fechaInicio,
             duracion_segundos: durSec,
-            resultado:
-              call.estado?.toLowerCase() === 'answered' || durSec > 25
-                ? 'contestada'
-                : 'no_contesta',
+            resultado: esPbxContestada(call.estado, durSec) ? 'contestada' : 'no_contesta',
             proveedor: 'VoIP',
             canal_tipo: 'PBX',
             grabacion_url: call.audio_url || call.grabacion_url || undefined,
@@ -422,10 +478,10 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
           });
         });
 
-        // D. WhatsApp
+        // D. WhatsApp (Postgres timestamptz en UTC -> hora local SV UTC-6)
         llamadasWhatsapp.forEach((wa: any, idx: number) => {
           const durSec = Number(wa.duracion_segundos || 45);
-          const fechaInicio = wa.fecha_llamada || wa.created_at || new Date().toISOString();
+          const fechaInicio = utcToSvWallClock(wa.fecha_llamada || wa.created_at) || `${formatLocalDate()}T09:00:00`;
 
           const asesor = resolverAsesor(
             String(wa.ejecutivo_id || ''),
@@ -440,7 +496,10 @@ export async function sincronizarDatosDesdeBackend(): Promise<DatosSyncBackend> 
             fecha_hora_inicio: fechaInicio,
             fecha_hora_fin: fechaInicio,
             duracion_segundos: durSec,
-            resultado: wa.estado?.toLowerCase() === 'contestada' ? 'contestada' : 'no_contesta',
+            resultado:
+              wa.estado?.toLowerCase() === 'contestada' || durSec > 0
+                ? 'contestada'
+                : 'no_contesta',
             proveedor: 'Vapi',
             canal_tipo: 'WhatsApp',
             notas_llamada: `[WhatsApp] Dirección: ${wa.direccion || 'Saliente'}`,
@@ -697,8 +756,9 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       return fallback;
     };
 
-    // Mapear Leads Calificados
+    // Mapear Leads Calificados y preparar No Calificados
     const citasCalificadas: Cita[] = [];
+    const citasNoCalificadas: Cita[] = [];
     const leadsCalificadosValidos: any[] = [];
 
     leads.forEach((lead: any, idx: number) => {
@@ -709,7 +769,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       const fCreatedAt = lead.created_at ? String(lead.created_at).slice(0, 10) : '';
       let hCreatedAt = lead.created_at ? String(lead.created_at).slice(11, 19) : '';
 
-      const fechaDef = fAgendada || fCreado || fCreatedAt || new Date().toISOString().slice(0, 10);
+      const fechaDef = fAgendada || fCreado || fCreatedAt || formatLocalDate();
       let horaDef = hAgendada || hCreado || hCreatedAt || '09:00:00';
       if (horaDef.length === 5) horaDef += ':00';
       const fechaIso = `${fechaDef}T${horaDef}`;
@@ -761,7 +821,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         });
       } else {
         // Enviar a no calificados
-        const fRef = fCreado || fCreatedAt || new Date().toISOString().slice(0, 10);
+        const fRef = fCreado || fCreatedAt || formatLocalDate();
         const hRef = hCreado || hCreatedAt || '09:00:00';
         const fIsoNoCal = `${fRef}T${hRef.length === 5 ? hRef + ':00' : hRef}`;
 
@@ -810,7 +870,6 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     });
 
     // Mapear Leads No Calificados
-    const citasNoCalificadas: Cita[] = [];
     leadsNoCalificados.forEach((lead: any, idx: number) => {
       let fecha = '';
       let hora = '10:00:00';
@@ -825,21 +884,22 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
           hora = `${String(hourNum).padStart(2, '0')}:${min}:00`;
         }
       } else if (lead.created_at) {
-        const d = new Date(lead.created_at);
-        if (!isNaN(d.getTime())) {
-          const sv = new Date(d.getTime() - 6 * 3600 * 1000);
-          fecha = sv.toISOString().slice(0, 10);
-          hora = sv.toISOString().slice(11, 19);
+        const wall = utcToSvWallClock(lead.created_at);
+        if (wall) {
+          fecha = wall.slice(0, 10);
+          hora = wall.slice(11, 19);
         }
       }
-      const fechaIso = `${fecha || new Date().toISOString().slice(0, 10)}T${hora}`;
-      const asesor = lead.advisor_name || lead.asesor || 'Asesor Asignado';
+      const fechaIso = `${fecha || formatLocalDate()}T${hora}`;
+      const asesorRaw = lead.advisor_name || lead.asesor || '';
+      const asesor = resolverAsesor(asesorRaw, asesorRaw || 'Asesor Asignado');
       const nombreCliente = lead.client_name || lead.nombre || lead.prospecto || `No Calif. #${idx + 1}`;
 
       lead.fecha = fecha;
       lead.hora = hora;
       lead.fecha_hora_programada = fechaIso;
       lead.asesor_nombre = asesor;
+      lead.advisor_name = asesor;
 
       citasNoCalificadas.push({
         id: String(lead.id || lead.client_id || `no-calif-${idx}`),
@@ -870,7 +930,8 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         pbx.asesor_nombre ||
         resolverAsesor(extStr, resolverAsesor(pbx.nombre || '', extStr ? `Ext. ${extStr}` : 'Asesor PBX'));
       pbx.asesor_nombre = asesor;
-      const fechaInicio = pbx.fecha_hora || pbx.calldate || new Date().toISOString();
+      const fechaInicio = stripFakeUtcZ(pbx.fecha_hora || pbx.calldate) || `${formatLocalDate()}T00:00:00`;
+      const durSec = Number(pbx.duracion_segundos || 0);
       let audioFinal = String(pbx.audio_url || pbx.grabacion_url || '').trim();
       if (audioFinal && audioFinal !== 'null' && audioFinal !== 'undefined') {
         if (!audioFinal.startsWith('http')) {
@@ -879,13 +940,13 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       } else if (pbx.uniqueid && extStr) {
         const d = new Date(fechaInicio);
         if (!isNaN(d.getTime())) {
-          const y = d.getUTCFullYear();
-          const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-          const dia = String(d.getUTCDate()).padStart(2, '0');
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const dia = String(d.getDate()).padStart(2, '0');
           const fn = `Grabacion_Ext_${extStr}_${pbx.uniqueid}.wav`;
           audioFinal =
             String(pbx.pais).toUpperCase() === 'GT'
-              ? `https://api.red.com.sv/pbx/api/v1/rawCalls?pais=GT&anio=${y}&mes=${m}&dia=${dia}&archivo=${fn}`
+              ? `https://api.red.com.sv/pbx/api/v1/rawCalls?pais=GT&anio=${y}&mes=${m}&dia=${dia}&archivo=${encodeURIComponent(fn)}`
               : `https://api.red.com.sv/pbx/api/v1/getAudio/${y}/${m}/${dia}/${fn}`;
         }
       }
@@ -899,8 +960,8 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         telefono_marcado: String(pbx.destino || '').trim(),
         fecha_hora_inicio: fechaInicio,
         fecha_hora_fin: fechaInicio,
-        duracion_segundos: Number(pbx.duracion_segundos || 0),
-        resultado: pbx.estado?.toLowerCase() === 'answered' ? 'contestada' : 'no_contesta',
+        duracion_segundos: durSec,
+        resultado: esPbxContestada(pbx.estado, durSec) ? 'contestada' : 'no_contesta',
         proveedor: 'PBX',
         canal_tipo: 'PBX',
         audio_url: audioFinal || undefined,
@@ -955,9 +1016,12 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     });
 
     llamadasWhatsapp.forEach((wa: any, idx: number) => {
-      const asesor = resolverAsesor(wa.asesor || wa.agente || '', 'Bot WhatsApp');
+      const asesor = resolverAsesor(
+        String(wa.ejecutivo_id || wa.asesor || wa.agente || ''),
+        resolverAsesor(wa.numero_ejecutivo || '', 'Bot WhatsApp')
+      );
       wa.asesor_nombre = asesor;
-      const fechaInicio = wa.fecha_llamada || wa.created_at || new Date().toISOString();
+      const fechaInicio = utcToSvWallClock(wa.fecha_llamada || wa.created_at) || `${formatLocalDate()}T09:00:00`;
       let durSec = 0;
       if (typeof wa.duracion_segundos === 'number') durSec = wa.duracion_segundos;
       else if (typeof wa.duracion === 'string') durSec = parseInt(wa.duracion) || 0;
@@ -969,7 +1033,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         fecha_hora_inicio: fechaInicio,
         fecha_hora_fin: fechaInicio,
         duracion_segundos: durSec,
-        resultado: wa.estado?.toLowerCase() === 'contestada' ? 'contestada' : 'no_contesta',
+        resultado: wa.estado?.toLowerCase() === 'contestada' || durSec > 0 ? 'contestada' : 'no_contesta',
         proveedor: 'Vapi',
         canal_tipo: 'WhatsApp',
       });
@@ -1056,15 +1120,27 @@ export async function actualizarLeadKpiBackend(
  * CRUD de Catálogo
  */
 export async function guardarCatalogoItemBackend(item: any): Promise<boolean> {
+  const payload: Record<string, any> = {
+    nombre_ejecutivo: String(item.nombre_ejecutivo || '').trim(),
+    usuario: item.usuario ? String(item.usuario).trim() : '',
+    extension: item.extension ? String(item.extension).trim() : '',
+    celular: item.celular ? String(item.celular).trim() : '',
+    pais: item.pais || 'SV',
+  };
+  if (!payload.nombre_ejecutivo) return false;
+
   try {
     const method = item.id ? 'PATCH' : 'POST';
-    const url = item.id ? `/api/catalogo/${item.id}` : '/api/catalogo';
+    const url = item.id ? `/api/catalogo/${encodeURIComponent(item.id)}` : '/api/catalogo';
     const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(item),
+      body: JSON.stringify(payload),
     });
-    if (res.ok) return true;
+    if (res.ok) {
+      const json = await res.json().catch(() => ({ exito: true }));
+      if (json?.exito !== false) return true;
+    }
   } catch (err) {
     console.warn('Backend proxy no disponible para catálogo, usando Supabase directo:', err);
   }
@@ -1077,8 +1153,8 @@ export async function guardarCatalogoItemBackend(item: any): Promise<boolean> {
       : `${url}/rest/v1/catalogo`;
     const r = await fetch(targetUrl, {
       method,
-      headers,
-      body: JSON.stringify(item),
+      headers: { ...headers, Prefer: 'return=representation' },
+      body: JSON.stringify(payload),
     });
     return r.ok;
   } catch (e) {
@@ -1117,9 +1193,13 @@ export async function guardarReunionTeamsBackend(reunion: any): Promise<boolean>
 }
 
 export async function eliminarCatalogoItemBackend(id: string): Promise<boolean> {
+  if (!id) return false;
   try {
-    const res = await fetch(`/api/catalogo/${id}`, { method: 'DELETE' });
-    if (res.ok) return true;
+    const res = await fetch(`/api/catalogo/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (res.ok) {
+      const json = await res.json().catch(() => ({ exito: true }));
+      if (json?.exito !== false) return true;
+    }
   } catch (err) {
     console.warn('Backend proxy no disponible para eliminar catálogo, usando Supabase directo:', err);
   }

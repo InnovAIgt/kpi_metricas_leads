@@ -79,7 +79,7 @@ async function fetchPbxEnCaliente(): Promise<any[]> {
     const resultados = await Promise.all(promises);
     const llamadasRaw = resultados.flat();
 
-    return llamadasRaw.map((c: any) => {
+    const llamadasNormalizadas = llamadasRaw.map((c: any) => {
       const ext = c.EXTENSION ? String(c.EXTENSION).trim() : '';
       const durSec = Number(c.DURATION_SEC ?? Math.round(Number(c.DURACION_MINUTOS || 0) * 60));
       const fIso = c.FECHA || (c.SOLO_FECHA ? String(c.SOLO_FECHA).slice(0, 10) + 'T00:00:00.000Z' : new Date().toISOString());
@@ -220,6 +220,7 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Cache-Control', 'no-store');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -228,14 +229,12 @@ export default async function handler(req: any, res: any) {
   try {
     const waOffsets = [0, 1000];
 
-    // PBX, Celular y Leads 100% EN VIVO desde sus respectivas APIs
-    // Únicamente Catalogo, WhatsApp y Teams se leen de Supabase
     const [
       catalogoRes,
       pbxDirecto,
       celDirecto,
-      teamsRaw,
-      waRaw,
+      teamsRawRes,
+      waRawRes,
       prospektiaRes,
       prospektiaNcRes,
     ] = await Promise.all([
@@ -260,6 +259,56 @@ export default async function handler(req: any, res: any) {
         }).then(r => r.ok ? r.json() : null),
       ]).then(([p1, p2]) => [...(p1?.items || []), ...(p2?.items || [])]).catch(() => []),
     ]);
+
+    const catalogo = Array.isArray(catalogoRes) ? catalogoRes : [];
+    const teamsRaw = Array.isArray(teamsRawRes) ? teamsRawRes : [];
+    const llamadasWhatsapp = Array.isArray(waRawRes) ? waRawRes : [];
+
+    // Construir catálogo de asesores para enriquecimiento uniforme
+    const mapaCatalogo = {
+      porExtension: {} as Record<string, any>,
+      porUsuario: {} as Record<string, any>,
+      porCelular: {} as Record<string, any>,
+      porNombre: {} as Record<string, any>,
+    };
+
+    catalogo.forEach((cat: any) => {
+      if (cat.extension && cat.extension !== 'null') mapaCatalogo.porExtension[String(cat.extension).trim()] = cat;
+      if (cat.usuario && cat.usuario !== 'null') mapaCatalogo.porUsuario[String(cat.usuario).trim().toLowerCase()] = cat;
+      if (cat.nombre_ejecutivo) mapaCatalogo.porNombre[String(cat.nombre_ejecutivo).trim().toLowerCase()] = cat;
+      if (cat.celular && cat.celular !== 'null') {
+        const cleanTel = String(cat.celular).replace(/[^0-9]/g, '').slice(-8);
+        if (cleanTel) mapaCatalogo.porCelular[cleanTel] = cat;
+      }
+    });
+
+    const resolverAsesorBackend = (ident: string, fallback: string) => {
+      if (!ident || ident === 'null' || ident === 'undefined') return fallback;
+      const idTrim = String(ident).trim();
+      const idLower = idTrim.toLowerCase();
+      if (mapaCatalogo.porUsuario[idLower]) return mapaCatalogo.porUsuario[idLower].nombre_ejecutivo;
+      if (mapaCatalogo.porExtension[idTrim]) return mapaCatalogo.porExtension[idTrim].nombre_ejecutivo;
+      if (mapaCatalogo.porNombre[idLower]) return mapaCatalogo.porNombre[idLower].nombre_ejecutivo;
+      const cleanDigits = idTrim.replace(/[^0-9]/g, '').slice(-8);
+      if (cleanDigits && mapaCatalogo.porCelular[cleanDigits]) return mapaCatalogo.porCelular[cleanDigits].nombre_ejecutivo;
+      for (const cat of catalogo) {
+        if (cat.usuario && idLower.includes(String(cat.usuario).toLowerCase())) return cat.nombre_ejecutivo;
+        if (cat.nombre_ejecutivo && idLower.includes(String(cat.nombre_ejecutivo).toLowerCase())) return cat.nombre_ejecutivo;
+      }
+      return fallback;
+    };
+
+    const detectarPais = (tel?: string, fallback = 'SV'): string => {
+      if (!tel) return fallback;
+      const num = String(tel).replace(/[^0-9]/g, '');
+      if (num.startsWith('503')) return 'SV';
+      if (num.startsWith('502')) return 'GT';
+      if (num.length === 8) {
+        if (['2', '6', '7'].includes(num[0])) return 'SV';
+        if (['3', '4', '5'].includes(num[0])) return 'GT';
+      }
+      return fallback;
+    };
 
     const mapaLeads = new Map<string, any>();
     const leadsProspektiaApi = prospektiaRes?.leads || [];
@@ -298,7 +347,6 @@ export default async function handler(req: any, res: any) {
       }
     });
 
-    // Ordenar calificados por fecha agendada desc
     leadsCalificadosValidos.sort((a, b) => {
       const fA = `${a.fecha_agendada || a.created_at || ''}T${a.hora_agendada || '00:00'}`;
       const fB = `${b.fecha_agendada || b.created_at || ''}T${b.hora_agendada || '00:00'}`;
@@ -348,6 +396,90 @@ export default async function handler(req: any, res: any) {
 
     const leadsNoCalificados = Array.from(mapaNc.values());
 
+    // Enriquecimiento uniforme de leads, llamadas y Teams
+    leadsCalificadosValidos.forEach((l: any) => {
+      l.asesor_nombre = resolverAsesorBackend(
+        l.asesor_nombre || l.asesor_id,
+        l.asesor_nombre ? String(l.asesor_nombre).trim() : 'Asesor General'
+      );
+      if (!l.nombre_prospecto) l.nombre_prospecto = l.codigo_prospecto ? `Prospecto ${l.codigo_prospecto}` : 'Prospecto Sin Nombre';
+      l.pais = l.pais || detectarPais(l.telefono, 'SV');
+      if (!l.status) l.status = 'Agendado';
+    });
+
+    leadsNoCalificados.forEach((l: any) => {
+      l.advisor_name = resolverAsesorBackend(
+        l.advisor_name,
+        l.advisor_name ? String(l.advisor_name).trim() : 'Asesor Asignado'
+      );
+      if (!l.campaign_name) l.campaign_name = 'Campaña Inbound';
+    });
+
+    celDirecto.forEach((c: any) => {
+      c.asesor_nombre = resolverAsesorBackend(c.usuario, resolverAsesorBackend(c.linea, c.usuario || 'Ejecutivo Celular'));
+      if (!c.operador) c.operador = 'Claro / Tigo';
+    });
+
+    pbxDirecto.forEach((p: any) => {
+      const extStr = p.extension ? String(p.extension).trim() : '';
+      p.asesor_nombre = resolverAsesorBackend(
+        extStr,
+        resolverAsesorBackend(p.nombre, p.nombre || (extStr ? `Ext. ${extStr}` : 'Línea PBX'))
+      );
+      p.pais = p.pais || detectarPais(p.destino, 'SV');
+    });
+
+    const mapaTeamsExistente = new Map<string, any>();
+    teamsRaw.forEach((t: any) => {
+      if (t.codigo_prospecto) {
+        mapaTeamsExistente.set(String(t.codigo_prospecto).trim().toLowerCase(), t);
+      }
+    });
+
+    const llamadasTeams = [...teamsRaw];
+    leadsCalificadosValidos.forEach((lv: any) => {
+      const tipo = String(lv.tipo_reunion || '').toLowerCase();
+      if (tipo.includes('virtual')) {
+        const cod = String(lv.codigo_prospecto || '').trim().toLowerCase();
+        if (!mapaTeamsExistente.has(cod)) {
+          llamadasTeams.push({
+            id: `lead-virtual-${lv.id || lv.codigo_prospecto}`,
+            codigo_prospecto: lv.codigo_prospecto,
+            pais: lv.pais || 'SV',
+            ejecutivo: lv.asesor_nombre,
+            ejecutivo_nombre: lv.asesor_nombre,
+            cliente: lv.nombre_prospecto || (lv.codigo_prospecto ? `Prospecto ${lv.codigo_prospecto}` : 'Cliente Virtual'),
+            fecha_reunion: lv.fecha_agendada || lv.fecha_creado,
+            hora_reunion: lv.hora_agendada || lv.hora_creado,
+            evidencia_url: '',
+            estado_teams: 'Pendiente de realizar',
+            origen_lead_virtual: true,
+            lead_id: lv.id,
+            telefono: lv.telefono,
+          });
+        }
+      }
+    });
+
+    llamadasTeams.forEach((t: any) => {
+      if (t.ejecutivo) {
+        t.ejecutivo_nombre = resolverAsesorBackend(t.ejecutivo, t.ejecutivo);
+      }
+      if (!t.cliente && t.codigo_prospecto) {
+        t.cliente = `Prospecto ${t.codigo_prospecto}`;
+      }
+      if (!t.estado_teams) t.estado_teams = 'Pendiente de realizar';
+    });
+
+    llamadasWhatsapp.forEach((w: any) => {
+      w.asesor_nombre = resolverAsesorBackend(
+        w.numero_ejecutivo,
+        w.numero_ejecutivo ? `Asesor ${w.numero_ejecutivo}` : 'Asesor WhatsApp'
+      );
+      if (!w.estado) w.estado = 'Entregado';
+      if (!w.direccion) w.direccion = 'Saliente';
+    });
+
     return res.status(200).json({
       exito: true,
       timestamp: Date.now(),
@@ -356,18 +488,18 @@ export default async function handler(req: any, res: any) {
         total_leads_no_calificados: leadsNoCalificados.length,
         total_llamadas_pbx: pbxDirecto.length,
         total_llamadas_celular: celDirecto.length,
-        total_llamadas_whatsapp: (Array.isArray(waRaw) ? waRaw : []).length,
-        total_llamadas_teams: (Array.isArray(teamsRaw) ? teamsRaw : []).length,
-        total_catalogo: (Array.isArray(catalogoRes) ? catalogoRes : []).length,
+        total_llamadas_whatsapp: llamadasWhatsapp.length,
+        total_llamadas_teams: llamadasTeams.length,
+        total_catalogo: catalogo.length,
       },
       datos: {
-        catalogo: Array.isArray(catalogoRes) ? catalogoRes : [],
+        catalogo,
         leads: leadsCalificadosValidos,
         leadsNoCalificados,
         llamadasPbx: pbxDirecto,
         llamadasCelular: celDirecto,
-        llamadasTeams: Array.isArray(teamsRaw) ? teamsRaw : [],
-        llamadasWhatsapp: Array.isArray(waRaw) ? waRaw : [],
+        llamadasTeams,
+        llamadasWhatsapp,
       },
     });
   } catch (error: any) {

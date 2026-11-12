@@ -1,14 +1,10 @@
 import React from 'react';
 import {
   CheckCircle,
-  AlertTriangle,
-  XCircle,
   Clock,
   PhoneCall,
   CalendarCheck,
   TrendingUp,
-  UserX,
-  PhoneOff,
   Flame,
 } from 'lucide-react';
 import { ResumenKPIs, CruceAuditoria, ParametrosAuditoria } from '../types';
@@ -28,12 +24,10 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
   onVerDetalleCruce,
   onCambiarTab,
 }) => {
-  // Citas con infracción crítica (No llamó o tarde grave)
   const citasCriticas = cruces.filter(
     (c) => c.estado_cumplimiento === 'NO_LLAMO' || c.estado_cumplimiento === 'TARDE_GRAVE'
   );
 
-  // Desglose para la barra de proporción
   const totalCitas = kpis.total_citas || 1;
   const pctATiempo = Math.round((kpis.citas_llamadas_a_tiempo / totalCitas) * 100);
   const pctRetraso = Math.round((kpis.citas_con_retraso / totalCitas) * 100);
@@ -41,46 +35,46 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
   const pctCorta = Math.round((kpis.citas_llamada_insuficiente / totalCitas) * 100);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 tabular-nums">
       {/* Top Banner KPI Card Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* KPI 1: Tasa de Cumplimiento (Primary Hero KPI) */}
-        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 p-5 shadow-sm">
+        {/* KPI 1: Tasa de Cumplimiento */}
+        <div className="relative overflow-hidden rounded-2xl bg-white dark:bg-gradient-to-br dark:from-slate-900 dark:to-slate-950 border border-slate-200 dark:border-slate-800 p-5 shadow-xs">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
               Cumplimiento a Tiempo
             </span>
             <div
-              className={`p-2 rounded-xl ${
+              className={`p-2 rounded-xl border ${
                 kpis.tasa_cumplimiento_general >= 75
-                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                  ? 'bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
                   : kpis.tasa_cumplimiento_general >= 50
-                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                  : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                  ? 'bg-amber-50 text-amber-600 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'
+                  : 'bg-rose-50 text-rose-600 border-rose-200 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20'
               }`}
             >
               <CheckCircle className="h-5 w-5" />
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+            <span className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
               {kpis.tasa_cumplimiento_general}%
             </span>
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-slate-500 dark:text-slate-400">
               ({kpis.citas_llamadas_a_tiempo} de {kpis.total_citas} citas)
             </span>
           </div>
-          <p className="mt-2 text-xs text-slate-400">
-            Tolerancia: dentro de +{parametros.tolerancia_retraso_a_tiempo_minutos} min y duración ≥{' '}
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Tolerancia: -{parametros.tolerancia_anticipacion_minutos} / +{parametros.tolerancia_retraso_a_tiempo_minutos} min y duración ≥{' '}
             {parametros.duracion_minima_efectiva_segundos}s
           </p>
-          <div className="mt-3 w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+          <div className="mt-3 w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
                 kpis.tasa_cumplimiento_general >= 75
-                  ? 'bg-emerald-400'
+                  ? 'bg-emerald-500 dark:bg-emerald-400'
                   : kpis.tasa_cumplimiento_general >= 50
-                  ? 'bg-amber-400'
+                  ? 'bg-amber-500 dark:bg-amber-400'
                   : 'bg-rose-500'
               }`}
               style={{ width: `${Math.min(kpis.tasa_cumplimiento_general, 100)}%` }}
@@ -89,73 +83,75 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
         </div>
 
         {/* KPI 2: Citas Agendadas y Asistencia */}
-        <div className="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 p-5 shadow-sm">
+        <div className="rounded-2xl bg-white dark:bg-gradient-to-br dark:from-slate-900 dark:to-slate-950 border border-slate-200 dark:border-slate-800 p-5 shadow-xs">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
               Citas Agendadas
             </span>
-            <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
+            <div className="p-2 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20">
               <CalendarCheck className="h-5 w-5" />
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+            <span className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
               {kpis.total_citas}
             </span>
-            <span className="text-xs text-emerald-400 font-medium">
+            <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
               {kpis.tasa_shows_efectivos}% Asistidas
             </span>
           </div>
-          <div className="mt-3 flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-800/80">
+          <div className="mt-3 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-800/80">
             <span>Infracciones (No llamó):</span>
-            <span className="font-semibold text-rose-400">{kpis.citas_no_atendidas} citas</span>
+            <span className="font-semibold text-rose-600 dark:text-rose-400">{kpis.citas_no_atendidas} citas</span>
           </div>
         </div>
 
         {/* KPI 3: Llamadas y Minutos Hablados */}
-        <div className="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 p-5 shadow-sm">
+        <div className="rounded-2xl bg-white dark:bg-gradient-to-br dark:from-slate-900 dark:to-slate-950 border border-slate-200 dark:border-slate-800 p-5 shadow-xs">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
               Llamadas Realizadas
             </span>
-            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+            <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20">
               <PhoneCall className="h-5 w-5" />
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+            <span className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
               {kpis.total_llamadas}
             </span>
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-slate-500 dark:text-slate-400">
               ({kpis.duracion_total_llamadas_horas} horas en línea)
             </span>
           </div>
-          <div className="mt-3 flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-800/80">
+          <div className="mt-3 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-800/80">
             <span>Llamadas Cortas/Buzón:</span>
-            <span className="font-semibold text-amber-400">{kpis.citas_llamada_insuficiente}</span>
+            <span className="font-semibold text-amber-600 dark:text-amber-400">{kpis.citas_llamada_insuficiente}</span>
           </div>
         </div>
 
         {/* KPI 4: Desfase Promedio */}
-        <div className="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 p-5 shadow-sm">
+        <div className="rounded-2xl bg-white dark:bg-gradient-to-br dark:from-slate-900 dark:to-slate-950 border border-slate-200 dark:border-slate-800 p-5 shadow-xs">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
               Desfase Promedio
             </span>
-            <div className="p-2 rounded-xl bg-violet-500/10 text-violet-400 border border-violet-500/20">
+            <div className="p-2 rounded-xl bg-violet-50 text-violet-600 border border-violet-200 dark:bg-violet-500/10 dark:text-violet-400 dark:border-violet-500/20">
               <Clock className="h-5 w-5" />
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-              +{kpis.promedio_tiempo_respuesta_minutos}
+            <span className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+              {kpis.promedio_tiempo_respuesta_minutos > 0
+                ? `+${kpis.promedio_tiempo_respuesta_minutos}`
+                : kpis.promedio_tiempo_respuesta_minutos}
             </span>
-            <span className="text-sm font-medium text-slate-400">minutos</span>
+            <span className="text-sm font-medium text-slate-500 dark:text-slate-400">minutos</span>
           </div>
-          <p className="mt-2 text-xs text-slate-400">
-            Retrasos leves: <strong className="text-amber-300">{kpis.citas_con_retraso}</strong> |
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Con retraso: <strong className="text-amber-600 dark:text-amber-300">{kpis.citas_con_retraso}</strong> |
             Tardanzas severas:{' '}
-            <strong className="text-rose-400">
+            <strong className="text-rose-600 dark:text-rose-400">
               {cruces.filter((c) => c.estado_cumplimiento === 'TARDE_GRAVE').length}
             </strong>
           </p>
@@ -163,27 +159,28 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
       </div>
 
       {/* Visual Distribution Bar of Meeting Outcomes */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-sm">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-2">
           <div>
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-indigo-400" />
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-indigo-500 dark:text-indigo-400" />
               Distribución de Cumplimiento de Citas
             </h3>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               Cruce automático según hora pactada en el calendario vs inicio de llamada en telefonía
             </p>
           </div>
           <button
+            type="button"
             onClick={() => onCambiarTab('cruces')}
-            className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold self-start sm:self-auto"
+            className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 font-semibold self-start sm:self-auto cursor-pointer"
           >
-            Ver tabla de cruces completa →
+            Ver detalle de cumplimiento →
           </button>
         </div>
 
         {/* Multi-segmented Progress Bar */}
-        <div className="w-full h-4 bg-slate-800 rounded-full overflow-hidden flex shadow-inner">
+        <div className="w-full h-4 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden flex shadow-inner">
           <div
             style={{ width: `${pctATiempo}%` }}
             className="bg-emerald-500 h-full transition-all hover:opacity-90"
@@ -210,25 +207,25 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 text-xs">
           <div className="flex items-center gap-2">
             <span className="h-3 w-3 rounded-full bg-emerald-500 shrink-0" />
-            <span className="text-slate-300">
+            <span className="text-slate-700 dark:text-slate-300">
               A Tiempo: <strong>{pctATiempo}%</strong> ({kpis.citas_llamadas_a_tiempo})
             </span>
           </div>
           <div className="flex items-center gap-2">
             <span className="h-3 w-3 rounded-full bg-amber-400 shrink-0" />
-            <span className="text-slate-300">
+            <span className="text-slate-700 dark:text-slate-300">
               Con Retraso: <strong>{pctRetraso}%</strong> ({kpis.citas_con_retraso})
             </span>
           </div>
           <div className="flex items-center gap-2">
             <span className="h-3 w-3 rounded-full bg-orange-500 shrink-0" />
-            <span className="text-slate-300">
+            <span className="text-slate-700 dark:text-slate-300">
               Corta / Buzón: <strong>{pctCorta}%</strong> ({kpis.citas_llamada_insuficiente})
             </span>
           </div>
           <div className="flex items-center gap-2">
             <span className="h-3 w-3 rounded-full bg-rose-500 shrink-0" />
-            <span className="text-slate-300">
+            <span className="text-slate-700 dark:text-slate-300">
               No Llamó: <strong>{pctNoLlamo}%</strong> ({kpis.citas_no_atendidas})
             </span>
           </div>
@@ -237,15 +234,15 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
 
       {/* Critical Alerts & Quick Insights */}
       {citasCriticas.length > 0 && (
-        <div className="bg-rose-950/20 border border-rose-900/40 rounded-2xl p-5">
+        <div className="bg-rose-50/70 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/40 rounded-2xl p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <Flame className="h-5 w-5 text-rose-400 animate-bounce" />
-              <h3 className="text-sm font-bold text-rose-200">
+              <Flame className="h-5 w-5 text-rose-500 dark:text-rose-400" />
+              <h3 className="text-sm font-bold text-rose-900 dark:text-rose-200">
                 Infracciones Críticas Detectadas ({citasCriticas.length})
               </h3>
             </div>
-            <span className="text-xs text-rose-400 bg-rose-900/40 px-2 py-0.5 rounded-full border border-rose-800">
+            <span className="text-xs text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-900/40 px-2.5 py-0.5 rounded-full border border-rose-200 dark:border-rose-800 font-medium">
               Requiere Auditoría Inmediata
             </span>
           </div>
@@ -254,28 +251,28 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
             {citasCriticas.slice(0, 3).map((item) => (
               <div
                 key={item.id}
-                className="bg-slate-900/90 border border-rose-900/40 p-3 rounded-xl hover:border-rose-700/60 transition-colors cursor-pointer"
+                className="bg-white dark:bg-slate-900/90 border border-rose-200 dark:border-rose-900/40 p-3 rounded-xl hover:border-rose-400 dark:hover:border-rose-700/60 transition-colors cursor-pointer shadow-xs"
                 onClick={() => onVerDetalleCruce(item.id)}
               >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-xs font-semibold text-white">{item.prospecto_nombre}</p>
-                    <p className="text-[11px] text-slate-400">Vendedor: {item.vendedor_nombre}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">{item.prospecto_nombre}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Vendedor: {item.vendedor_nombre}</p>
                   </div>
                   <span
-                    className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                    className={`text-[10px] px-2 py-0.5 rounded-full font-bold shrink-0 ${
                       item.estado_cumplimiento === 'NO_LLAMO'
-                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                        ? 'bg-rose-100 text-rose-700 border border-rose-200 dark:bg-rose-500/20 dark:text-rose-300 dark:border-rose-500/40'
+                        : 'bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-500/20 dark:text-amber-300 dark:border-amber-500/40'
                     }`}
                   >
                     {item.estado_cumplimiento === 'NO_LLAMO' ? 'NO LLAMÓ' : `+${item.desfase_minutos}m TARDE`}
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-300 mt-2 line-clamp-2">{item.explicacion}</p>
-                <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-400">
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-2 line-clamp-2">{item.explicacion}</p>
+                <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400">
                   <span>Tel: {item.telefono}</span>
-                  <span className="text-indigo-400 hover:underline">Ver detalle →</span>
+                  <span className="text-indigo-600 dark:text-indigo-400 hover:underline font-medium">Ver detalle →</span>
                 </div>
               </div>
             ))}

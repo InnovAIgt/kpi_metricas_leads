@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { CheckCircle2, Search, Filter } from 'lucide-react';
+import { CheckCircle2, Search, Download } from 'lucide-react';
 import { Cita, ModoLeads } from '../types';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
 import { DateRangeFilter } from './DateRangeFilter';
-import { getRangoDefaultLeads } from '../utils/dateHelpers';
+import { getRangoDefaultLeads, formatLocalDate } from '../utils/dateHelpers';
+import { exportarLibroExcel, formatearSubtituloExportacion } from '../utils/excelExport';
 
 interface VistaKpiRetroalimentacionProps {
   citas: Cita[];
@@ -17,6 +18,7 @@ export const VistaKpiRetroalimentacion: React.FC<VistaKpiRetroalimentacionProps>
   tipoLeadActual = 'calificados',
 }) => {
   const [busqueda, setBusqueda] = useState('');
+  const [exportando, setExportando] = useState(false);
   const rangoInicial = getRangoDefaultLeads();
   const [fechaInicio, setFechaInicio] = useState(rangoInicial.inicio);
   const [fechaFin, setFechaFin] = useState(rangoInicial.fin);
@@ -140,6 +142,83 @@ export const VistaKpiRetroalimentacion: React.FC<VistaKpiRetroalimentacionProps>
   const e3Ok = citasConFecha.filter((c) => c.kpi_retroalimentacion_etapa_3).length;
   const e4Ok = citasConFecha.filter((c) => c.kpi_retroalimentacion_etapa_4).length;
 
+  const handleExportarExcel = async () => {
+    setExportando(true);
+    try {
+      const fTotal = filtrados.length;
+      const fe1 = filtrados.filter((c) => c.kpi_retroalimentacion_etapa_1).length;
+      const fe2 = filtrados.filter((c) => c.kpi_retroalimentacion_etapa_2).length;
+      const fe3 = filtrados.filter((c) => c.kpi_retroalimentacion_etapa_3).length;
+      const fe4 = filtrados.filter((c) => c.kpi_retroalimentacion_etapa_4).length;
+
+      await exportarLibroExcel(
+        `KPI_3_Retroalimentacion_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        [
+          {
+            name: 'Resumen Etapas',
+            title: 'KPI 3: Resumen de Retroalimentación de Etapas',
+            subtitle: formatearSubtituloExportacion({
+              fechaInicio,
+              fechaFin,
+              totalFilas: fTotal,
+              modo: tipoLeadActual === 'no_calificados' ? 'Leads No Calificados' : 'Leads Calificados',
+            }),
+            accentHex: '059669',
+            columns: [
+              { header: 'Etapa', key: 'etapa', width: 30 },
+              { header: 'Con Retroalimentación', key: 'cumplen', align: 'right' },
+              { header: 'Total Filtrados', key: 'total', align: 'right' },
+              { header: '% Cumplimiento', key: 'pct', numFmt: '0%', align: 'right' },
+            ],
+            rows: [
+              { etapa: 'Etapa 1: Calificación', cumplen: fe1, total: fTotal, pct: fTotal > 0 ? fe1 / fTotal : 0 },
+              { etapa: 'Etapa 2: Propuesta', cumplen: fe2, total: fTotal, pct: fTotal > 0 ? fe2 / fTotal : 0 },
+              { etapa: 'Etapa 3: Objeciones', cumplen: fe3, total: fTotal, pct: fTotal > 0 ? fe3 / fTotal : 0 },
+              { etapa: 'Etapa 4: Cierre', cumplen: fe4, total: fTotal, pct: fTotal > 0 ? fe4 / fTotal : 0 },
+            ],
+          },
+          {
+            name: 'Detalle Retroalimentación',
+            title: 'Detalle de Retroalimentación por Lead',
+            subtitle: formatearSubtituloExportacion({
+              fechaInicio,
+              fechaFin,
+              totalFilas: fTotal,
+              modo: tipoLeadActual === 'no_calificados' ? 'Leads No Calificados' : 'Leads Calificados',
+              extra: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
+            }),
+            accentHex: '1E293B',
+            columns: [
+              { header: 'Código', key: 'codigo_prospecto', value: (c) => c.codigo_prospecto || c.id },
+              { header: 'Prospecto / Lead', key: 'prospecto_nombre', width: 28 },
+              { header: 'Teléfono', key: 'prospecto_telefono', width: 16 },
+              { header: 'Asesor', key: 'vendedor_nombre', width: 24 },
+              {
+                header: 'Fecha / Hora',
+                key: 'fecha_hora_programada',
+                value: (c) =>
+                  c.fecha_agendada && c.hora_agendada
+                    ? `${c.fecha_agendada} ${c.hora_agendada}`
+                    : c.fecha_hora_programada
+                    ? c.fecha_hora_programada.replace('T', ' ').slice(0, 16)
+                    : 'N/D',
+                align: 'center',
+              },
+              { header: 'País', key: 'pais', value: (c) => c.pais || 'SV', align: 'center' },
+              { header: 'Etapa 1', key: 'kpi_retroalimentacion_etapa_1', value: (c) => (c.kpi_retroalimentacion_etapa_1 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
+              { header: 'Etapa 2', key: 'kpi_retroalimentacion_etapa_2', value: (c) => (c.kpi_retroalimentacion_etapa_2 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
+              { header: 'Etapa 3', key: 'kpi_retroalimentacion_etapa_3', value: (c) => (c.kpi_retroalimentacion_etapa_3 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
+              { header: 'Etapa 4', key: 'kpi_retroalimentacion_etapa_4', value: (c) => (c.kpi_retroalimentacion_etapa_4 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
+            ],
+            rows: filtrados,
+          },
+        ]
+      );
+    } finally {
+      setExportando(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -154,13 +233,25 @@ export const VistaKpiRetroalimentacion: React.FC<VistaKpiRetroalimentacionProps>
               Marca Sí/No para registrar la retroalimentación recibida en cada una de las 4 etapas del prospecto. Se sincroniza directo con <code className="text-emerald-600 dark:text-emerald-300 font-mono">public.{tipoLeadActual === 'no_calificados' ? 'leads_no_calificados' : 'leads'}</code>.
             </p>
           </div>
-          <div className="text-xs font-mono text-slate-700 dark:text-slate-400 bg-slate-100 dark:bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800">
-            {filtrados.length} / {total} Leads
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleExportarExcel}
+              disabled={exportando || filtrados.length === 0}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              title="Descargar resumen y detalle filtrado en Excel (.xlsx)"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+            </button>
+            <div className="text-xs font-mono tabular-nums text-slate-700 dark:text-slate-400 bg-slate-100 dark:bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800">
+              {filtrados.length} / {total} Leads
+            </div>
           </div>
         </div>
 
         {/* Estadísticas de Retroalimentación */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 tabular-nums">
           <div className="bg-emerald-50 dark:bg-emerald-950/20 p-3 rounded-lg border border-emerald-200 dark:border-emerald-900/40">
             <span className="text-xs text-emerald-800 dark:text-emerald-300 font-medium">Etapa 1: Calificación</span>
             <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">

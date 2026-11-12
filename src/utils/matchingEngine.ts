@@ -90,6 +90,28 @@ export function coincideVendedor(
 }
 
 /**
+ * Parsea fechas ISO o YYYY-MM-DDTHH:mm:ss como hora reloj de El Salvador/Guatemala sin desfase de zona horaria del navegador.
+ */
+export function parseWallClockSV(fechaStr?: string | null): Date {
+  if (!fechaStr) return new Date(NaN);
+  const clean = String(fechaStr).trim();
+  const m = clean.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (m) {
+    const [, y, mo, d, h = '00', mi = '00', s = '00'] = m;
+    return new Date(
+      parseInt(y, 10),
+      parseInt(mo, 10) - 1,
+      parseInt(d, 10),
+      parseInt(h, 10),
+      parseInt(mi, 10),
+      parseInt(s, 10),
+      0
+    );
+  }
+  return new Date(clean);
+}
+
+/**
  * Valida si una fecha/hora cae dentro del horario laboral de lunes a viernes (8:00 AM a 6:00 PM)
  */
 export function estaEnHorarioLaboral(
@@ -97,7 +119,7 @@ export function estaEnHorarioLaboral(
   horaInicioStr = '08:00',
   horaFinStr = '18:00'
 ): boolean {
-  const d = new Date(fechaIso);
+  const d = parseWallClockSV(fechaIso);
   if (isNaN(d.getTime())) return true;
 
   // Lunes a Viernes: getDay() 1 = Lunes, 5 = Viernes. (0 = Domingo, 6 = Sábado)
@@ -110,8 +132,8 @@ export function estaEnHorarioLaboral(
   const [hFin, mFin] = horaFinStr.split(':').map(Number);
 
   const minutosDia = d.getHours() * 60 + d.getMinutes();
-  const inicioMinutos = (hIni || 8) * 60 + (mIni || 0);
-  const finMinutos = (hFin || 18) * 60 + (mFin || 0);
+  const inicioMinutos = (hIni ?? 8) * 60 + (mIni ?? 0);
+  const finMinutos = (hFin ?? 18) * 60 + (mFin ?? 0);
 
   return minutosDia >= inicioMinutos && minutosDia <= finMinutos;
 }
@@ -129,7 +151,7 @@ export function calcularLimiteLlamadaNoCalificado(
   horaLaboralInicio = '08:00',
   horaLaboralFin = '18:00'
 ): { fechaLimite: Date; dentroDeHorarioLaboral: boolean; plazoDescripcion: string } {
-  const ingreso = new Date(fechaIngresoIso);
+  const ingreso = parseWallClockSV(fechaIngresoIso);
   if (isNaN(ingreso.getTime())) {
     const ahora = new Date();
     return {
@@ -168,7 +190,7 @@ export function calcularLimiteLlamadaNoCalificado(
     // Lunes a Jueves fuera de horario:
     const minutosDia = ingreso.getHours() * 60 + ingreso.getMinutes();
     const [hFin, mFin] = horaLaboralFin.split(':').map(Number);
-    const finMinutos = (hFin || 18) * 60 + (mFin || 0);
+    const finMinutos = (hFin ?? 18) * 60 + (mFin ?? 0);
 
     if (minutosDia > finMinutos) {
       // Después de las 6:00 PM -> Mañana a las 9:00 AM
@@ -191,7 +213,7 @@ export function calcularLimiteLlamadaNoCalificado(
  * (PBX, Celular, WhatsApp, Teams).
  *
  * Soporta dos modos:
- * 1. Leads Calificados: Ventana de cita agendada (+/- 5 minutos).
+ * 1. Leads Calificados: Ventana de cita agendada (por defecto ±15 minutos antes/después).
  * 2. Leads No Calificados: Regla de 1 hora o hasta las 9:00 AM del siguiente día hábil.
  */
 export function ejecutarCruceAuditoria(
@@ -202,10 +224,13 @@ export function ejecutarCruceAuditoria(
   const cruces: CruceAuditoria[] = [];
   const llamadasUsadas = new Set<string>();
 
-  // Pre-indexar llamadas en Map para O(1) instantáneo (elimina bloqueo de la UI)
+  const tolAntes = parametros.tolerancia_anticipacion_minutos ?? 15;
+  const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 15;
+  const umbralGrave = parametros.umbral_retraso_grave_minutos ?? 30;
+
+  // Pre-indexar llamadas en Map para O(1) instantáneo
   const mapaPorTel = new Map<string, Llamada[]>();
   const mapaPorNombre = new Map<string, Llamada[]>();
-  const mapaPorCodigo = new Map<string, Llamada[]>();
 
   llamadas.forEach((call) => {
     const rawTel = normalizarTelefono(call.telefono_marcado);
@@ -232,7 +257,7 @@ export function ejecutarCruceAuditoria(
 
   citas.forEach((cita) => {
     const esNoCalificado = cita.tipo_lead === 'no_calificados';
-    const fechaCita = new Date(cita.fecha_hora_programada);
+    const fechaCita = parseWallClockSV(cita.fecha_hora_programada);
     const esFechaValida = !isNaN(fechaCita.getTime());
 
     // Búsqueda ultra-rápida O(1) por teléfono o nombre
@@ -253,46 +278,45 @@ export function ejecutarCruceAuditoria(
           parametros.horario_laboral_fin || '18:00'
         );
 
-      // Buscar si se realizó alguna llamada posterior a la creación del lead
+      // Buscar llamadas posteriores al ingreso del lead (margen -15 min solo para desfase mínimo de sincronización)
       let mejorLlamada: Llamada | undefined;
       let mejorFechaCall: Date | null = null;
 
-      // Priorizar llamadas realizadas por el asesor asignado (usuario/extensión/celular)
       const llamadasMismoAsesor = llamadasProspecto.filter((c) =>
         coincideVendedor(cita.vendedor_nombre, c.vendedor_nombre)
       );
-      const poolLlamadas = llamadasMismoAsesor.length > 0 ? llamadasMismoAsesor : llamadasProspecto;
 
-      // Ordenar llamadas del prospecto cronológicamente para evaluar la primera respuesta
-      const llamadasOrdenadas = [...poolLlamadas].sort((a, b) => {
-        return new Date(a.fecha_hora_inicio).getTime() - new Date(b.fecha_hora_inicio).getTime();
-      });
-
-      for (const c of llamadasOrdenadas) {
-        const fCall = new Date(c.fecha_hora_inicio);
-        if (!isNaN(fCall.getTime())) {
-          // Si la llamada fue después de la hora de ingreso (o hasta 5 min antes por sincronización)
-          if (fCall.getTime() >= fechaCita.getTime() - 5 * 60 * 1000) {
-            mejorLlamada = c;
-            mejorFechaCall = fCall;
-            break;
+      const buscarPrimeraPosterior = (lista: Llamada[]) => {
+        const ordenadas = [...lista].sort((a, b) => {
+          return parseWallClockSV(a.fecha_hora_inicio).getTime() - parseWallClockSV(b.fecha_hora_inicio).getTime();
+        });
+        for (const c of ordenadas) {
+          const fCall = parseWallClockSV(c.fecha_hora_inicio);
+          if (!isNaN(fCall.getTime())) {
+            if (!esFechaValida || fCall.getTime() >= fechaCita.getTime() - 15 * 60 * 1000) {
+              return { call: c, fecha: fCall };
+            }
           }
         }
-      }
+        return null;
+      };
 
-      // Si no hay posterior, tomar la más cercana
-      if (!mejorLlamada && llamadasProspecto.length > 0) {
-        mejorLlamada = llamadasProspecto[0];
-        mejorFechaCall = new Date(mejorLlamada.fecha_hora_inicio);
+      // Priorizar llamada posterior del asesor asignado; si no existe, verificar si otro asesor del equipo lo contactó tras su ingreso
+      const encontrada =
+        buscarPrimeraPosterior(llamadasMismoAsesor) ||
+        buscarPrimeraPosterior(llamadasProspecto);
+
+      if (encontrada) {
+        mejorLlamada = encontrada.call;
+        mejorFechaCall = encontrada.fecha;
       }
 
       if (mejorLlamada && mejorFechaCall) {
         llamadasUsadas.add(mejorLlamada.id);
 
-        // Comparar hora de la llamada con la fecha límite
-        const diffMinutosDesdeIngreso = Math.round(
-          (mejorFechaCall.getTime() - fechaCita.getTime()) / (1000 * 60)
-        );
+        const diffMinutosDesdeIngreso = esFechaValida
+          ? Math.max(0, Math.round((mejorFechaCall.getTime() - fechaCita.getTime()) / (1000 * 60)))
+          : 0;
         const sePasoDelLimite = mejorFechaCall.getTime() > fechaLimite.getTime();
 
         let estado: EstadoCumplimiento = 'A_TIEMPO';
@@ -302,7 +326,7 @@ export function ejecutarCruceAuditoria(
           const minutosTarde = Math.round(
             (mejorFechaCall.getTime() - fechaLimite.getTime()) / (1000 * 60)
           );
-          estado = minutosTarde > 30 ? 'TARDE_GRAVE' : 'TARDE_LEVE';
+          estado = minutosTarde > umbralGrave ? 'TARDE_GRAVE' : 'TARDE_LEVE';
           explicacion = `Llamó tarde: se contactó ${minutosTarde} min después del límite permitido (${plazoDescripcion}).`;
         } else {
           estado = 'A_TIEMPO';
@@ -328,7 +352,7 @@ export function ejecutarCruceAuditoria(
           fuera_de_horario: !dentroDeHorarioLaboral,
         });
       } else {
-        // No llamó aún
+        // No llamó aún después del ingreso del lead
         const esFutura = esFechaProxima(cita.fecha_hora_programada);
         const estado: EstadoCumplimiento = esFutura ? 'PENDIENTE' : 'NO_LLAMO';
         cruces.push({
@@ -343,7 +367,7 @@ export function ejecutarCruceAuditoria(
           estado_cumplimiento: estado,
           explicacion: esFutura
             ? `Lead pendiente de contactar (${cita.fecha_hora_programada.slice(0, 10)}). Fecha próxima (no hoy o en el pasado).`
-            : `No se encontró llamada al número ${cita.prospecto_telefono || 'sin teléfono'}. Plazo límite era: ${plazoDescripcion}.`,
+            : `No se encontró llamada posterior al ingreso para el número ${cita.prospecto_telefono || 'sin teléfono'}. Plazo límite era: ${plazoDescripcion}.`,
           fuera_de_horario: !dentroDeHorarioLaboral,
         });
       }
@@ -351,30 +375,33 @@ export function ejecutarCruceAuditoria(
       return;
     }
 
-    // 3. Leads Calificados: Ventana pactada (+/- 5 minutos, o llamadas del mismo día)
+    // 3. Leads Calificados: Ventana pactada (±15 min por defecto, o llamadas del mismo día)
     let mejorLlamada: Llamada | undefined;
     let menorDiferenciaMs = Infinity;
 
-    // Priorizar llamadas realizadas por el asesor asignado al lead (por usuario, extensión o celular)
     const llamadasMismoAsesor = llamadasProspecto.filter((c) =>
       coincideVendedor(cita.vendedor_nombre, c.vendedor_nombre)
     );
-    const poolLlamadas = llamadasMismoAsesor.length > 0 ? llamadasMismoAsesor : llamadasProspecto;
 
     const fProg =
       cita.fecha_agendada ||
       cita.fecha_creado ||
       (cita.fecha_hora_programada ? cita.fecha_hora_programada.slice(0, 10) : '');
 
-    // Buscar si hay llamadas el MISMO DÍA agendado
-    const llamadasMismoDia = poolLlamadas.filter((c) => {
+    // Primero buscar llamadas del MISMO DÍA agendado (priorizando mismo asesor, sino cualquier llamada al prospecto ese día)
+    const misLlamadasMismoDia = llamadasMismoAsesor.filter((c) => {
       const fCall = c.fecha_hora_inicio ? c.fecha_hora_inicio.slice(0, 10) : '';
-      return fCall && fCall === fProg;
+      return Boolean(fProg && fCall && fCall === fProg);
     });
+    const todasLlamadasMismoDia = llamadasProspecto.filter((c) => {
+      const fCall = c.fecha_hora_inicio ? c.fecha_hora_inicio.slice(0, 10) : '';
+      return Boolean(fProg && fCall && fCall === fProg);
+    });
+    const llamadasMismoDia = misLlamadasMismoDia.length > 0 ? misLlamadasMismoDia : todasLlamadasMismoDia;
 
     if (llamadasMismoDia.length > 0) {
       llamadasMismoDia.forEach((candidata) => {
-        const fechaLlamada = new Date(candidata.fecha_hora_inicio);
+        const fechaLlamada = parseWallClockSV(candidata.fecha_hora_inicio);
         const diffMs = esFechaValida && !isNaN(fechaLlamada.getTime())
           ? Math.abs(fechaLlamada.getTime() - fechaCita.getTime())
           : 0;
@@ -384,9 +411,30 @@ export function ejecutarCruceAuditoria(
           mejorLlamada = candidata;
         }
       });
-    } else if (poolLlamadas.length > 0) {
-      // Se llamó pero en una fecha / día diferente al agendado
-      mejorLlamada = poolLlamadas[0];
+    } else {
+      // Si no hay llamadas el mismo día agendado, buscar llamadas de otro día pero recientes respecto al lead (no de meses anteriores al lead)
+      const fCreacionLead = (cita.fecha_creado || fProg || '').slice(0, 10);
+      const basePool = llamadasMismoAsesor.length > 0 ? llamadasMismoAsesor : llamadasProspecto;
+      const candidatasOtroDia = basePool
+        .filter((c) => {
+          const fCall = c.fecha_hora_inicio ? c.fecha_hora_inicio.slice(0, 10) : '';
+          if (!fCall) return false;
+          if (fCreacionLead && fCall < fCreacionLead) return false;
+          return true;
+        })
+        .sort((a, b) => {
+          const diffA = esFechaValida
+            ? Math.abs(parseWallClockSV(a.fecha_hora_inicio).getTime() - fechaCita.getTime())
+            : 0;
+          const diffB = esFechaValida
+            ? Math.abs(parseWallClockSV(b.fecha_hora_inicio).getTime() - fechaCita.getTime())
+            : 0;
+          return diffA - diffB;
+        });
+
+      if (candidatasOtroDia.length > 0) {
+        mejorLlamada = candidatasOtroDia[0];
+      }
     }
 
     const dentroDeHorarioLaboral = estaEnHorarioLaboral(
@@ -397,7 +445,7 @@ export function ejecutarCruceAuditoria(
 
     if (mejorLlamada) {
       llamadasUsadas.add(mejorLlamada.id);
-      const fechaLlamada = new Date(mejorLlamada.fecha_hora_inicio);
+      const fechaLlamada = parseWallClockSV(mejorLlamada.fecha_hora_inicio);
       const fCallStr = mejorLlamada.fecha_hora_inicio ? mejorLlamada.fecha_hora_inicio.slice(0, 10) : '';
 
       // Si la llamada fue en un día diferente al día pactado
@@ -431,27 +479,23 @@ export function ejecutarCruceAuditoria(
       let estado: EstadoCumplimiento = 'A_TIEMPO';
       let explicacion = '';
 
-      const tolAntes = parametros.tolerancia_anticipacion_minutos || 5;
-      const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos || 5;
-      const umbralGrave = parametros.umbral_retraso_grave_minutos || 15;
-
       if (desfaseMinutos > umbralGrave) {
         estado = 'TARDE_GRAVE';
-        explicacion = `Retraso severo: llamó ${desfaseMinutos} min después de la hora pactada.`;
+        explicacion = `Retraso severo: llamó ${desfaseMinutos} min después de la hora pactada (umbral > ${umbralGrave} min).`;
       } else if (desfaseMinutos > tolDespues) {
         estado = 'TARDE_LEVE';
-        explicacion = `Llamó tarde (+${desfaseMinutos} min, tolerancia max: +${tolDespues} min).`;
+        explicacion = `Llamó tarde (+${desfaseMinutos} min, tolerancia máx: +${tolDespues} min).`;
       } else if (desfaseMinutos < -tolAntes) {
         estado = 'ADELANTADA';
-        explicacion = `Llamó antes (${Math.abs(desfaseMinutos)} min de anticipación, tolerancia max: -${tolAntes} min).`;
+        explicacion = `Llamó antes (${Math.abs(desfaseMinutos)} min de anticipación, tolerancia máx: -${tolAntes} min).`;
       } else {
         estado = 'A_TIEMPO';
         const detalle =
           desfaseMinutos === 0
-            ? 'exacto en punto'
+            ? 'exacto en punto (a la hora acordada)'
             : desfaseMinutos > 0
-            ? `+${desfaseMinutos} min después (dentro de tolerancia ±5 min)`
-            : `${desfaseMinutos} min antes (dentro de tolerancia ±5 min)`;
+            ? `+${desfaseMinutos} min después (dentro de tolerancia ±${tolDespues} min)`
+            : `${Math.abs(desfaseMinutos)} min antes (dentro de tolerancia -${tolAntes} min)`;
         explicacion = `A tiempo: ${detalle} por ${mejorLlamada.canal_tipo || mejorLlamada.proveedor}.`;
       }
 
@@ -477,9 +521,9 @@ export function ejecutarCruceAuditoria(
       // Cita sin llamada
       const esFutura = esFechaProxima(cita.fecha_agendada || cita.fecha_hora_programada);
       const estado: EstadoCumplimiento = esFutura ? 'PENDIENTE' : 'NO_LLAMO';
-      const fProg = cita.fecha_agendada || cita.fecha_hora_programada.slice(0, 10);
+      const fProgLabel = cita.fecha_agendada || cita.fecha_hora_programada.slice(0, 10);
       const explicacion = esFutura
-        ? `Cita agendada pendiente (${fProg}). Fecha próxima (no hoy o en el pasado). Aún no vence la reunión.`
+        ? `Cita agendada pendiente (${fProgLabel}). Fecha próxima (no hoy o en el pasado). Aún no vence la reunión.`
         : `No se encontró llamada al teléfono ${cita.prospecto_telefono || 'sin número'} ni Teams a la hora agendada.`;
 
       cruces.push({

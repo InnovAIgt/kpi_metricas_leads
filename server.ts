@@ -9,7 +9,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+const cliPortIdx = process.argv.indexOf('--port');
+const cliPort = cliPortIdx >= 0 ? Number(process.argv[cliPortIdx + 1]) : NaN;
+const nginxPort = Number(process.env.NGINX_PORT || 0);
+const rawEnvPort = Number(process.env.PORT || 0);
+const defaultAppPort = Number(process.env.DEFAULT_APP_PORT || 3000);
+const PORT =
+  (!Number.isNaN(cliPort) && cliPort > 0
+    ? cliPort
+    : process.env.NODE_ENV !== 'production' || (rawEnvPort && rawEnvPort === nginxPort)
+    ? defaultAppPort
+    : rawEnvPort || defaultAppPort) || 3000;
 
 app.use(express.json());
 
@@ -697,6 +707,7 @@ app.patch('/api/leads/:id', async (req, res) => {
     }
 
     const data = await response.json();
+    cacheDatosCompletos = null;
     return res.json({ exito: true, data });
   } catch (err: any) {
     return res.status(500).json({ exito: false, mensaje: err?.message });
@@ -740,7 +751,11 @@ app.post('/api/teams', async (req, res) => {
         }),
       });
       const data = await patchRes.json();
-      return res.json({ exito: patchRes.ok, data });
+      cacheDatosCompletos = null;
+      if (!patchRes.ok) {
+        return res.status(patchRes.status).json({ exito: false, mensaje: data?.message || 'Error al actualizar Teams', data });
+      }
+      return res.json({ exito: true, data });
     } else {
       const postRes = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/llamadas_teams`, {
         method: 'POST',
@@ -757,7 +772,11 @@ app.post('/api/teams', async (req, res) => {
         }),
       });
       const data = await postRes.json();
-      return res.json({ exito: postRes.ok, data });
+      cacheDatosCompletos = null;
+      if (!postRes.ok) {
+        return res.status(postRes.status).json({ exito: false, mensaje: data?.message || 'Error al guardar Teams', data });
+      }
+      return res.json({ exito: true, data });
     }
   } catch (err: any) {
     return res.status(500).json({ exito: false, mensaje: err?.message });
@@ -902,14 +921,35 @@ app.get('/api/auth/me', (req, res) => {
 // ==============================================================================
 app.post('/api/catalogo', async (req, res) => {
   try {
+    const { nombre_ejecutivo, usuario, extension, celular, pais } = req.body || {};
+    if (!nombre_ejecutivo || !String(nombre_ejecutivo).trim()) {
+      return res.status(400).json({ exito: false, mensaje: 'El nombre del ejecutivo es obligatorio.' });
+    }
+    const payload = {
+      nombre_ejecutivo: String(nombre_ejecutivo).trim(),
+      usuario: usuario ? String(usuario).trim() : null,
+      extension: extension ? String(extension).trim() : null,
+      celular: celular ? String(celular).trim() : null,
+      pais: pais ? String(pais).trim().toUpperCase() : 'SV',
+    };
     const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo`;
     const response = await fetch(url, {
       method: 'POST',
       headers: supabaseHeaders,
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(payload),
     });
-    const data = await response.json();
-    return res.json({ exito: response.ok, data });
+    const text = await response.text();
+    let data: any = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!response.ok) {
+      return res.status(response.status).json({
+        exito: false,
+        mensaje: data?.message || data?.hint || `Error Supabase HTTP ${response.status}`,
+        data,
+      });
+    }
+    cacheDatosCompletos = null;
+    return res.json({ exito: true, data: Array.isArray(data) ? data[0] : data });
   } catch (err: any) {
     return res.status(500).json({ exito: false, mensaje: err?.message });
   }
@@ -917,14 +957,32 @@ app.post('/api/catalogo', async (req, res) => {
 
 app.patch('/api/catalogo/:id', async (req, res) => {
   try {
-    const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo?id=eq.${req.params.id}`;
+    const { nombre_ejecutivo, usuario, extension, celular, pais } = req.body || {};
+    const payload: Record<string, any> = {};
+    if (nombre_ejecutivo !== undefined) payload.nombre_ejecutivo = String(nombre_ejecutivo).trim();
+    if (usuario !== undefined) payload.usuario = usuario ? String(usuario).trim() : null;
+    if (extension !== undefined) payload.extension = extension ? String(extension).trim() : null;
+    if (celular !== undefined) payload.celular = celular ? String(celular).trim() : null;
+    if (pais !== undefined) payload.pais = pais ? String(pais).trim().toUpperCase() : 'SV';
+
+    const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo?id=eq.${encodeURIComponent(req.params.id)}`;
     const response = await fetch(url, {
       method: 'PATCH',
       headers: supabaseHeaders,
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(payload),
     });
-    const data = await response.json();
-    return res.json({ exito: response.ok, data });
+    const text = await response.text();
+    let data: any = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!response.ok) {
+      return res.status(response.status).json({
+        exito: false,
+        mensaje: data?.message || data?.hint || `Error Supabase HTTP ${response.status}`,
+        data,
+      });
+    }
+    cacheDatosCompletos = null;
+    return res.json({ exito: true, data: Array.isArray(data) ? data[0] : data });
   } catch (err: any) {
     return res.status(500).json({ exito: false, mensaje: err?.message });
   }
@@ -932,12 +990,23 @@ app.patch('/api/catalogo/:id', async (req, res) => {
 
 app.delete('/api/catalogo/:id', async (req, res) => {
   try {
-    const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo?id=eq.${req.params.id}`;
+    const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo?id=eq.${encodeURIComponent(req.params.id)}`;
     const response = await fetch(url, {
       method: 'DELETE',
       headers: supabaseHeaders,
     });
-    return res.json({ exito: response.ok });
+    const text = await response.text();
+    let data: any = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!response.ok) {
+      return res.status(response.status).json({
+        exito: false,
+        mensaje: data?.message || data?.hint || `Error Supabase HTTP ${response.status}`,
+        data,
+      });
+    }
+    cacheDatosCompletos = null;
+    return res.json({ exito: true, data });
   } catch (err: any) {
     return res.status(500).json({ exito: false, mensaje: err?.message });
   }

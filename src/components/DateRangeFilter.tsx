@@ -25,8 +25,16 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
 
   const presets = [
     {
-      etiqueta: `Mes Actual (${infoActual.nombreMes})`,
-      esActivo: fechaInicio === infoActual.inicioMes && fechaFin === infoActual.finMes,
+      etiqueta: 'Mes Actual (Al día)',
+      esActivo: fechaInicio === infoActual.inicioMes && fechaFin === infoActual.hoy,
+      aplicar: () => {
+        onChangeInicio(infoActual.inicioMes);
+        onChangeFin(infoActual.hoy);
+      },
+    },
+    {
+      etiqueta: `Mes Completo (${infoActual.nombreMes})`,
+      esActivo: fechaInicio === infoActual.inicioMes && fechaFin === infoActual.finMes && infoActual.finMes !== infoActual.hoy,
       aplicar: () => {
         onChangeInicio(infoActual.inicioMes);
         onChangeFin(infoActual.finMes);
@@ -54,7 +62,6 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
       aplicar: () => {
         onChangeInicio('');
         onChangeFin('');
-        if (onLimpiar) onLimpiar();
       },
     },
   ];
@@ -72,7 +79,7 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
           type="date"
           value={fechaInicio}
           onChange={(e) => onChangeInicio(e.target.value)}
-          className="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-rose-500"
+          className="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white tabular-nums focus:outline-none focus:border-rose-500"
         />
       </div>
 
@@ -82,7 +89,7 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
           type="date"
           value={fechaFin}
           onChange={(e) => onChangeFin(e.target.value)}
-          className="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-rose-500"
+          className="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700/80 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white tabular-nums focus:outline-none focus:border-rose-500"
         />
       </div>
 
@@ -108,10 +115,10 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
         <button
           type="button"
           onClick={onLimpiar}
-          className="flex items-center gap-1 text-[11px] text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 ml-auto cursor-pointer"
+          className="flex items-center gap-1 text-[11px] text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 ml-auto cursor-pointer font-medium"
         >
           <X className="h-3 w-3" />
-          <span>Restablecer</span>
+          <span>Quitar Filtro</span>
         </button>
       )}
     </div>

@@ -21,12 +21,16 @@ import {
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
 import { DateRangeFilter } from './DateRangeFilter';
 import {
-  getRangoSemanaActual,
   getRangoDefaultLeads,
   getMesActualInfo,
   getMesAnteriorInfo,
-  esDelMesActual,
+  formatLocalDate,
 } from '../utils/dateHelpers';
+import {
+  exportarTablaAExcel,
+  formatearSubtituloExportacion,
+  ExcelColumn,
+} from '../utils/excelExport';
 
 export interface ColumnaDef {
   clave: string;
@@ -34,6 +38,7 @@ export interface ColumnaDef {
   grupo?: string;
   esFecha?: boolean;
   render?: (val: any, fila: any) => React.ReactNode;
+  exportValue?: (val: any, fila: any) => string | number | boolean | null | undefined;
 }
 
 interface VistaTablaRegistrosProps {
@@ -60,19 +65,9 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
   leadsDisponibles = [],
 }) => {
   const [busqueda, setBusqueda] = useState('');
-  const rangoInicial = getRangoDefaultLeads();
-  const [fechaInicio, setFechaInicio] = useState(() => {
-    const tieneEnMesActual = datos.some((d) =>
-      esDelMesActual(d, ['fecha_hora', 'fecha_agendada', 'fecha_creado', 'fecha', 'created_at'])
-    );
-    return tieneEnMesActual ? rangoInicial.inicio : '';
-  });
-  const [fechaFin, setFechaFin] = useState(() => {
-    const tieneEnMesActual = datos.some((d) =>
-      esDelMesActual(d, ['fecha_hora', 'fecha_agendada', 'fecha_creado', 'fecha', 'created_at'])
-    );
-    return tieneEnMesActual ? rangoInicial.fin : '';
-  });
+  const [exportando, setExportando] = useState(false);
+  const [fechaInicio, setFechaInicio] = useState(() => getRangoDefaultLeads().inicio);
+  const [fechaFin, setFechaFin] = useState(() => getRangoDefaultLeads().fin);
 
   // Estado para modal de Teams (Ingresar/Editar llamada)
   const [modalTeamsAbierto, setModalTeamsAbierto] = useState(false);
@@ -89,7 +84,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
     telefono_destino: '',
     ejecutivo: '',
     extension: '',
-    fecha: new Date().toISOString().slice(0, 10),
+    fecha: formatLocalDate(),
     hora: '10:00:00',
     duracion_segundos: 180,
     estado: 'CONTESTADA',
@@ -115,7 +110,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
       cliente: '',
       ejecutivo: catalogo[0]?.nombre_ejecutivo || '',
       pais: 'SV',
-      fecha_reunion: new Date().toISOString().slice(0, 10),
+      fecha_reunion: formatLocalDate(),
       hora_reunion: '10:00',
       estado_teams: 'Si se hizo y tiene evidencia',
       evidencia_url: '',
@@ -131,7 +126,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
       cliente: fila.cliente || fila.nombre_prospecto || '',
       ejecutivo: fila.ejecutivo_nombre || fila.ejecutivo || '',
       pais: fila.pais || 'SV',
-      fecha_reunion: fila.fecha_reunion || (fila.fecha_agendada ? String(fila.fecha_agendada).slice(0, 10) : new Date().toISOString().slice(0, 10)),
+      fecha_reunion: fila.fecha_reunion || (fila.fecha_agendada ? String(fila.fecha_agendada).slice(0, 10) : formatLocalDate()),
       hora_reunion: fila.hora_reunion || (fila.hora_agendada ? String(fila.hora_agendada).slice(0, 5) : '10:00'),
       estado_teams: fila.estado_teams || 'Si se hizo y tiene evidencia',
       evidencia_url: fila.evidencia_url || '',
@@ -158,7 +153,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
   const abrirModalLlamadaManual = () => {
     const primerCat = catalogo[0];
     const primerLead = leadsDisponibles[0];
-    const fLead = primerLead?.fecha_agendada || (primerLead?.fecha_creado ? String(primerLead.fecha_creado).slice(0, 10) : new Date().toISOString().slice(0, 10));
+    const fLead = primerLead?.fecha_agendada || (primerLead?.fecha_creado ? String(primerLead.fecha_creado).slice(0, 10) : formatLocalDate());
     let hLead = primerLead?.hora_agendada || primerLead?.hora_creado || '10:00:00';
     if (hLead.length === 5) hLead += ':00';
 
@@ -183,7 +178,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
       (l) => String(l.codigo_prospecto || l.id) === String(leadCodOrId)
     );
     if (!lead) return;
-    const fLead = lead.fecha_agendada || (lead.fecha_creado ? String(lead.fecha_creado).slice(0, 10) : new Date().toISOString().slice(0, 10));
+    const fLead = lead.fecha_agendada || (lead.fecha_creado ? String(lead.fecha_creado).slice(0, 10) : formatLocalDate());
     let hLead = lead.hora_agendada || lead.hora_creado || '10:00:00';
     if (hLead.length === 5) hLead += ':00';
 
@@ -221,7 +216,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
         leadDelAsesor.fecha_agendada ||
         (leadDelAsesor.fecha_creado
           ? String(leadDelAsesor.fecha_creado).slice(0, 10)
-          : new Date().toISOString().slice(0, 10));
+          : formatLocalDate());
       let hLead = leadDelAsesor.hora_agendada || leadDelAsesor.hora_creado || '10:00:00';
       if (hLead.length === 5) hLead += ':00';
 
@@ -467,6 +462,69 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
     setFiltrosColumnas({});
   };
 
+  const handleExportarExcel = async () => {
+    setExportando(true);
+    try {
+      const excelCols: ExcelColumn<any>[] = columnas.map((col) => {
+        const esBool =
+          col.clave.startsWith('kpi_sla_') || col.clave.startsWith('kpi_retroalimentacion_');
+        const esStatus = col.clave === 'estado' || col.clave === 'estado_teams' || col.clave === 'status';
+        return {
+          header: col.grupo ? `${col.grupo} - ${col.etiqueta}` : col.etiqueta,
+          key: col.clave,
+          semantic: esBool ? 'boolean' : esStatus ? 'status' : undefined,
+          value: (fila) => {
+            if (col.exportValue) return col.exportValue(fila[col.clave], fila);
+            if (col.clave === 'consultar') {
+              const dur = Number(fila.duracion_segundos || fila.duracion || 0);
+              const est = String(fila.estado || '').toUpperCase();
+              const noCont = est.includes('NO CONTESTADA') || est.includes('OCUPADA') || est.includes('FALLIDA') || dur === 0;
+              return noCont ? 'Sin audio (0s)' : 'Disponible';
+            }
+            const raw = fila[col.clave];
+            if (typeof raw === 'boolean') return raw ? 'Sí' : 'No';
+            return raw;
+          },
+        };
+      });
+
+      const nombreLimpio = titulo
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, '_')
+        .replace(/^_|_$/g, '');
+
+      await exportarTablaAExcel(
+        `${nombreLimpio}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        {
+          name: titulo.slice(0, 31),
+          title: titulo,
+          subtitle: formatearSubtituloExportacion({
+            fechaInicio,
+            fechaFin,
+            totalFilas: filtrados.length,
+            modo: subtitulo,
+            extra: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
+          }),
+          accentHex:
+            icono === 'pbx'
+              ? 'DC2626'
+              : icono === 'celular'
+              ? '2563EB'
+              : icono === 'whatsapp'
+              ? '059669'
+              : icono === 'teams'
+              ? '7C3AED'
+              : 'D97706',
+          columns: excelCols,
+          rows: filtrados,
+        }
+      );
+    } finally {
+      setExportando(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -518,14 +576,24 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                 <span>{icono === 'pbx' ? 'Registrar Llamada PBX' : 'Registrar Llamada Celular'}</span>
               </button>
             )}
-            <div className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono text-slate-700 dark:text-slate-300">
+            <button
+              type="button"
+              onClick={handleExportarExcel}
+              disabled={exportando || filtrados.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              title="Descargar los registros filtrados en Excel (.xlsx)"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+            </button>
+            <div className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono tabular-nums text-slate-700 dark:text-slate-300">
               {filtrados.length} / {datos.length} registros
             </div>
             {filtrosActivosTotal > 0 && (
               <button
                 type="button"
                 onClick={handleLimpiarTodosFiltros}
-                className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 dark:bg-rose-950/60 dark:border-rose-800 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900"
+                className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 dark:bg-rose-950/60 dark:border-rose-800 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900 cursor-pointer"
               >
                 <X className="h-3 w-3" /> Limpiar ({filtrosActivosTotal})
               </button>
@@ -564,10 +632,10 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
       {/* Aviso contextual de rango de fecha activo */}
       {(fechaInicio || fechaFin) && (
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs px-3.5 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300 shadow-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs px-3.5 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300 shadow-xs tabular-nums">
           <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-            Filtro de fecha activo: <strong className="text-slate-900 dark:text-white font-mono">{fechaInicio || 'Inicio'}</strong> al <strong className="text-slate-900 dark:text-white font-mono">{fechaFin || 'Fin'}</strong> ({filtrados.length} de {datos.length} registros).
+            <Calendar className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+            Filtro de fecha activo: <strong className="text-slate-900 dark:text-white font-mono">{fechaInicio || 'Inicio'}</strong> al <strong className="text-slate-900 dark:text-white font-mono">{fechaFin || 'Hoy'}</strong> ({filtrados.length} de {datos.length} registros).
           </span>
           <button
             type="button"
@@ -585,7 +653,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
       {/* Tabla de Datos con Filtros en Cada Columna */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-xs dark:shadow-none">
         <div className="overflow-x-auto max-h-[650px]">
-          <table className="w-full text-left text-xs text-slate-700 dark:text-slate-300">
+          <table className="w-full text-left text-xs text-slate-700 dark:text-slate-300 tabular-nums">
             <thead className="bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 uppercase font-bold sticky top-0 z-20 border-b border-slate-200 dark:border-slate-800">
               {hayGrupos ? (
                 <>
@@ -598,10 +666,10 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                           <th
                             key={item.grupo + item.index}
                             colSpan={item.colSpan}
-                            className={`py-2 px-3 text-center text-[11px] font-extrabold tracking-wider uppercase border-l border-r border-slate-800 ${
+                            className={`py-2 px-3 text-center text-[11px] font-extrabold tracking-wider uppercase border-l border-r ${
                               esRetro
-                                ? 'bg-amber-950/40 text-amber-300 border-amber-800/50'
-                                : 'bg-blue-950/40 text-blue-300 border-blue-800/50'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50'
+                                : 'bg-blue-50 text-blue-800 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/50'
                             }`}
                           >
                             {item.grupo}
@@ -614,7 +682,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                         <th
                           key={col.clave}
                           rowSpan={2}
-                          className="py-3 px-4 whitespace-nowrap align-bottom border-b border-slate-800 bg-slate-950"
+                          className="py-3 px-4 whitespace-nowrap align-bottom border-b border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-950"
                         >
                           <ColumnFilterDropdown
                             titulo={col.etiqueta}
@@ -630,10 +698,10 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                   </tr>
                   {/* Fila 2: Sub-columnas correspondientes a los grupos */}
                   <tr>
-                    {headerEstructura.row2.map((col, idx) => (
+                    {headerEstructura.row2.map((col) => (
                       <th
                         key={col.clave}
-                        className="py-2 px-3 whitespace-nowrap text-center border-b border-slate-800 bg-slate-900/60"
+                        className="py-2 px-3 whitespace-nowrap text-center border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60"
                       >
                         <ColumnFilterDropdown
                           titulo={col.etiqueta}
@@ -687,7 +755,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                             • <strong className="text-emerald-600 dark:text-emerald-400">Telefonía (PBX y Celular):</strong> Registros sincronizados en tiempo real hasta hoy ({getMesActualInfo().hoy}).
                           </p>
                           <p>
-                            • <strong className="text-cyan-600 dark:text-cyan-400">Leads Calificados (Prospektia API):</strong> El último lote de citas agendadas por la API externa fue del 29 de septiembre de 2026.
+                            • <strong className="text-cyan-600 dark:text-cyan-400">Leads (Prospektia API):</strong> Sin registros coincidentes dentro del filtro de fecha actual ({datos.length} leads totales en histórico).
                           </p>
                         </div>
                       ) : (
@@ -712,11 +780,11 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                           onClick={() => {
                             const act = getMesActualInfo();
                             setFechaInicio(act.inicioMes);
-                            setFechaFin(act.finMes);
+                            setFechaFin(act.hoy);
                           }}
                           className="px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/80 dark:border-emerald-700/80 dark:text-emerald-300 dark:hover:bg-emerald-900 text-xs font-medium cursor-pointer transition-colors shadow-xs"
                         >
-                          Ver Mes Actual ({getMesActualInfo().nombreMes})
+                          Mes Actual (Al día)
                         </button>
                         <button
                           type="button"
@@ -845,18 +913,18 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
       {/* Modal para Ingresar / Editar Datos de Reunión Teams */}
       {modalTeamsAbierto && editingTeamsItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 dark:bg-black/75 backdrop-blur-sm">
+          <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-purple-950/80 border border-purple-700/80 text-purple-400">
+                <div className="p-2 rounded-lg bg-purple-50 border border-purple-200 text-purple-600 dark:bg-purple-950/80 dark:border-purple-700/80 dark:text-purple-400">
                   <Users className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">
                     {editingTeamsItem.id ? 'Editar Datos de Reunión Teams' : 'Registrar Nueva Reunión Teams'}
                   </h3>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
                     Evidencia y resultado para el cruce de leads virtuales
                   </p>
                 </div>
@@ -864,7 +932,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
               <button
                 type="button"
                 onClick={() => setModalTeamsAbierto(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+                className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -873,22 +941,22 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
             <form onSubmit={handleGuardarTeamsSubmit} className="space-y-3.5 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Código Lead / Prospecto</label>
+                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Código Lead / Prospecto</label>
                   <input
                     type="text"
                     required
                     placeholder="Ej: LD651"
                     value={editingTeamsItem.codigo_prospecto}
                     onChange={(e) => setEditingTeamsItem({ ...editingTeamsItem, codigo_prospecto: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-purple-500"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-purple-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">País</label>
+                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">País</label>
                   <select
                     value={editingTeamsItem.pais || 'SV'}
                     onChange={(e) => setEditingTeamsItem({ ...editingTeamsItem, pais: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-purple-500"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-purple-500"
                   >
                     <option value="SV">🇸🇻 El Salvador (SV)</option>
                     <option value="GT">🇬🇹 Guatemala (GT)</option>
@@ -897,22 +965,22 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
               </div>
 
               <div>
-                <label className="block text-slate-400 font-semibold mb-1">Nombre del Cliente / Prospecto</label>
+                <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Nombre del Cliente / Prospecto</label>
                 <input
                   type="text"
                   placeholder="Nombre completo del cliente"
                   value={editingTeamsItem.cliente}
                   onChange={(e) => setEditingTeamsItem({ ...editingTeamsItem, cliente: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-purple-500"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-purple-500"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-400 font-semibold mb-1">Ejecutivo Asignado (Catálogo)</label>
+                <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Ejecutivo Asignado (Catálogo)</label>
                 <select
                   value={editingTeamsItem.ejecutivo}
                   onChange={(e) => setEditingTeamsItem({ ...editingTeamsItem, ejecutivo: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-purple-500"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-purple-500"
                 >
                   {catalogo.length > 0 ? (
                     catalogo.map((cat: any) => (
@@ -930,33 +998,33 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Fecha de la Reunión</label>
+                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Fecha de la Reunión</label>
                   <input
                     type="date"
                     required
                     value={editingTeamsItem.fecha_reunion}
                     onChange={(e) => setEditingTeamsItem({ ...editingTeamsItem, fecha_reunion: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-purple-500"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-purple-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Hora de la Reunión</label>
+                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Hora de la Reunión</label>
                   <input
                     type="time"
                     required
                     value={editingTeamsItem.hora_reunion}
                     onChange={(e) => setEditingTeamsItem({ ...editingTeamsItem, hora_reunion: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-purple-500"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-purple-500"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-400 font-semibold mb-1">Estado de la Reunión Teams</label>
+                <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Estado de la Reunión Teams</label>
                 <select
                   value={editingTeamsItem.estado_teams}
                   onChange={(e) => setEditingTeamsItem({ ...editingTeamsItem, estado_teams: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-medium focus:outline-none focus:border-purple-500"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white font-medium focus:outline-none focus:border-purple-500"
                 >
                   <option value="Si se hizo y tiene evidencia">✅ Sí se hizo y tiene evidencia</option>
                   <option value="Si se hizo sin evidencia">⚠️ Sí se hizo pero sin evidencia grabada</option>
@@ -967,7 +1035,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
               </div>
 
               <div>
-                <label className="block text-slate-400 font-semibold mb-1">
+                <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">
                   Enlace de Evidencia (Teams Recap / Grabación OneDrive / SharePoint)
                 </label>
                 <input
@@ -975,22 +1043,22 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                   placeholder="https://teams.microsoft.com/l/meetingrecap?..."
                   value={editingTeamsItem.evidencia_url}
                   onChange={(e) => setEditingTeamsItem({ ...editingTeamsItem, evidencia_url: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 font-mono text-[11px]"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none focus:border-purple-500 font-mono text-[11px]"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setModalTeamsAbierto(false)}
-                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 font-medium transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={guardandoTeams}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-all disabled:opacity-50 cursor-pointer shadow-lg shadow-purple-950"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-all disabled:opacity-50 cursor-pointer shadow-sm"
                 >
                   {guardandoTeams ? (
                     <span>Guardando...</span>
@@ -1009,26 +1077,26 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
       {/* MODAL: Registrar Llamada Manual (PBX y Celular) */}
       {modalLlamadaManualAbierto && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 dark:bg-black/80 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-500/40 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                <div className="p-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-200 dark:bg-rose-500/20 dark:text-rose-400 dark:border-rose-500/30">
                   {icono === 'pbx' ? <PhoneCall className="h-5 w-5" /> : <Smartphone className="h-5 w-5" />}
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
                     Registrar Llamada Manual {icono === 'pbx' ? 'PBX' : 'Celular'}
                   </h3>
-                  <p className="text-xs text-slate-400">
-                    Se insertará en Supabase (<code className="text-rose-300">{icono === 'pbx' ? 'public.llamadas_pbx' : 'public.llamadas_celular'}</code>) y se auditará en los KPIs.
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Se insertará en Supabase (<code className="text-rose-600 dark:text-rose-300">{icono === 'pbx' ? 'public.llamadas_pbx' : 'public.llamadas_celular'}</code>) y se auditará en los KPIs.
                   </p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setModalLlamadaManualAbierto(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                className="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -1036,9 +1104,9 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
             <form onSubmit={handleGuardarLlamadaManualSubmit} className="space-y-4 text-xs">
               {/* 1. SELECCIONAR CÓDIGO DE LEAD */}
-              <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 space-y-2">
+              <div className="bg-slate-50 dark:bg-slate-950/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="block text-rose-300 font-bold uppercase tracking-wider text-[11px]">
+                  <label className="block text-rose-600 dark:text-rose-300 font-bold uppercase tracking-wider text-[11px]">
                     1. Seleccionar Código de Lead / Prospecto
                   </label>
                   <span className="text-[10px] text-slate-500">
@@ -1047,20 +1115,20 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                 </div>
 
                 <div className="relative">
-                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-500" />
+                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
                   <input
                     type="text"
                     placeholder="Filtrar por código o nombre (ej: LD801, Carlos)..."
                     value={filtroLeadModal}
                     onChange={(e) => setFiltroLeadModal(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 text-xs"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-rose-500 text-xs"
                   />
                 </div>
 
                 <select
                   value={formLlamadaManual.codigo_lead}
                   onChange={(e) => handleSeleccionarLead(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-medium focus:outline-none focus:border-rose-500 text-xs cursor-pointer"
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white font-medium focus:outline-none focus:border-rose-500 text-xs cursor-pointer"
                 >
                   <option value="">-- Elige un prospecto para autocompletar --</option>
                   {leadsDisponibles
@@ -1084,7 +1152,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
               {/* 2. DATOS DEL PROSPECTO AUTOCOMPLETADOS */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Nombre del Prospecto</label>
+                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Nombre del Prospecto</label>
                   <input
                     type="text"
                     required
@@ -1093,11 +1161,11 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     onChange={(e) =>
                       setFormLlamadaManual({ ...formLlamadaManual, prospecto_nombre: e.target.value })
                     }
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-rose-500 font-medium"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-rose-500 font-medium"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Número de Teléfono / Destino</label>
+                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Número de Teléfono / Destino</label>
                   <input
                     type="text"
                     required
@@ -1106,7 +1174,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     onChange={(e) =>
                       setFormLlamadaManual({ ...formLlamadaManual, telefono_destino: e.target.value })
                     }
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-rose-500 font-mono"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-rose-500 font-mono"
                   />
                 </div>
               </div>
@@ -1114,11 +1182,11 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
               {/* 3. ASESOR / EJECUTIVO */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Ejecutivo / Closer</label>
+                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Ejecutivo / Closer</label>
                   <select
                     value={formLlamadaManual.ejecutivo}
                     onChange={(e) => handleSeleccionarEjecutivo(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-rose-500 font-medium"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-rose-500 font-medium"
                   >
                     {catalogo.length > 0 ? (
                       catalogo.map((cat: any) => (
@@ -1135,7 +1203,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                 </div>
                 {icono === 'pbx' ? (
                   <div>
-                    <label className="block text-slate-400 font-semibold mb-1">Extensión PBX</label>
+                    <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Extensión PBX</label>
                     <input
                       type="text"
                       placeholder="Ej: 4031"
@@ -1143,26 +1211,26 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                       onChange={(e) =>
                         setFormLlamadaManual({ ...formLlamadaManual, extension: e.target.value })
                       }
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-rose-500 font-mono"
+                      className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-rose-500 font-mono"
                     />
                   </div>
                 ) : (
                   <div>
-                    <label className="block text-slate-400 font-semibold mb-1">Línea Celular</label>
+                    <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Línea Celular</label>
                     <input
                       type="text"
                       readOnly
                       value="Manual (Línea Corporativa)"
-                      className="w-full bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2 text-slate-400 font-medium"
+                      className="w-full bg-slate-100 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-slate-500 dark:text-slate-400 font-medium"
                     />
                   </div>
                 )}
               </div>
 
               {/* 4. FECHA Y HORA DE LA LLAMADA */}
-              <div className="grid grid-cols-2 gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
+              <div className="grid grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-950/60 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Fecha de la Llamada</label>
+                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">Fecha de la Llamada</label>
                   <input
                     type="date"
                     required
@@ -1170,11 +1238,11 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     onChange={(e) =>
                       setFormLlamadaManual({ ...formLlamadaManual, fecha: e.target.value })
                     }
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-rose-500 font-mono"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-rose-500 font-mono"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Hora de la Llamada</label>
+                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">Hora de la Llamada</label>
                   <input
                     type="time"
                     step="1"
@@ -1183,7 +1251,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                     onChange={(e) =>
                       setFormLlamadaManual({ ...formLlamadaManual, hora: e.target.value })
                     }
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-rose-500 font-mono"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-rose-500 font-mono"
                   />
                 </div>
               </div>
@@ -1191,7 +1259,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
               {/* 5. DURACIÓN Y ESTADO */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Duración (segundos)</label>
+                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Duración (segundos)</label>
                   <input
                     type="number"
                     min="1"
@@ -1202,17 +1270,17 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                         duracion_segundos: Number(e.target.value),
                       })
                     }
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-rose-500 font-mono"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-rose-500 font-mono"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Resultado de la Llamada</label>
+                  <label className="block text-slate-600 dark:text-slate-400 font-semibold mb-1">Resultado de la Llamada</label>
                   <select
                     value={formLlamadaManual.estado}
                     onChange={(e) =>
                       setFormLlamadaManual({ ...formLlamadaManual, estado: e.target.value })
                     }
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-rose-500 font-medium"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:border-rose-500 font-medium"
                   >
                     <option value="CONTESTADA">✅ CONTESTADA</option>
                     <option value="NO CONTESTADA">❌ NO CONTESTADA</option>
@@ -1221,18 +1289,18 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setModalLlamadaManualAbierto(false)}
-                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 font-medium transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={guardandoLlamadaManual}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold transition-all disabled:opacity-50 cursor-pointer shadow-lg shadow-rose-950"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold transition-all disabled:opacity-50 cursor-pointer shadow-sm"
                 >
                   {guardandoLlamadaManual ? (
                     <span>Guardando en Supabase...</span>

@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Sun,
   Moon,
+  LayoutDashboard,
 } from 'lucide-react';
 import { VistaApp, ModoLeads } from '../types';
 import { useTheme } from '../context/ThemeContext';
@@ -98,12 +99,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Navegación Exacta de la imagen del usuario */}
+      {/* Navegación principal */}
       <div className="flex-1 overflow-y-auto p-3 space-y-1 text-sm font-medium">
+        {/* 0. Dashboard */}
+        <button
+          onClick={() => onCambiarVista('dashboard')}
+          className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg transition-all text-left whitespace-nowrap ${
+            vistaActiva === 'dashboard'
+              ? esCalificado
+                ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 font-semibold border-l-2 border-amber-500 shadow-xs'
+                : 'bg-cyan-50 text-cyan-800 dark:bg-cyan-950/40 dark:text-cyan-300 font-semibold border-l-2 border-cyan-500 shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            <LayoutDashboard
+              className={`h-4 w-4 shrink-0 ${
+                vistaActiva === 'dashboard'
+                  ? esCalificado
+                    ? 'text-amber-500'
+                    : 'text-cyan-500'
+                  : 'text-slate-400'
+              }`}
+            />
+            <span>Dashboard</span>
+          </div>
+          <span
+            className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+              esCalificado
+                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300'
+                : 'bg-cyan-100 text-cyan-800 dark:bg-cyan-950/80 dark:text-cyan-300'
+            }`}
+          >
+            {esCalificado ? 'Calif.' : 'No Calif.'}
+          </span>
+        </button>
+
         {/* 1. Criterios */}
         <button
           onClick={() => onCambiarVista('criterios')}
-          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-left ${
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-left whitespace-nowrap ${
             vistaActiva === 'criterios'
               ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 font-semibold border-l-2 border-rose-500 shadow-xs'
               : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'

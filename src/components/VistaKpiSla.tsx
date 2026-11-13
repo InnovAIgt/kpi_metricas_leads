@@ -61,16 +61,16 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
     const e3 = new Set<string>(['Sí', 'No']);
 
     citasConFecha.forEach((c) => {
-      if (c.prospecto_nombre) prospectos.add(c.prospecto_nombre);
-      if (c.prospecto_telefono) telefonos.add(c.prospecto_telefono);
-      if (c.vendedor_nombre) asesores.add(c.vendedor_nombre);
-      if (c.pais) paises.add(c.pais);
+      if (c.prospecto_nombre) prospectos.add(String(c.prospecto_nombre).trim());
+      if (c.prospecto_telefono) telefonos.add(String(c.prospecto_telefono).trim());
+      if (c.vendedor_nombre) asesores.add(String(c.vendedor_nombre).trim());
+      if (c.pais) paises.add(String(c.pais).trim());
     });
 
     return {
-      prospecto: Array.from(prospectos).slice(0, 150).sort(),
-      telefono: Array.from(telefonos).slice(0, 150).sort(),
-      vendedor: Array.from(asesores).sort(),
+      prospecto: Array.from(prospectos).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' })),
+      telefono: Array.from(telefonos).sort(),
+      vendedor: Array.from(asesores).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' })),
       pais: Array.from(paises).sort(),
       kpi_sla_etapa_1: Array.from(e1),
       kpi_sla_etapa_2: Array.from(e2),
@@ -95,21 +95,22 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
 
     Object.entries(filtrosColumnas).forEach(([clave, seleccionados]) => {
       if (seleccionados.length === 0) return;
-      if (seleccionados.includes('__NINGUNO__')) {
+      const activos = seleccionados.filter((s) => s !== '__NINGUNO__');
+      if (activos.length === 0) {
         res = [];
         return;
       }
 
       res = res.filter((c) => {
         let valFila = '';
-        if (clave === 'prospecto') valFila = c.prospecto_nombre;
-        else if (clave === 'telefono') valFila = c.prospecto_telefono;
-        else if (clave === 'vendedor') valFila = c.vendedor_nombre;
-        else if (clave === 'pais') valFila = c.pais || '';
+        if (clave === 'prospecto') valFila = String(c.prospecto_nombre || '').trim();
+        else if (clave === 'telefono') valFila = String(c.prospecto_telefono || '').trim();
+        else if (clave === 'vendedor') valFila = String(c.vendedor_nombre || '').trim();
+        else if (clave === 'pais') valFila = String(c.pais || '').trim();
         else if (clave === 'kpi_sla_etapa_1') valFila = c.kpi_sla_etapa_1 ? 'Sí' : 'No';
         else if (clave === 'kpi_sla_etapa_2') valFila = c.kpi_sla_etapa_2 ? 'Sí' : 'No';
         else if (clave === 'kpi_sla_etapa_3') valFila = c.kpi_sla_etapa_3 ? 'Sí' : 'No';
-        return seleccionados.includes(valFila);
+        return activos.includes(valFila);
       });
     });
 

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Search,
   Filter,
@@ -70,6 +70,12 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
 
   // Filtros dinámicos por columna (checklist y valores seleccionados)
   const [filtrosColumnas, setFiltrosColumnas] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    setFiltrosColumnas({});
+    setVendedorSeleccionado(null);
+    setLeadEnfocadoId(null);
+  }, [tipoLeadActual]);
 
   const handleCambiarFiltroColumna = (clave: string, seleccionados: string[]) => {
     setFiltrosColumnas((prev) => ({
@@ -193,21 +199,22 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
     // Filtros por columna checklist
     Object.entries(filtrosColumnas).forEach(([clave, seleccionados]) => {
       if (seleccionados.length === 0) return;
-      if (seleccionados.includes('__NINGUNO__')) {
+      const activos = seleccionados.filter((s) => s !== '__NINGUNO__');
+      if (activos.length === 0) {
         lista = [];
         return;
       }
 
       lista = lista.filter((fila) => {
         let valorFila = '';
-        if (clave === 'prospecto') valorFila = fila.prospecto_nombre;
-        else if (clave === 'telefono') valorFila = fila.telefono;
-        else if (clave === 'vendedor') valorFila = fila.vendedor_nombre;
+        if (clave === 'prospecto') valorFila = String(fila.prospecto_nombre || '').trim();
+        else if (clave === 'telefono') valorFila = String(fila.telefono || '').trim();
+        else if (clave === 'vendedor') valorFila = String(fila.vendedor_nombre || 'Sin Asignar').trim();
         else if (clave === 'pais') {
           const p = fila.pais || fila.cita?.pais || 'SV';
           valorFila = p === 'GT' ? 'Guatemala (GT)' : 'El Salvador (SV)';
         }
-        else if (clave === 'canal') valorFila = fila.canal_utilizado || 'Sin llamada';
+        else if (clave === 'canal') valorFila = String(fila.canal_utilizado || 'Sin llamada').trim();
         else if (clave === 'estado') {
           if (fila.estado_cumplimiento === 'A_TIEMPO') valorFila = etiquetaATiempoEstado;
           else if (fila.estado_cumplimiento === 'TARDE_LEVE') valorFila = 'Tarde Leve';
@@ -218,7 +225,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
           else if (fila.estado_cumplimiento === 'ADELANTADA') valorFila = etiquetaAdelantadaEstado;
         }
 
-        return seleccionados.includes(valorFila);
+        return activos.includes(valorFila);
       });
     });
 
@@ -247,9 +254,9 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
     const paises = new Set<string>();
 
     orig.forEach((c) => {
-      if (c.prospecto_nombre) prospectos.add(c.prospecto_nombre);
-      if (c.vendedor_nombre) vendedores.add(c.vendedor_nombre);
-      canales.add(c.canal_utilizado || 'Sin llamada');
+      if (c.prospecto_nombre) prospectos.add(String(c.prospecto_nombre).trim());
+      vendedores.add(String(c.vendedor_nombre || 'Sin Asignar').trim());
+      canales.add(String(c.canal_utilizado || 'Sin llamada').trim());
       const p = c.pais || c.cita?.pais || 'SV';
       paises.add(p === 'GT' ? 'Guatemala (GT)' : 'El Salvador (SV)');
 
@@ -263,8 +270,8 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
     });
 
     return {
-      prospectos: Array.from(prospectos).sort(),
-      vendedores: Array.from(vendedores).sort(),
+      prospectos: Array.from(prospectos).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' })),
+      vendedores: Array.from(vendedores).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' })),
       paises: Array.from(paises).sort(),
       canales: Array.from(canales).sort(),
       estados: Array.from(estados).sort(),

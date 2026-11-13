@@ -47,6 +47,10 @@ import {
   exportarLibroExcel,
   formatearSubtituloExportacion,
 } from '../utils/excelExport';
+import {
+  DashboardGraficas,
+  DatoMensualDashboard,
+} from './DashboardGraficas';
 
 interface VistaDashboardProps {
   crucesTodos: CruceAuditoria[];
@@ -369,6 +373,87 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     ];
   }, [crucesFiltrados]);
 
+  // Comparativa Mensual histórica (Mes actual vs meses anteriores, independiente del filtro de fechas actual)
+  const comparativaMensual: DatoMensualDashboard[] = useMemo(() => {
+    const MESES_CORTOS = [
+      'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
+      'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic',
+    ];
+    const MESES_LARGOS = [
+      'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+      'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+    ];
+    const mesActualKey = `${mesInfo.anio}-${String(mesInfo.mes).padStart(2, '0')}`;
+    const mapa = new Map<string, DatoMensualDashboard>();
+
+    crucesTodos.forEach((c) => {
+      if (paisFiltro !== 'TODOS') {
+        const p = (c.pais || c.cita?.pais || 'SV').toUpperCase();
+        if (p !== paisFiltro) return;
+      }
+      const f = extraerFechaStr(c);
+      if (!f || f.length < 7) return;
+      const mesKey = f.slice(0, 7);
+      const [anioStr, mesStr] = mesKey.split('-');
+      const anioNum = parseInt(anioStr, 10);
+      const mesNum = parseInt(mesStr, 10);
+      if (!anioNum || !mesNum || mesNum < 1 || mesNum > 12) return;
+
+      if (!mapa.has(mesKey)) {
+        mapa.set(mesKey, {
+          mesKey,
+          labelCorto: `${MESES_CORTOS[mesNum - 1]} ${String(anioNum).slice(-2)}`,
+          labelLargo: `${MESES_LARGOS[mesNum - 1]} ${anioNum}`,
+          esMesActual: mesKey === mesActualKey,
+          total: 0,
+          auditables: 0,
+          aTiempo: 0,
+          tarde: 0,
+          noLlamo: 0,
+          pendientes: 0,
+          pctCumplimiento: 0,
+        });
+      }
+
+      const item = mapa.get(mesKey)!;
+      item.total++;
+      if (c.estado_cumplimiento === 'PENDIENTE') {
+        item.pendientes++;
+      } else {
+        item.auditables++;
+      }
+
+      if (
+        c.estado_cumplimiento === 'A_TIEMPO' ||
+        c.estado_cumplimiento === 'ADELANTADA'
+      ) {
+        item.aTiempo++;
+      } else if (
+        c.estado_cumplimiento === 'TARDE_LEVE' ||
+        c.estado_cumplimiento === 'TARDE_GRAVE' ||
+        c.estado_cumplimiento === 'LLAMO_OTRO_DIA'
+      ) {
+        item.tarde++;
+      } else if (c.estado_cumplimiento === 'NO_LLAMO') {
+        item.noLlamo++;
+      }
+    });
+
+    const lista = Array.from(mapa.values())
+      .map((item) => ({
+        ...item,
+        pctCumplimiento:
+          item.auditables > 0
+            ? Math.round((item.aTiempo / item.auditables) * 100)
+            : item.total > 0
+            ? 100
+            : 0,
+      }))
+      .sort((a, b) => a.mesKey.localeCompare(b.mesKey));
+
+    return lista.slice(-6);
+  }, [crucesTodos, paisFiltro, mesInfo]);
+
   // Alertas prioritarias (últimas brechas más relevantes)
   const alertasPrioritarias = useMemo(() => {
     const prioridad: Record<string, number> = {
@@ -455,6 +540,22 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
               { header: 'Score', key: 'score_rendimiento', semantic: 'status', align: 'center' },
             ],
             rows: rankingVendedores,
+          },
+          {
+            name: 'Comparativa Mensual',
+            title: `Comparativa Mensual — ${modoLabel}`,
+            subtitle: `Histórico mensual (${paisFiltro === 'TODOS' ? 'SV + GT' : paisFiltro})`,
+            accentHex: '059669',
+            columns: [
+              { header: 'Mes', key: 'labelLargo', width: 22 },
+              { header: 'Total Leads', key: 'total', align: 'right' },
+              { header: 'Auditables', key: 'auditables', align: 'right' },
+              { header: 'A Tiempo', key: 'aTiempo', align: 'right' },
+              { header: 'Con Retraso / Otro Día', key: 'tarde', align: 'right' },
+              { header: 'No Llamó', key: 'noLlamo', align: 'right' },
+              { header: '% Cumplimiento', key: 'pctCumplimiento', value: (r) => r.pctCumplimiento / 100, numFmt: '0%', align: 'right' },
+            ],
+            rows: comparativaMensual,
           },
           {
             name: 'Detalle Leads Período',
@@ -831,6 +932,16 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Gráficas Interactivas: Pastel, Comparativa Ejecutivos y Comparativa Mensual */}
+      <DashboardGraficas
+        rankingVendedores={rankingVendedores}
+        conteosEstado={conteosEstado}
+        canalesPeriodo={canalesPeriodo}
+        comparativaMensual={comparativaMensual}
+        esCalificado={esCalificado}
+        onIrAKpi1={() => onNavegar('kpi_cumplimiento')}
+      />
 
       {/* Analítica Específica del Modo (Calificados vs No Calificados) */}
       {esCalificado ? (

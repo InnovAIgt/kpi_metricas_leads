@@ -50,15 +50,51 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
   }, [valoresUnicos, busquedaLocal]);
 
   const estaActivo = seleccionados.length > 0;
+  const haySoloNinguno =
+    seleccionados.length === 1 && seleccionados[0] === '__NINGUNO__';
+  const activosReales = useMemo(
+    () => seleccionados.filter((s) => s !== '__NINGUNO__'),
+    [seleccionados]
+  );
 
   const toggleValor = (val: string) => {
-    if (seleccionados.includes(val)) {
-      onCambiarSeleccion(
-        clave,
-        seleccionados.filter((s) => s !== val)
-      );
+    // Caso 1: estaban todos seleccionados (array vacío) -> al desmarcar uno, quedan todos menos ese
+    if (seleccionados.length === 0) {
+      const restantes = valoresUnicos.filter((v) => v !== val);
+      onCambiarSeleccion(clave, restantes.length > 0 ? restantes : ['__NINGUNO__']);
+      return;
+    }
+
+    // Caso 2: había selección previa (limpiar marcador __NINGUNO__ siempre)
+    const sinNinguno = seleccionados.filter((s) => s !== '__NINGUNO__');
+
+    if (sinNinguno.includes(val)) {
+      const nuevos = sinNinguno.filter((s) => s !== val);
+      onCambiarSeleccion(clave, nuevos.length > 0 ? nuevos : ['__NINGUNO__']);
     } else {
-      onCambiarSeleccion(clave, [...seleccionados, val]);
+      const nuevos = [...sinNinguno, val];
+      // Si volvió a marcar todos los valores únicos disponibles, normalizar a []
+      if (valoresUnicos.length > 0 && nuevos.length >= valoresUnicos.length) {
+        onCambiarSeleccion(clave, []);
+      } else {
+        onCambiarSeleccion(clave, nuevos);
+      }
+    }
+  };
+
+  const seleccionarSoloEste = (val: string) => {
+    onCambiarSeleccion(clave, [val]);
+  };
+
+  const seleccionarSoloCoincidentes = () => {
+    if (valoresFiltrados.length === 0) {
+      onCambiarSeleccion(clave, ['__NINGUNO__']);
+      return;
+    }
+    if (valoresFiltrados.length >= valoresUnicos.length) {
+      onCambiarSeleccion(clave, []);
+    } else {
+      onCambiarSeleccion(clave, [...valoresFiltrados]);
     }
   };
 
@@ -80,7 +116,7 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
           setAbierto(!abierto);
         }}
         title={`Filtrar por ${titulo}`}
-        className={`p-1 rounded transition-all hover:bg-slate-200 dark:hover:bg-slate-700/60 ${
+        className={`p-1 rounded transition-all hover:bg-slate-200 dark:hover:bg-slate-700/60 cursor-pointer ${
           estaActivo
             ? 'bg-rose-500/20 text-rose-600 dark:text-rose-300 ring-1 ring-rose-500/50'
             : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
@@ -92,7 +128,7 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
       {/* Popover desplegable con buscador dinámico y checklist */}
       {abierto && (
         <div
-          className={`absolute top-full mt-1.5 z-50 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl p-2.5 text-xs font-normal normal-case tracking-normal ${
+          className={`absolute top-full mt-1.5 z-50 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl p-2.5 text-xs font-normal normal-case tracking-normal ${
             alineacion === 'right' ? 'right-0' : 'left-0'
           }`}
           onClick={(e) => e.stopPropagation()}
@@ -101,12 +137,20 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
           <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-200 dark:border-slate-800">
             <span className="font-bold text-slate-900 dark:text-white text-[11px] truncate">
               Filtro: {titulo}
+              {estaActivo && !haySoloNinguno && (
+                <span className="ml-1 text-rose-600 dark:text-rose-400 font-mono tabular-nums">
+                  ({activosReales.length})
+                </span>
+              )}
             </span>
             {estaActivo && (
               <button
                 type="button"
-                onClick={() => onCambiarSeleccion(clave, [])}
-                className="text-[10px] text-rose-500 dark:text-rose-400 hover:underline flex items-center gap-0.5"
+                onClick={() => {
+                  setBusquedaLocal('');
+                  onCambiarSeleccion(clave, []);
+                }}
+                className="text-[10px] text-rose-500 dark:text-rose-400 hover:underline flex items-center gap-0.5 cursor-pointer"
               >
                 <X className="h-2.5 w-2.5" /> Limpiar
               </button>
@@ -127,25 +171,36 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
           </div>
 
           {/* Acciones Rápidas */}
-          <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 mb-2 px-1">
-            <button
-              type="button"
-              onClick={seleccionarTodos}
-              className="hover:text-slate-900 dark:hover:text-white underline underline-offset-2"
-            >
-              Seleccionar todos
-            </button>
-            <button
-              type="button"
-              onClick={deseleccionarTodos}
-              className="hover:text-slate-900 dark:hover:text-white underline underline-offset-2"
-            >
-              Deseleccionar todos
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-500 dark:text-slate-400 mb-2 px-1">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={seleccionarTodos}
+                className="hover:text-slate-900 dark:hover:text-white underline underline-offset-2 cursor-pointer"
+              >
+                Todos
+              </button>
+              <button
+                type="button"
+                onClick={deseleccionarTodos}
+                className="hover:text-slate-900 dark:hover:text-white underline underline-offset-2 cursor-pointer"
+              >
+                Ninguno
+              </button>
+            </div>
+            {busquedaLocal.trim() && valoresFiltrados.length > 0 && (
+              <button
+                type="button"
+                onClick={seleccionarSoloCoincidentes}
+                className="text-rose-600 dark:text-rose-400 font-semibold hover:underline underline-offset-2 cursor-pointer"
+              >
+                Solo coincidentes ({valoresFiltrados.length})
+              </button>
+            )}
           </div>
 
           {/* Checklist de Valores */}
-          <div className="max-h-48 overflow-y-auto space-y-0.5 pr-1 divide-y divide-slate-100 dark:divide-slate-800/40">
+          <div className="max-h-52 overflow-y-auto space-y-0.5 pr-1 divide-y divide-slate-100 dark:divide-slate-800/40">
             {valoresFiltrados.length === 0 ? (
               <div className="py-3 text-center text-slate-400 dark:text-slate-500 text-[11px]">
                 Sin coincidencias
@@ -153,22 +208,32 @@ export const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
             ) : (
               valoresFiltrados.map((val) => {
                 const checked =
-                  seleccionados.length === 0 || seleccionados.includes(val);
+                  seleccionados.length === 0 || activosReales.includes(val);
                 return (
-                  <label
+                  <div
                     key={val}
-                    className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800/70 cursor-pointer text-slate-800 dark:text-slate-200 select-none text-xs"
+                    className="group flex items-center justify-between gap-1 px-1.5 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800/70"
                   >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleValor(val)}
-                      className="rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-rose-500 focus:ring-rose-500/20 h-3.5 w-3.5"
-                    />
-                    <span className="truncate flex-1" title={val}>
-                      {val || <span className="italic text-slate-400 dark:text-slate-500">(Vacío)</span>}
-                    </span>
-                  </label>
+                    <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer text-slate-800 dark:text-slate-200 select-none text-xs">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleValor(val)}
+                        className="rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-rose-500 focus:ring-rose-500/20 h-3.5 w-3.5 shrink-0"
+                      />
+                      <span className="truncate flex-1" title={val}>
+                        {val || <span className="italic text-slate-400 dark:text-slate-500">(Vacío)</span>}
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => seleccionarSoloEste(val)}
+                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline px-1 shrink-0 cursor-pointer transition-opacity"
+                      title="Ver únicamente este valor"
+                    >
+                      Solo
+                    </button>
+                  </div>
                 );
               })
             )}

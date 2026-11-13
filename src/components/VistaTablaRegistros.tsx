@@ -334,21 +334,34 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
     });
   }, [datos, fechaInicio, fechaFin, columnas, icono, soloConReunion]);
 
-  // 2. Extraer valores únicos por cada columna para el checklist
+  const obtenerValorColumna = (col: ColumnaDef, fila: any): string => {
+    if (col.clave === 'consultar' && !col.exportValue) {
+      const dur = Number(fila.duracion_segundos || fila.duracion || 0);
+      const est = String(fila.estado || '').toUpperCase();
+      const noCont =
+        est.includes('NO CONTESTADA') ||
+        est.includes('OCUPADA') ||
+        est.includes('FALLIDA') ||
+        dur === 0;
+      return noCont ? 'Sin voz (0s)' : 'Disponible';
+    }
+    const raw = col.exportValue ? col.exportValue(fila[col.clave], fila) : fila[col.clave];
+    if (typeof raw === 'boolean') return raw ? 'Sí' : 'No';
+    if (raw === undefined || raw === null) return '';
+    return String(raw).trim();
+  };
+
+  // 2. Extraer valores únicos por cada columna para el checklist (usando el valor visible real)
   const valoresUnicosPorColumna = useMemo(() => {
     const mapa: Record<string, string[]> = {};
     columnas.forEach((col) => {
       const setVal = new Set<string>();
       datosConFecha.forEach((fila) => {
-        let val = fila[col.clave];
-        if (typeof val === 'boolean') {
-          val = val ? 'Sí' : 'No';
-        }
-        if (val !== undefined && val !== null) {
-          setVal.add(String(val).trim());
-        }
+        setVal.add(obtenerValorColumna(col, fila));
       });
-      mapa[col.clave] = Array.from(setVal).slice(0, 200).sort(); // Limitar a 200 valores representativos
+      mapa[col.clave] = Array.from(setVal).sort((a, b) =>
+        a.localeCompare(b, 'es', { sensitivity: 'base' })
+      );
     });
     return mapa;
   }, [datosConFecha, columnas]);
@@ -357,31 +370,37 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
   const filtrados = useMemo(() => {
     let resultado = datosConFecha;
 
-    // A. Buscador global
+    // A. Buscador global (busca tanto en campos crudos como en valores visibles)
     if (busqueda.trim()) {
       const q = busqueda.toLowerCase().trim();
-      resultado = resultado.filter((fila) =>
-        Object.values(fila).some(
-          (val) => val !== null && val !== undefined && String(val).toLowerCase().includes(q)
-        )
+      resultado = resultado.filter(
+        (fila) =>
+          Object.values(fila).some(
+            (val) => val !== null && val !== undefined && String(val).toLowerCase().includes(q)
+          ) ||
+          columnas.some((col) => obtenerValorColumna(col, fila).toLowerCase().includes(q))
       );
     }
 
     // B. Filtros individuales por cada columna
     Object.entries(filtrosColumnas).forEach(([clave, seleccionados]) => {
       if (seleccionados.length === 0) return; // todos permitidos
-      if (seleccionados.includes('__NINGUNO__')) {
+      const activos = seleccionados.filter((s) => s !== '__NINGUNO__');
+      if (activos.length === 0) {
         resultado = [];
         return;
       }
 
+      const colDef = columnas.find((c) => c.clave === clave);
       resultado = resultado.filter((fila) => {
-        let valorFila = fila[clave];
-        if (typeof valorFila === 'boolean') {
-          valorFila = valorFila ? 'Sí' : 'No';
-        }
-        const strValor = String(valorFila ?? '').trim();
-        return seleccionados.includes(strValor);
+        const strValor = colDef
+          ? obtenerValorColumna(colDef, fila)
+          : typeof fila[clave] === 'boolean'
+          ? fila[clave]
+            ? 'Sí'
+            : 'No'
+          : String(fila[clave] ?? '').trim();
+        return activos.includes(strValor);
       });
     });
 

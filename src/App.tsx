@@ -138,7 +138,15 @@ export default function App() {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.filter((l) => esLeadCalificadoValido(l));
+          return parsed
+            .filter((l) => esLeadCalificadoValido(l))
+            .map((l, idx) => ({
+              ...l,
+              id:
+                l.id && l.id !== 'undefined' && l.id !== 'null'
+                  ? l.id
+                  : String(l.codigo_prospecto || `lead-${idx}`).trim(),
+            }));
         }
       } catch (_) {}
     }
@@ -302,18 +310,33 @@ export default function App() {
   const handleActualizarLeadKpi = async (
     leadId: string,
     cambios: Partial<Cita>,
-    codigoAlt?: string
+    codigoAlt?: string,
+    tablaForzada?: 'leads' | 'leads_no_calificados'
   ): Promise<boolean> => {
-    const tabla = modoLeads === 'calificados' ? 'leads' : 'leads_no_calificados';
-    const coincideLead = (item: any) =>
-      String(item?.id || '') === leadId ||
-      String(item?.codigo_prospecto || '') === leadId ||
-      String(item?.client_id || '') === leadId ||
-      (Boolean(codigoAlt) &&
-        (String(item?.codigo_prospecto || '') === codigoAlt ||
-          String(item?.client_id || '') === codigoAlt));
+    const targetId = String(leadId || '').trim();
+    const targetAlt = String(codigoAlt || '').trim();
+    const idValido = targetId !== '' && targetId !== 'undefined' && targetId !== 'null' ? targetId : '';
+    const altValido = targetAlt !== '' && targetAlt !== 'undefined' && targetAlt !== 'null' ? targetAlt : '';
 
-    if (modoLeads === 'calificados') {
+    if (!idValido && !altValido) {
+      mostrarToast('No se pudo identificar el lead de forma individual.', 'error');
+      return false;
+    }
+
+    const tabla: 'leads' | 'leads_no_calificados' =
+      tablaForzada || (modoLeads === 'calificados' ? 'leads' : 'leads_no_calificados');
+
+    const coincideLead = (item: any) => {
+      const itemIds = [item?.id, item?.codigo_prospecto, item?.client_id]
+        .map((v) => String(v ?? '').trim())
+        .filter((v) => v !== '' && v !== 'undefined' && v !== 'null');
+      if (itemIds.length === 0) return false;
+      if (idValido && itemIds.includes(idValido)) return true;
+      if (altValido && itemIds.includes(altValido)) return true;
+      return false;
+    };
+
+    if (tabla === 'leads') {
       setCitasCalificadas((prev) => {
         const next = prev.map((c) => (coincideLead(c) ? { ...c, ...cambios } : c));
         safeSetLocalStorage('kpi_citas_calificadas', next);
@@ -337,9 +360,9 @@ export default function App() {
       });
     }
 
-    const ok = await actualizarLeadKpiBackend(leadId, cambios, tabla, codigoAlt);
+    const ok = await actualizarLeadKpiBackend(idValido || altValido, cambios, tabla, altValido);
     if (ok) {
-      mostrarToast(`Registro actualizado en ${tabla} exitosamente`, 'exito');
+      mostrarToast(`Etapa actualizada individualmente en ${tabla}`, 'exito');
       return true;
     } else {
       mostrarToast('Error al persistir cambios', 'error');
@@ -477,6 +500,63 @@ export default function App() {
       return false;
     }
   };
+
+  // Enriquecer registros PBX con N° de Lead y Nombre del Cliente según teléfono destino (Calificados + No Calificados)
+  const rawPbxEnriquecido = useMemo(() => {
+    if (!rawPbx || rawPbx.length === 0) return [];
+    const indiceTel = new Map<string, any[]>();
+    const indexar = (lead: any, tipo: 'calificado' | 'no_calificado') => {
+      const digits = String(lead.telefono || lead.celular || lead.client_phone || '').replace(/\D/g, '');
+      if (digits.length < 7) return;
+      const key = digits.length >= 8 ? digits.slice(-8) : digits.slice(-7);
+      const entry = {
+        codigo: String(lead.codigo_prospecto || lead.client_id || lead.id || '').trim(),
+        cliente: String(lead.nombre_prospecto || lead.client_name || lead.nombre || '').trim(),
+        asesor: String(lead.asesor_nombre || lead.advisor_name || '').trim().toLowerCase(),
+        fechaTs: new Date(lead.fecha_agendada || lead.fecha_creado || lead.created_at || 0).getTime() || 0,
+        tipo,
+      };
+      if (!entry.codigo && !entry.cliente) return;
+      const list = indiceTel.get(key) || [];
+      list.push(entry);
+      indiceTel.set(key, list);
+    };
+    rawLeads.forEach((l) => indexar(l, 'calificado'));
+    rawLeadsNoCalificados.forEach((l) => indexar(l, 'no_calificado'));
+
+    return rawPbx.map((p) => {
+      if (p.codigo_lead && p.cliente_nombre) return p;
+      const digits = String(p.destino || '').replace(/\D/g, '');
+      if (digits.length < 7) return p;
+      const key = digits.length >= 8 ? digits.slice(-8) : digits.slice(-7);
+      const candidatos = indiceTel.get(key);
+      if (!candidatos || candidatos.length === 0) return p;
+
+      const asesorPbx = String(p.asesor_nombre || p.nombre || '').trim().toLowerCase();
+      const tsPbx = new Date(p.fecha_hora || 0).getTime() || 0;
+      let mejor = candidatos[0];
+      let mejorScore = -Infinity;
+      for (const c of candidatos) {
+        let score = c.tipo === 'calificado' ? 10 : 0;
+        if (asesorPbx && c.asesor && (asesorPbx.includes(c.asesor) || c.asesor.includes(asesorPbx))) {
+          score += 50;
+        }
+        if (tsPbx && c.fechaTs) {
+          score -= Math.min(Math.abs(tsPbx - c.fechaTs) / 86400000, 30);
+        }
+        if (score > mejorScore) {
+          mejorScore = score;
+          mejor = c;
+        }
+      }
+      return {
+        ...p,
+        codigo_lead: p.codigo_lead || mejor.codigo || '',
+        cliente_nombre: p.cliente_nombre || mejor.cliente || '',
+        tipo_lead_match: p.tipo_lead_match || mejor.tipo,
+      };
+    });
+  }, [rawPbx, rawLeads, rawLeadsNoCalificados]);
 
   // Motor de Cruce Inteligente completo (cada vista aplica su DateRangeFilter sin recortar históricos)
   const crucesAuditoriaTodos = useMemo(() => {
@@ -716,12 +796,50 @@ export default function App() {
               titulo="Registros de Llamadas PBX"
               subtitulo="Llamadas en caliente consultadas directamente desde api.red.com.sv (PBX getCalls2)"
               icono="pbx"
-              datos={rawPbx}
+              datos={rawPbxEnriquecido}
               catalogo={catalogo}
               leadsDisponibles={modoLeads === 'calificados' ? rawLeads : rawLeadsNoCalificados}
               onGuardarLlamadaManual={handleGuardarLlamadaManual}
               columnas={[
-                { clave: 'uniqueid', etiqueta: 'Unique ID' },
+                {
+                  clave: 'codigo_lead',
+                  etiqueta: 'N° Lead',
+                  exportValue: (val) => (val ? String(val).trim() : 'Sin Lead'),
+                  render: (val, fila) =>
+                    val ? (
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded font-mono text-[11px] font-bold border ${
+                          fila.tipo_lead_match === 'no_calificado'
+                            ? 'bg-cyan-50 text-cyan-800 border-cyan-200 dark:bg-cyan-950/70 dark:text-cyan-300 dark:border-cyan-800/50'
+                            : 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/70 dark:text-amber-300 dark:border-amber-800/50'
+                        }`}
+                        title={
+                          fila.tipo_lead_match === 'no_calificado'
+                            ? 'Lead No Calificado asociado por teléfono'
+                            : 'Lead Calificado asociado por teléfono'
+                        }
+                      >
+                        {val}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 dark:text-slate-500 text-[11px] italic">
+                        Sin Lead
+                      </span>
+                    ),
+                },
+                {
+                  clave: 'cliente_nombre',
+                  etiqueta: 'Cliente',
+                  exportValue: (val) => (val ? String(val).trim() : 'Sin coincidencia'),
+                  render: (val) =>
+                    val ? (
+                      <span className="font-semibold text-slate-900 dark:text-slate-100">
+                        {val}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 dark:text-slate-500 text-[11px]">-</span>
+                    ),
+                },
                 { clave: 'fecha_hora', etiqueta: 'Fecha y Hora', esFecha: true },
                 {
                   clave: 'nombre',
@@ -764,6 +882,7 @@ export default function App() {
                     );
                   },
                 },
+                { clave: 'uniqueid', etiqueta: 'Unique ID' },
                 {
                   clave: 'consultar',
                   etiqueta: 'Audio & Transcripción',
@@ -1059,11 +1178,12 @@ export default function App() {
                       type="button"
                       onClick={async () => {
                         const nuevo = !val;
-                        await handleActualizarLeadKpi(String(fila.id), { kpi_retroalimentacion_etapa_1: nuevo });
-                        setRawLeads((prev) =>
-                          prev.map((item) =>
-                            item.id === fila.id ? { ...item, kpi_retroalimentacion_etapa_1: nuevo } : item
-                          )
+                        const leadKey = String(fila.id || fila.codigo_prospecto || '').trim();
+                        await handleActualizarLeadKpi(
+                          leadKey,
+                          { kpi_retroalimentacion_etapa_1: nuevo },
+                          fila.codigo_prospecto,
+                          'leads'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1086,11 +1206,12 @@ export default function App() {
                       type="button"
                       onClick={async () => {
                         const nuevo = !val;
-                        await handleActualizarLeadKpi(String(fila.id), { kpi_retroalimentacion_etapa_2: nuevo });
-                        setRawLeads((prev) =>
-                          prev.map((item) =>
-                            item.id === fila.id ? { ...item, kpi_retroalimentacion_etapa_2: nuevo } : item
-                          )
+                        const leadKey = String(fila.id || fila.codigo_prospecto || '').trim();
+                        await handleActualizarLeadKpi(
+                          leadKey,
+                          { kpi_retroalimentacion_etapa_2: nuevo },
+                          fila.codigo_prospecto,
+                          'leads'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1113,11 +1234,12 @@ export default function App() {
                       type="button"
                       onClick={async () => {
                         const nuevo = !val;
-                        await handleActualizarLeadKpi(String(fila.id), { kpi_retroalimentacion_etapa_3: nuevo });
-                        setRawLeads((prev) =>
-                          prev.map((item) =>
-                            item.id === fila.id ? { ...item, kpi_retroalimentacion_etapa_3: nuevo } : item
-                          )
+                        const leadKey = String(fila.id || fila.codigo_prospecto || '').trim();
+                        await handleActualizarLeadKpi(
+                          leadKey,
+                          { kpi_retroalimentacion_etapa_3: nuevo },
+                          fila.codigo_prospecto,
+                          'leads'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1140,11 +1262,12 @@ export default function App() {
                       type="button"
                       onClick={async () => {
                         const nuevo = !val;
-                        await handleActualizarLeadKpi(String(fila.id), { kpi_retroalimentacion_etapa_4: nuevo });
-                        setRawLeads((prev) =>
-                          prev.map((item) =>
-                            item.id === fila.id ? { ...item, kpi_retroalimentacion_etapa_4: nuevo } : item
-                          )
+                        const leadKey = String(fila.id || fila.codigo_prospecto || '').trim();
+                        await handleActualizarLeadKpi(
+                          leadKey,
+                          { kpi_retroalimentacion_etapa_4: nuevo },
+                          fila.codigo_prospecto,
+                          'leads'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1168,11 +1291,12 @@ export default function App() {
                       type="button"
                       onClick={async () => {
                         const nuevo = !val;
-                        await handleActualizarLeadKpi(String(fila.id), { kpi_sla_etapa_1: nuevo });
-                        setRawLeads((prev) =>
-                          prev.map((item) =>
-                            item.id === fila.id ? { ...item, kpi_sla_etapa_1: nuevo } : item
-                          )
+                        const leadKey = String(fila.id || fila.codigo_prospecto || '').trim();
+                        await handleActualizarLeadKpi(
+                          leadKey,
+                          { kpi_sla_etapa_1: nuevo },
+                          fila.codigo_prospecto,
+                          'leads'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1195,11 +1319,12 @@ export default function App() {
                       type="button"
                       onClick={async () => {
                         const nuevo = !val;
-                        await handleActualizarLeadKpi(String(fila.id), { kpi_sla_etapa_2: nuevo });
-                        setRawLeads((prev) =>
-                          prev.map((item) =>
-                            item.id === fila.id ? { ...item, kpi_sla_etapa_2: nuevo } : item
-                          )
+                        const leadKey = String(fila.id || fila.codigo_prospecto || '').trim();
+                        await handleActualizarLeadKpi(
+                          leadKey,
+                          { kpi_sla_etapa_2: nuevo },
+                          fila.codigo_prospecto,
+                          'leads'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1222,11 +1347,12 @@ export default function App() {
                       type="button"
                       onClick={async () => {
                         const nuevo = !val;
-                        await handleActualizarLeadKpi(String(fila.id), { kpi_sla_etapa_3: nuevo });
-                        setRawLeads((prev) =>
-                          prev.map((item) =>
-                            item.id === fila.id ? { ...item, kpi_sla_etapa_3: nuevo } : item
-                          )
+                        const leadKey = String(fila.id || fila.codigo_prospecto || '').trim();
+                        await handleActualizarLeadKpi(
+                          leadKey,
+                          { kpi_sla_etapa_3: nuevo },
+                          fila.codigo_prospecto,
+                          'leads'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1326,7 +1452,8 @@ export default function App() {
                         await handleActualizarLeadKpi(
                           String(fila.id || fila.client_id || ''),
                           { kpi_retroalimentacion_etapa_1: nuevo },
-                          fila.client_id
+                          fila.client_id,
+                          'leads_no_calificados'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1352,7 +1479,8 @@ export default function App() {
                         await handleActualizarLeadKpi(
                           String(fila.id || fila.client_id || ''),
                           { kpi_retroalimentacion_etapa_2: nuevo },
-                          fila.client_id
+                          fila.client_id,
+                          'leads_no_calificados'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1378,7 +1506,8 @@ export default function App() {
                         await handleActualizarLeadKpi(
                           String(fila.id || fila.client_id || ''),
                           { kpi_retroalimentacion_etapa_3: nuevo },
-                          fila.client_id
+                          fila.client_id,
+                          'leads_no_calificados'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1404,7 +1533,8 @@ export default function App() {
                         await handleActualizarLeadKpi(
                           String(fila.id || fila.client_id || ''),
                           { kpi_retroalimentacion_etapa_4: nuevo },
-                          fila.client_id
+                          fila.client_id,
+                          'leads_no_calificados'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1431,7 +1561,8 @@ export default function App() {
                         await handleActualizarLeadKpi(
                           String(fila.id || fila.client_id || ''),
                           { kpi_sla_etapa_1: nuevo },
-                          fila.client_id
+                          fila.client_id,
+                          'leads_no_calificados'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1457,7 +1588,8 @@ export default function App() {
                         await handleActualizarLeadKpi(
                           String(fila.id || fila.client_id || ''),
                           { kpi_sla_etapa_2: nuevo },
-                          fila.client_id
+                          fila.client_id,
+                          'leads_no_calificados'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
@@ -1483,7 +1615,8 @@ export default function App() {
                         await handleActualizarLeadKpi(
                           String(fila.id || fila.client_id || ''),
                           { kpi_sla_etapa_3: nuevo },
-                          fila.client_id
+                          fila.client_id,
+                          'leads_no_calificados'
                         );
                       }}
                       className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${

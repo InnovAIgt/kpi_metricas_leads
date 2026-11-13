@@ -2,5 +2,8 @@
   "leads_no_calificados:LD200958": {
     "kpi_sla_etapa_1": false,
     "kpi_retroalimentacion_etapa_2": false
+  },
+  "leads:LD1000746": {
+    "kpi_retroalimentacion_etapa_1": false
   }
 }

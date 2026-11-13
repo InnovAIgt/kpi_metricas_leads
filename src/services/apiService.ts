@@ -227,6 +227,9 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
         const ovNc = leerKpiOverridesLocal('leads_no_calificados');
 
         leads.forEach((lead: any, idx: number) => {
+          if (!lead.id || lead.id === 'undefined' || lead.id === 'null') {
+            lead.id = String(lead.codigo_prospecto || `lead-${idx}`).trim();
+          }
           const { fechaIso, fechaAgendada, horaAgendada, fechaCreado, horaCreado, tieneCitaAgendada } =
             extraerFechaHoraLead(lead);
 
@@ -1206,7 +1209,11 @@ function leerKpiOverridesLocal(tabla: 'leads' | 'leads_no_calificados'): Record<
     const raw = localStorage.getItem(`kpi_estados_override_${tabla}`);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    if (!parsed || typeof parsed !== 'object') return {};
+    delete parsed['undefined'];
+    delete parsed['null'];
+    delete parsed[''];
+    return parsed;
   } catch {
     return {};
   }
@@ -1227,7 +1234,7 @@ function guardarKpiOverrideLocal(
     });
     claves.forEach((c) => {
       const clean = String(c || '').trim();
-      if (!clean) return;
+      if (!clean || clean === 'undefined' || clean === 'null') return;
       actual[clean] = { ...(actual[clean] || {}), ...soloBool };
     });
     localStorage.setItem(`kpi_estados_override_${tabla}`, JSON.stringify(actual));

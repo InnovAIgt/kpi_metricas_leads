@@ -498,6 +498,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       const hAg = pl.hora_agendada ? String(pl.hora_agendada).trim() : null;
 
       const leadItem = {
+        id: String(pl.id || cod).trim(),
         codigo_prospecto: cod,
         nombre_prospecto: pl.nombre_prospecto || pl.nombre || '',
         telefono: pl.telefono || '',
@@ -643,6 +644,59 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       p.grabacion_url = audioFinal || null;
     });
 
+    // 4B. Enriquecer cada llamada PBX con el N° de Lead y Nombre del Cliente según teléfono destino
+    const indiceLeadsPorTel = new Map<string, any[]>();
+    const registrarLeadEnIndice = (lead: any, tipo: 'calificado' | 'no_calificado') => {
+      const digits = String(lead.telefono || lead.celular || lead.client_phone || '').replace(/\D/g, '');
+      if (digits.length < 7) return;
+      const key8 = digits.length >= 8 ? digits.slice(-8) : digits.slice(-7);
+      const entry = {
+        codigo: String(lead.codigo_prospecto || lead.client_id || lead.id || '').trim(),
+        cliente: String(lead.nombre_prospecto || lead.client_name || lead.nombre || '').trim(),
+        asesor: String(lead.asesor_nombre || lead.advisor_name || '').trim().toLowerCase(),
+        fechaTs: new Date(lead.fecha_agendada || lead.fecha_creado || lead.created_at || 0).getTime() || 0,
+        tipo,
+      };
+      if (!entry.codigo && !entry.cliente) return;
+      const list = indiceLeadsPorTel.get(key8) || [];
+      list.push(entry);
+      indiceLeadsPorTel.set(key8, list);
+    };
+    leads.forEach((l: any) => registrarLeadEnIndice(l, 'calificado'));
+    leadsNoCalificados.forEach((l: any) => registrarLeadEnIndice(l, 'no_calificado'));
+
+    llamadasPbx.forEach((p: any) => {
+      if (p.codigo_lead && p.cliente_nombre) return;
+      const digits = String(p.destino || '').replace(/\D/g, '');
+      if (digits.length < 7) return;
+      const key = digits.length >= 8 ? digits.slice(-8) : digits.slice(-7);
+      const candidatos = indiceLeadsPorTel.get(key);
+      if (!candidatos || candidatos.length === 0) return;
+
+      const asesorPbx = String(p.asesor_nombre || p.nombre || '').trim().toLowerCase();
+      const tsPbx = new Date(p.fecha_hora || 0).getTime() || 0;
+
+      let mejor = candidatos[0];
+      let mejorScore = -Infinity;
+      for (const c of candidatos) {
+        let score = c.tipo === 'calificado' ? 10 : 0;
+        if (asesorPbx && c.asesor && (asesorPbx.includes(c.asesor) || c.asesor.includes(asesorPbx))) {
+          score += 50;
+        }
+        if (tsPbx && c.fechaTs) {
+          const diffDays = Math.abs(tsPbx - c.fechaTs) / 86400000;
+          score -= Math.min(diffDays, 30);
+        }
+        if (score > mejorScore) {
+          mejorScore = score;
+          mejor = c;
+        }
+      }
+      if (!p.codigo_lead && mejor.codigo) p.codigo_lead = mejor.codigo;
+      if (!p.cliente_nombre && mejor.cliente) p.cliente_nombre = mejor.cliente;
+      if (!p.tipo_lead_match) p.tipo_lead_match = mejor.tipo;
+    });
+
     // 5. Jalar automáticamente prospectos con reunión virtual de Leads hacia Teams
     const mapaTeamsExistente = new Map<string, any>();
     teamsRaw.forEach((t: any) => {
@@ -659,7 +713,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
         const cod = String(lv.codigo_prospecto || '').trim().toLowerCase();
         if (!mapaTeamsExistente.has(cod)) {
           llamadasTeams.push({
-            id: `lead-virtual-${lv.id}`,
+            id: `lead-virtual-${lv.id || lv.codigo_prospecto}`,
             codigo_prospecto: lv.codigo_prospecto,
             pais: lv.pais || 'SV',
             ejecutivo: lv.asesor_nombre,

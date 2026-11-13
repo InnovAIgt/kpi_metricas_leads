@@ -318,6 +318,7 @@ export default async function handler(req: any, res: any) {
       const fAg = pl.fecha_agendada ? String(pl.fecha_agendada).trim() : null;
       const hAg = pl.hora_agendada ? String(pl.hora_agendada).trim() : null;
       mapaLeads.set(cod, {
+        id: String(pl.id || cod).trim(),
         codigo_prospecto: cod,
         nombre_prospecto: pl.nombre_prospecto || pl.nombre || '',
         telefono: pl.telefono || '',
@@ -427,6 +428,56 @@ export default async function handler(req: any, res: any) {
         resolverAsesorBackend(p.nombre, p.nombre || (extStr ? `Ext. ${extStr}` : 'Línea PBX'))
       );
       p.pais = p.pais || detectarPais(p.destino, 'SV');
+    });
+
+    // Enriquecer cada llamada PBX con N° Lead y Nombre del Cliente
+    const indiceLeadsPorTel = new Map<string, any[]>();
+    const registrarLeadEnIndice = (lead: any, tipo: 'calificado' | 'no_calificado') => {
+      const digits = String(lead.telefono || lead.celular || lead.client_phone || '').replace(/\D/g, '');
+      if (digits.length < 7) return;
+      const key8 = digits.length >= 8 ? digits.slice(-8) : digits.slice(-7);
+      const entry = {
+        codigo: String(lead.codigo_prospecto || lead.client_id || lead.id || '').trim(),
+        cliente: String(lead.nombre_prospecto || lead.client_name || lead.nombre || '').trim(),
+        asesor: String(lead.asesor_nombre || lead.advisor_name || '').trim().toLowerCase(),
+        fechaTs: new Date(lead.fecha_agendada || lead.fecha_creado || lead.created_at || 0).getTime() || 0,
+        tipo,
+      };
+      if (!entry.codigo && !entry.cliente) return;
+      const list = indiceLeadsPorTel.get(key8) || [];
+      list.push(entry);
+      indiceLeadsPorTel.set(key8, list);
+    };
+    leadsCalificadosValidos.forEach((l: any) => registrarLeadEnIndice(l, 'calificado'));
+    leadsNoCalificados.forEach((l: any) => registrarLeadEnIndice(l, 'no_calificado'));
+
+    pbxDirecto.forEach((p: any) => {
+      if (p.codigo_lead && p.cliente_nombre) return;
+      const digits = String(p.destino || '').replace(/\D/g, '');
+      if (digits.length < 7) return;
+      const key = digits.length >= 8 ? digits.slice(-8) : digits.slice(-7);
+      const candidatos = indiceLeadsPorTel.get(key);
+      if (!candidatos || candidatos.length === 0) return;
+      const asesorPbx = String(p.asesor_nombre || p.nombre || '').trim().toLowerCase();
+      const tsPbx = new Date(p.fecha_hora || 0).getTime() || 0;
+      let mejor = candidatos[0];
+      let mejorScore = -Infinity;
+      for (const c of candidatos) {
+        let score = c.tipo === 'calificado' ? 10 : 0;
+        if (asesorPbx && c.asesor && (asesorPbx.includes(c.asesor) || c.asesor.includes(asesorPbx))) {
+          score += 50;
+        }
+        if (tsPbx && c.fechaTs) {
+          score -= Math.min(Math.abs(tsPbx - c.fechaTs) / 86400000, 30);
+        }
+        if (score > mejorScore) {
+          mejorScore = score;
+          mejor = c;
+        }
+      }
+      if (!p.codigo_lead && mejor.codigo) p.codigo_lead = mejor.codigo;
+      if (!p.cliente_nombre && mejor.cliente) p.cliente_nombre = mejor.cliente;
+      if (!p.tipo_lead_match) p.tipo_lead_match = mejor.tipo;
     });
 
     const mapaTeamsExistente = new Map<string, any>();

@@ -25,6 +25,16 @@ const PORT =
 
 app.use(express.json());
 
+app.get('/api/health', (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    status: 'healthy',
+    env: process.env.NODE_ENV || 'development',
+    uptime_sec: Math.round(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Credenciales protegidas en backend
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://sbopifiiyezmvsadwkpg.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNib3BpZmlpeWV6bXZzYWR3a3BnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ3MzM0OTYsImV4cCI6MjEwMDMwOTQ5Nn0.ZI5y8lroFF529Xr-Otm1fcq6H2lhbh9e3s-WU9O6I7A';
@@ -63,7 +73,10 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // Almacén persistente en servidor para estados KPI (SLA y Retroalimentación) en ambos modos
-const KPI_ESTADOS_FILE = path.resolve(__dirname, '.data', 'kpi-estados.json');
+const KPI_DATA_DIR = process.env.KPI_DATA_DIR
+  ? path.resolve(process.env.KPI_DATA_DIR)
+  : path.resolve(__dirname, '.data');
+const KPI_ESTADOS_FILE = path.join(KPI_DATA_DIR, 'kpi-estados.json');
 const KPI_ESTADOS_TMP = path.join(os.tmpdir(), 'kpi-auditoria-estados.json');
 
 type KpiTabla = 'leads' | 'leads_no_calificados';
@@ -1640,9 +1653,17 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Servidor iniciado en puerto ${PORT}`);
   });
+
+  const shutdown = (signal: string) => {
+    console.log(`Recibida señal ${signal}, cerrando servidor HTTP...`);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer();

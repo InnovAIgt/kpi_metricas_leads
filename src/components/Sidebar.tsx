@@ -317,40 +317,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
               </button>
 
-              {/* KPI 2 y KPI 3 SOLO EXISTEN EN LEADS CALIFICADOS */}
-              {esCalificado && (
-                <>
-                  {/* KPI 2: SLA de Etapas */}
-                  <button
-                    onClick={() => onCambiarVista('kpi_sla')}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
-                      vistaActiva === 'kpi_sla'
-                        ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200 font-semibold border-l-2 border-amber-500 shadow-xs'
-                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/40 hover:text-slate-900 dark:hover:text-slate-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Shield className="h-3.5 w-3.5 text-amber-500" />
-                      <span>KPI 2: SLA de Etapas</span>
-                    </div>
-                  </button>
+              {/* KPI 2: SLA de Etapas (Disponible en Calificados y No Calificados) */}
+              <button
+                onClick={() => onCambiarVista('kpi_sla')}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
+                  vistaActiva === 'kpi_sla'
+                    ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200 font-semibold border-l-2 border-amber-500 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/40 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Shield className="h-3.5 w-3.5 text-amber-500" />
+                  <span>KPI 2: SLA de Etapas</span>
+                </div>
+              </button>
 
-                  {/* KPI 3: Retroalimentación de Etapas */}
-                  <button
-                    onClick={() => onCambiarVista('kpi_retroalimentacion')}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
-                      vistaActiva === 'kpi_retroalimentacion'
-                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200 font-semibold border-l-2 border-emerald-500 shadow-xs'
-                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/40 hover:text-slate-900 dark:hover:text-slate-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                      <span>KPI 3: Retroalimentación</span>
-                    </div>
-                  </button>
-                </>
-              )}
+              {/* KPI 3: Retroalimentación de Etapas (Disponible en Calificados y No Calificados) */}
+              <button
+                onClick={() => onCambiarVista('kpi_retroalimentacion')}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all ${
+                  vistaActiva === 'kpi_retroalimentacion'
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200 font-semibold border-l-2 border-emerald-500 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/40 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                  <span>KPI 3: Retroalimentación</span>
+                </div>
+              </button>
             </div>
           )}
         </div>

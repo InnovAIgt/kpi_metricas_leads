@@ -38,7 +38,11 @@ export const VistaKpiRetroalimentacion: React.FC<VistaKpiRetroalimentacionProps>
   const citasConFecha = useMemo(() => {
     if (!fechaInicio && !fechaFin) return citas;
     return citas.filter((c) => {
-      const f = c.fecha_agendada || (c.fecha_hora_programada ? c.fecha_hora_programada.slice(0, 10) : '');
+      const f =
+        c.fecha_agendada ||
+        c.fecha_creado ||
+        (c.fecha_hora_programada ? c.fecha_hora_programada.slice(0, 10) : '') ||
+        (c.created_at ? String(c.created_at).slice(0, 10) : '');
       if (!f) return true;
       if (fechaInicio && f < fechaInicio) return false;
       if (fechaFin && f > fechaFin) return false;

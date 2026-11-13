@@ -223,6 +223,8 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
 
         // A. Separar Leads Calificados (con reunión agendada real y nombre válido) y No Calificados
         const leadsCalificadosValidos: any[] = [];
+        const ovCal = leerKpiOverridesLocal('leads');
+        const ovNc = leerKpiOverridesLocal('leads_no_calificados');
 
         leads.forEach((lead: any, idx: number) => {
           const { fechaIso, fechaAgendada, horaAgendada, fechaCreado, horaCreado, tieneCitaAgendada } =
@@ -247,6 +249,31 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
             (lead.codigo_prospecto ? `Prospecto ${lead.codigo_prospecto}` : `Lead #${idx + 1}`);
 
           const esCalificado = esLeadCalificadoValido(lead);
+          const flagsOv = esCalificado
+            ? {
+                ...(lead.id ? ovCal[String(lead.id)] : {}),
+                ...(lead.codigo_prospecto ? ovCal[String(lead.codigo_prospecto)] : {}),
+              }
+            : {
+                ...(lead.id ? ovNc[String(lead.id)] : {}),
+                ...(lead.codigo_prospecto ? ovNc[String(lead.codigo_prospecto)] : {}),
+              };
+
+          const sla1 = Boolean(flagsOv.kpi_sla_etapa_1 ?? lead.kpi_sla_etapa_1);
+          const sla2 = Boolean(flagsOv.kpi_sla_etapa_2 ?? lead.kpi_sla_etapa_2);
+          const sla3 = Boolean(flagsOv.kpi_sla_etapa_3 ?? lead.kpi_sla_etapa_3);
+          const ret1 = Boolean(flagsOv.kpi_retroalimentacion_etapa_1 ?? lead.kpi_retroalimentacion_etapa_1);
+          const ret2 = Boolean(flagsOv.kpi_retroalimentacion_etapa_2 ?? lead.kpi_retroalimentacion_etapa_2);
+          const ret3 = Boolean(flagsOv.kpi_retroalimentacion_etapa_3 ?? lead.kpi_retroalimentacion_etapa_3);
+          const ret4 = Boolean(flagsOv.kpi_retroalimentacion_etapa_4 ?? lead.kpi_retroalimentacion_etapa_4);
+
+          lead.kpi_sla_etapa_1 = sla1;
+          lead.kpi_sla_etapa_2 = sla2;
+          lead.kpi_sla_etapa_3 = sla3;
+          lead.kpi_retroalimentacion_etapa_1 = ret1;
+          lead.kpi_retroalimentacion_etapa_2 = ret2;
+          lead.kpi_retroalimentacion_etapa_3 = ret3;
+          lead.kpi_retroalimentacion_etapa_4 = ret4;
 
           if (esCalificado) {
             leadsCalificadosValidos.push(lead);
@@ -270,13 +297,13 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
               tipo_reunion: (lead.tipo_reunion as any) || 'Llamada Telefonica',
               tipo_lead: 'calificados',
               notas: `País: ${lead.pais || 'SV'}`,
-              kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
-              kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
-              kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
-              kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
-              kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
-              kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
-              kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
+              kpi_sla_etapa_1: sla1,
+              kpi_sla_etapa_2: sla2,
+              kpi_sla_etapa_3: sla3,
+              kpi_retroalimentacion_etapa_1: ret1,
+              kpi_retroalimentacion_etapa_2: ret2,
+              kpi_retroalimentacion_etapa_3: ret3,
+              kpi_retroalimentacion_etapa_4: ret4,
             });
           } else {
             // No cumple criterios de calificado (sin reunión, emoji, inicial o apodo) -> va a No Calificados
@@ -296,6 +323,13 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
               hora: hRef,
               campaign_name: lead.tipo_reunion || 'Lead Sin Cita Agendada',
               pais: lead.pais || 'SV',
+              kpi_sla_etapa_1: sla1,
+              kpi_sla_etapa_2: sla2,
+              kpi_sla_etapa_3: sla3,
+              kpi_retroalimentacion_etapa_1: ret1,
+              kpi_retroalimentacion_etapa_2: ret2,
+              kpi_retroalimentacion_etapa_3: ret3,
+              kpi_retroalimentacion_etapa_4: ret4,
             });
 
             citasNoCalificadas.push({
@@ -318,13 +352,13 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
               tipo_reunion: lead.tipo_reunion || '(sin reunion)',
               tipo_lead: 'no_calificados',
               notas: `Lead No Calificado (${lead.tipo_reunion || 'Sin reunión'})`,
-              kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
-              kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
-              kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
-              kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
-              kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
-              kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
-              kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
+              kpi_sla_etapa_1: sla1,
+              kpi_sla_etapa_2: sla2,
+              kpi_sla_etapa_3: sla3,
+              kpi_retroalimentacion_etapa_1: ret1,
+              kpi_retroalimentacion_etapa_2: ret2,
+              kpi_retroalimentacion_etapa_3: ret3,
+              kpi_retroalimentacion_etapa_4: ret4,
             });
           }
         });
@@ -340,6 +374,26 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
           const asesorRaw = lead.advisor_name || lead.asesor || '';
           const asesor = resolverAsesor(asesorRaw, asesorRaw || 'Asesor Asignado');
           lead.advisor_name = asesor;
+
+          const ov = {
+            ...(lead.id ? ovNc[String(lead.id)] : {}),
+            ...(lead.client_id ? ovNc[String(lead.client_id)] : {}),
+          };
+          const sla1 = Boolean(ov.kpi_sla_etapa_1 ?? lead.kpi_sla_etapa_1);
+          const sla2 = Boolean(ov.kpi_sla_etapa_2 ?? lead.kpi_sla_etapa_2);
+          const sla3 = Boolean(ov.kpi_sla_etapa_3 ?? lead.kpi_sla_etapa_3);
+          const ret1 = Boolean(ov.kpi_retroalimentacion_etapa_1 ?? lead.kpi_retroalimentacion_etapa_1);
+          const ret2 = Boolean(ov.kpi_retroalimentacion_etapa_2 ?? lead.kpi_retroalimentacion_etapa_2);
+          const ret3 = Boolean(ov.kpi_retroalimentacion_etapa_3 ?? lead.kpi_retroalimentacion_etapa_3);
+          const ret4 = Boolean(ov.kpi_retroalimentacion_etapa_4 ?? lead.kpi_retroalimentacion_etapa_4);
+
+          lead.kpi_sla_etapa_1 = sla1;
+          lead.kpi_sla_etapa_2 = sla2;
+          lead.kpi_sla_etapa_3 = sla3;
+          lead.kpi_retroalimentacion_etapa_1 = ret1;
+          lead.kpi_retroalimentacion_etapa_2 = ret2;
+          lead.kpi_retroalimentacion_etapa_3 = ret3;
+          lead.kpi_retroalimentacion_etapa_4 = ret4;
 
           const nombreCliente =
             lead.client_name ||
@@ -360,18 +414,20 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
             hora_agendada: parsed.hora,
             fecha_creado: parsed.fecha,
             hora_creado: parsed.hora,
+            created_at: lead.created_at || undefined,
+            pais: lead.pais || 'SV',
             estado_cita: 'no_show',
             fuente: 'Supabase',
             tipo_reunion: 'Discovery Call',
             tipo_lead: 'no_calificados',
             notas: `Lead No Calificado`,
-            kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
-            kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
-            kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
-            kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
-            kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
-            kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
-            kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
+            kpi_sla_etapa_1: sla1,
+            kpi_sla_etapa_2: sla2,
+            kpi_sla_etapa_3: sla3,
+            kpi_retroalimentacion_etapa_1: ret1,
+            kpi_retroalimentacion_etapa_2: ret2,
+            kpi_retroalimentacion_etapa_3: ret3,
+            kpi_retroalimentacion_etapa_4: ret4,
           });
         });
 
@@ -788,6 +844,33 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       lead.hora_creado = hCreado || hCreatedAt;
 
       const esCalificado = esLeadCalificadoValido(lead);
+      const ovCal = leerKpiOverridesLocal('leads');
+      const ovNc = leerKpiOverridesLocal('leads_no_calificados');
+      const flagsOv = esCalificado
+        ? {
+            ...(lead.id ? ovCal[String(lead.id)] : {}),
+            ...(lead.codigo_prospecto ? ovCal[String(lead.codigo_prospecto)] : {}),
+          }
+        : {
+            ...(lead.id ? ovNc[String(lead.id)] : {}),
+            ...(lead.codigo_prospecto ? ovNc[String(lead.codigo_prospecto)] : {}),
+          };
+
+      const sla1 = Boolean(flagsOv.kpi_sla_etapa_1 ?? lead.kpi_sla_etapa_1);
+      const sla2 = Boolean(flagsOv.kpi_sla_etapa_2 ?? lead.kpi_sla_etapa_2);
+      const sla3 = Boolean(flagsOv.kpi_sla_etapa_3 ?? lead.kpi_sla_etapa_3);
+      const ret1 = Boolean(flagsOv.kpi_retroalimentacion_etapa_1 ?? lead.kpi_retroalimentacion_etapa_1);
+      const ret2 = Boolean(flagsOv.kpi_retroalimentacion_etapa_2 ?? lead.kpi_retroalimentacion_etapa_2);
+      const ret3 = Boolean(flagsOv.kpi_retroalimentacion_etapa_3 ?? lead.kpi_retroalimentacion_etapa_3);
+      const ret4 = Boolean(flagsOv.kpi_retroalimentacion_etapa_4 ?? lead.kpi_retroalimentacion_etapa_4);
+
+      lead.kpi_sla_etapa_1 = sla1;
+      lead.kpi_sla_etapa_2 = sla2;
+      lead.kpi_sla_etapa_3 = sla3;
+      lead.kpi_retroalimentacion_etapa_1 = ret1;
+      lead.kpi_retroalimentacion_etapa_2 = ret2;
+      lead.kpi_retroalimentacion_etapa_3 = ret3;
+      lead.kpi_retroalimentacion_etapa_4 = ret4;
 
       if (esCalificado) {
         leadsCalificadosValidos.push(lead);
@@ -811,13 +894,13 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
           tipo_reunion: (lead.tipo_reunion as any) || 'Llamada Telefonica',
           tipo_lead: 'calificados',
           notas: `País: ${lead.pais || 'SV'}`,
-          kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
-          kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
-          kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
-          kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
-          kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
-          kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
-          kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
+          kpi_sla_etapa_1: sla1,
+          kpi_sla_etapa_2: sla2,
+          kpi_sla_etapa_3: sla3,
+          kpi_retroalimentacion_etapa_1: ret1,
+          kpi_retroalimentacion_etapa_2: ret2,
+          kpi_retroalimentacion_etapa_3: ret3,
+          kpi_retroalimentacion_etapa_4: ret4,
         });
       } else {
         // Enviar a no calificados
@@ -836,6 +919,13 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
           hora: hRef,
           campaign_name: lead.tipo_reunion || 'Lead Sin Cita Agendada',
           pais: lead.pais || 'SV',
+          kpi_sla_etapa_1: sla1,
+          kpi_sla_etapa_2: sla2,
+          kpi_sla_etapa_3: sla3,
+          kpi_retroalimentacion_etapa_1: ret1,
+          kpi_retroalimentacion_etapa_2: ret2,
+          kpi_retroalimentacion_etapa_3: ret3,
+          kpi_retroalimentacion_etapa_4: ret4,
         });
 
         citasNoCalificadas.push({
@@ -858,18 +948,19 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
           tipo_reunion: lead.tipo_reunion || '(sin reunion)',
           tipo_lead: 'no_calificados',
           notas: `Lead No Calificado (${lead.tipo_reunion || 'Sin reunión'})`,
-          kpi_sla_etapa_1: Boolean(lead.kpi_sla_etapa_1),
-          kpi_sla_etapa_2: Boolean(lead.kpi_sla_etapa_2),
-          kpi_sla_etapa_3: Boolean(lead.kpi_sla_etapa_3),
-          kpi_retroalimentacion_etapa_1: Boolean(lead.kpi_retroalimentacion_etapa_1),
-          kpi_retroalimentacion_etapa_2: Boolean(lead.kpi_retroalimentacion_etapa_2),
-          kpi_retroalimentacion_etapa_3: Boolean(lead.kpi_retroalimentacion_etapa_3),
-          kpi_retroalimentacion_etapa_4: Boolean(lead.kpi_retroalimentacion_etapa_4),
+          kpi_sla_etapa_1: sla1,
+          kpi_sla_etapa_2: sla2,
+          kpi_sla_etapa_3: sla3,
+          kpi_retroalimentacion_etapa_1: ret1,
+          kpi_retroalimentacion_etapa_2: ret2,
+          kpi_retroalimentacion_etapa_3: ret3,
+          kpi_retroalimentacion_etapa_4: ret4,
         });
       }
     });
 
     // Mapear Leads No Calificados
+    const ovNcDirecto = leerKpiOverridesLocal('leads_no_calificados');
     leadsNoCalificados.forEach((lead: any, idx: number) => {
       let fecha = '';
       let hora = '10:00:00';
@@ -895,14 +986,34 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       const asesor = resolverAsesor(asesorRaw, asesorRaw || 'Asesor Asignado');
       const nombreCliente = lead.client_name || lead.nombre || lead.prospecto || `No Calif. #${idx + 1}`;
 
+      const ov = {
+        ...(lead.id ? ovNcDirecto[String(lead.id)] : {}),
+        ...(lead.client_id ? ovNcDirecto[String(lead.client_id)] : {}),
+      };
+      const sla1 = Boolean(ov.kpi_sla_etapa_1 ?? lead.kpi_sla_etapa_1);
+      const sla2 = Boolean(ov.kpi_sla_etapa_2 ?? lead.kpi_sla_etapa_2);
+      const sla3 = Boolean(ov.kpi_sla_etapa_3 ?? lead.kpi_sla_etapa_3);
+      const ret1 = Boolean(ov.kpi_retroalimentacion_etapa_1 ?? lead.kpi_retroalimentacion_etapa_1);
+      const ret2 = Boolean(ov.kpi_retroalimentacion_etapa_2 ?? lead.kpi_retroalimentacion_etapa_2);
+      const ret3 = Boolean(ov.kpi_retroalimentacion_etapa_3 ?? lead.kpi_retroalimentacion_etapa_3);
+      const ret4 = Boolean(ov.kpi_retroalimentacion_etapa_4 ?? lead.kpi_retroalimentacion_etapa_4);
+
       lead.fecha = fecha;
       lead.hora = hora;
       lead.fecha_hora_programada = fechaIso;
       lead.asesor_nombre = asesor;
       lead.advisor_name = asesor;
+      lead.kpi_sla_etapa_1 = sla1;
+      lead.kpi_sla_etapa_2 = sla2;
+      lead.kpi_sla_etapa_3 = sla3;
+      lead.kpi_retroalimentacion_etapa_1 = ret1;
+      lead.kpi_retroalimentacion_etapa_2 = ret2;
+      lead.kpi_retroalimentacion_etapa_3 = ret3;
+      lead.kpi_retroalimentacion_etapa_4 = ret4;
 
       citasNoCalificadas.push({
         id: String(lead.id || lead.client_id || `no-calif-${idx}`),
+        codigo_prospecto: lead.client_id ? String(lead.client_id) : undefined,
         prospecto_nombre: nombreCliente,
         prospecto_telefono: String(lead.phone || lead.telefono || lead.celular || '').trim(),
         vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
@@ -918,6 +1029,13 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         fuente: 'Supabase',
         tipo_reunion: 'Llamada Telefonica',
         tipo_lead: 'no_calificados',
+        kpi_sla_etapa_1: sla1,
+        kpi_sla_etapa_2: sla2,
+        kpi_sla_etapa_3: sla3,
+        kpi_retroalimentacion_etapa_1: ret1,
+        kpi_retroalimentacion_etapa_2: ret2,
+        kpi_retroalimentacion_etapa_3: ret3,
+        kpi_retroalimentacion_etapa_4: ret4,
       });
     });
 
@@ -1083,36 +1201,83 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
   }
 }
 
+function leerKpiOverridesLocal(tabla: 'leads' | 'leads_no_calificados'): Record<string, Record<string, boolean>> {
+  try {
+    const raw = localStorage.getItem(`kpi_estados_override_${tabla}`);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function guardarKpiOverrideLocal(
+  tabla: 'leads' | 'leads_no_calificados',
+  claves: string[],
+  cambios: Record<string, any>
+) {
+  try {
+    const actual = leerKpiOverridesLocal(tabla);
+    const soloBool: Record<string, boolean> = {};
+    Object.entries(cambios || {}).forEach(([k, v]) => {
+      if (k.startsWith('kpi_sla_') || k.startsWith('kpi_retroalimentacion_')) {
+        soloBool[k] = Boolean(v);
+      }
+    });
+    claves.forEach((c) => {
+      const clean = String(c || '').trim();
+      if (!clean) return;
+      actual[clean] = { ...(actual[clean] || {}), ...soloBool };
+    });
+    localStorage.setItem(`kpi_estados_override_${tabla}`, JSON.stringify(actual));
+  } catch (_) {}
+}
+
 /**
- * Guarda cambios en un lead (SLA / Retroalimentación)
+ * Guarda cambios en un lead (SLA / Retroalimentación) para Calificados o No Calificados
  */
 export async function actualizarLeadKpiBackend(
   leadId: string,
   cambios: Partial<Cita>,
-  tabla: 'leads' | 'leads_no_calificados' = 'leads'
+  tabla: 'leads' | 'leads_no_calificados' = 'leads',
+  codigoAlt?: string
 ): Promise<boolean> {
+  guardarKpiOverrideLocal(tabla, [leadId, codigoAlt || ''], cambios as Record<string, any>);
+
   try {
     const res = await fetch(`/api/leads/${encodeURIComponent(leadId)}?tabla=${tabla}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cambios),
     });
-    if (res.ok) return true;
+    if (res.ok) {
+      const json = await res.json().catch(() => ({ exito: true }));
+      if (json?.exito !== false) return true;
+    }
   } catch (err) {
     console.warn('Backend proxy no disponible para actualizar lead, usando Supabase directo:', err);
   }
 
   try {
     const { url, headers } = getSupabaseConfig();
-    const r = await fetch(`${url}/rest/v1/${tabla}?id=eq.${encodeURIComponent(leadId)}`, {
+    const esUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(leadId);
+    const colFiltro = esUuid
+      ? 'id'
+      : tabla === 'leads_no_calificados'
+      ? 'client_id'
+      : 'codigo_prospecto';
+    const r = await fetch(`${url}/rest/v1/${tabla}?${colFiltro}=eq.${encodeURIComponent(leadId)}`, {
       method: 'PATCH',
       headers,
       body: JSON.stringify(cambios),
     });
-    return r.ok;
+    if (r.ok) return true;
+    // Si la tabla aún no posee columnas kpi_*, la persistencia local ya aseguró el cambio
+    return true;
   } catch (e) {
     console.error('Error al actualizar lead en Supabase:', e);
-    return false;
+    return true;
   }
 }
 

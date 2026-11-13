@@ -262,8 +262,8 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     return counts;
   }, [llamadasEnPeriodo]);
 
-  // Analítica específica de Calificados: SLA + Retroalimentación + Tipo de Reunión
-  const analiticaCalificados = useMemo(() => {
+  // Analítica de SLA + Retroalimentación (para ambos modos) + Tipo de Reunión
+  const analiticaEtapas = useMemo(() => {
     const n = citasFiltradas.length;
     const sla1 = citasFiltradas.filter((c) => c.kpi_sla_etapa_1).length;
     const sla2 = citasFiltradas.filter((c) => c.kpi_sla_etapa_2).length;
@@ -411,6 +411,16 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
         { indicador: 'Desfase / Respuesta Promedio', valor: `${resumenKPIs.promedio_tiempo_respuesta_minutos} min`, detalle: 'Entre hora objetivo y llamada' },
         { indicador: 'Asesores Activos en Catálogo', valor: catalogo.length, detalle: `${rankingVendedores.length} con actividad en período` },
         { indicador: 'Llamadas en Período (PBX / Cel / WA / Teams)', valor: llamadasEnPeriodo.length, detalle: `PBX: ${canalesPeriodo.PBX} · Cel: ${canalesPeriodo.Celular} · WA: ${canalesPeriodo.WhatsApp} · Teams: ${canalesPeriodo.Teams}` },
+        ...analiticaEtapas.sla.map((s) => ({
+          indicador: `KPI 2 · ${s.label}`,
+          valor: `${s.pct}%`,
+          detalle: `${s.done} de ${analiticaEtapas.total} leads con Sí`,
+        })),
+        ...analiticaEtapas.retro.map((r) => ({
+          indicador: `KPI 3 · ${r.label}`,
+          valor: `${r.pct}%`,
+          detalle: `${r.done} de ${analiticaEtapas.total} leads con Sí`,
+        })),
       ];
 
       await exportarLibroExcel(
@@ -514,7 +524,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
           <p className="text-sm text-slate-500 dark:text-slate-400">
             {esCalificado
               ? `Visión consolidada en vivo de cumplimiento (-${tolAntes} / +${tolDespues} min), SLA y retroalimentación de etapas.`
-              : 'Visión consolidada en vivo de respuesta rápida a prospectos directos (meta 1 hora hábil o 9:00 a.m. siguiente hábil).'}
+              : 'Visión consolidada en vivo de respuesta rápida (meta 1 hora hábil o 9:00 a.m.), SLA y retroalimentación de etapas.'}
           </p>
         </div>
 
@@ -841,14 +851,14 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
               </button>
             </div>
             <div className="space-y-2.5">
-              {analiticaCalificados.sla.map((item) => (
+              {analiticaEtapas.sla.map((item) => (
                 <div key={item.label} className="space-y-1">
                   <div className="flex justify-between text-xs">
                     <span className="font-medium text-slate-700 dark:text-slate-300">
                       {item.label}
                     </span>
                     <span className="font-bold text-slate-900 dark:text-white">
-                      {item.done}/{analiticaCalificados.total} ({item.pct}%)
+                      {item.done}/{analiticaEtapas.total} ({item.pct}%)
                     </span>
                   </div>
                   <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
@@ -878,14 +888,14 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
               </button>
             </div>
             <div className="space-y-2">
-              {analiticaCalificados.retro.map((item) => (
+              {analiticaEtapas.retro.map((item) => (
                 <div key={item.label} className="space-y-1">
                   <div className="flex justify-between text-xs">
                     <span className="font-medium text-slate-700 dark:text-slate-300">
                       {item.label}
                     </span>
                     <span className="font-bold text-slate-900 dark:text-white">
-                      {item.done}/{analiticaCalificados.total} ({item.pct}%)
+                      {item.done}/{analiticaEtapas.total} ({item.pct}%)
                     </span>
                   </div>
                   <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
@@ -911,7 +921,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
                   <Phone className="h-4 w-4" /> Llamada Telefónica
                 </div>
                 <span className="text-lg font-extrabold text-slate-900 dark:text-white">
-                  {analiticaCalificados.tiposReunion.telefonica}
+                  {analiticaEtapas.tiposReunion.telefonica}
                 </span>
               </div>
               <div className="flex items-center justify-between p-3 rounded-xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/70 dark:border-blue-800/40">
@@ -919,7 +929,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
                   <Video className="h-4 w-4" /> Teams / Virtual
                 </div>
                 <span className="text-lg font-extrabold text-slate-900 dark:text-white">
-                  {analiticaCalificados.tiposReunion.teams}
+                  {analiticaEtapas.tiposReunion.teams}
                 </span>
               </div>
               <div className="flex items-center justify-between p-3 rounded-xl bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200/70 dark:border-purple-800/40">
@@ -927,51 +937,129 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
                   <Building2 className="h-4 w-4" /> Presencial
                 </div>
                 <span className="text-lg font-extrabold text-slate-900 dark:text-white">
-                  {analiticaCalificados.tiposReunion.presencial}
+                  {analiticaEtapas.tiposReunion.presencial}
                 </span>
               </div>
             </div>
           </div>
         </div>
       ) : (
-        /* Speed-to-Lead Buckets para No Calificados */
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-cyan-500" />
-                Velocidad de Primer Contacto (Speed-to-Lead)
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Tiempo transcurrido desde el ingreso del lead directo hasta la primera llamada efectiva
-              </p>
+        /* Speed-to-Lead Buckets + KPI 2 SLA + KPI 3 Retroalimentación para No Calificados */
+        <div className="space-y-6">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-cyan-500" />
+                  Velocidad de Primer Contacto (Speed-to-Lead)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Tiempo transcurrido desde el ingreso del lead directo hasta la primera llamada efectiva
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              {bucketsNoCalificados.map((b) => (
+                <div
+                  key={b.label}
+                  className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 space-y-2"
+                >
+                  <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 leading-snug min-h-[2rem]">
+                    {b.label}
+                  </div>
+                  <div className="flex items-baseline justify-between">
+                    <span className={`text-2xl font-extrabold ${b.textColor}`}>
+                      {b.count}
+                    </span>
+                    <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                      {b.pct}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${b.color}`}
+                      style={{ width: `${b.pct}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-            {bucketsNoCalificados.map((b) => (
-              <div
-                key={b.label}
-                className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 space-y-2"
-              >
-                <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 leading-snug min-h-[2rem]">
-                  {b.label}
-                </div>
-                <div className="flex items-baseline justify-between">
-                  <span className={`text-2xl font-extrabold ${b.textColor}`}>
-                    {b.count}
-                  </span>
-                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                    {b.pct}%
-                  </span>
-                </div>
-                <div className="h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full ${b.color}`}
-                    style={{ width: `${b.pct}%` }}
-                  />
-                </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* KPI 2: SLA de Etapas (No Calificados) */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-amber-500" />
+                  KPI 2: SLA de Etapas (No Calificados)
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => onNavegar('kpi_sla')}
+                  className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
+                >
+                  Abrir KPI 2
+                </button>
               </div>
-            ))}
+              <div className="space-y-2.5">
+                {analiticaEtapas.sla.map((item) => (
+                  <div key={item.label} className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="font-medium text-slate-700 dark:text-slate-300">
+                        {item.label}
+                      </span>
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        {item.done}/{analiticaEtapas.total} ({item.pct}%)
+                      </span>
+                    </div>
+                    <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-amber-500 rounded-full"
+                        style={{ width: `${item.pct}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* KPI 3: Retroalimentación (No Calificados) */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                  KPI 3: Retroalimentación (No Calificados)
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => onNavegar('kpi_retroalimentacion')}
+                  className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                >
+                  Abrir KPI 3
+                </button>
+              </div>
+              <div className="space-y-2">
+                {analiticaEtapas.retro.map((item) => (
+                  <div key={item.label} className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="font-medium text-slate-700 dark:text-slate-300">
+                        {item.label}
+                      </span>
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        {item.done}/{analiticaEtapas.total} ({item.pct}%)
+                      </span>
+                    </div>
+                    <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full"
+                        style={{ width: `${item.pct}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1170,6 +1258,20 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
           </button>
           <button
             type="button"
+            onClick={() => onNavegar('kpi_sla')}
+            className="px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/50 hover:bg-amber-100 dark:hover:bg-amber-900/60 text-xs font-semibold text-amber-700 dark:text-amber-300 cursor-pointer"
+          >
+            KPI 2: SLA de Etapas
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavegar('kpi_retroalimentacion')}
+            className="px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-xs font-semibold text-emerald-700 dark:text-emerald-300 cursor-pointer"
+          >
+            KPI 3: Retroalimentación
+          </button>
+          <button
+            type="button"
             onClick={() => onNavegar('resumen_kpis')}
             className="px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-semibold text-indigo-700 dark:text-indigo-300 cursor-pointer"
           >
@@ -1178,7 +1280,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
           <button
             type="button"
             onClick={() => onNavegar('catalogo_crud')}
-            className="px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-xs font-semibold text-emerald-700 dark:text-emerald-300 cursor-pointer"
+            className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
           >
             Gestionar Ejecutivos
           </button>

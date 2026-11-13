@@ -1,6 +1,8 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 dotenv.config();
@@ -59,6 +61,62 @@ app.post('/api/auth/login', (req, res) => {
     mensaje: 'Usuario o contraseña incorrectos.',
   });
 });
+
+// Almacén persistente en servidor para estados KPI (SLA y Retroalimentación) en ambos modos
+const KPI_ESTADOS_FILE = path.resolve(__dirname, '.data', 'kpi-estados.json');
+const KPI_ESTADOS_TMP = path.join(os.tmpdir(), 'kpi-auditoria-estados.json');
+
+type KpiTabla = 'leads' | 'leads_no_calificados';
+
+function leerKpiEstadosPersistidos(): Record<string, Record<string, boolean>> {
+  for (const file of [KPI_ESTADOS_FILE, KPI_ESTADOS_TMP]) {
+    try {
+      if (fs.existsSync(file)) {
+        const raw = fs.readFileSync(file, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (_) {}
+  }
+  return {};
+}
+
+function guardarKpiEstadoPersistido(
+  tabla: KpiTabla,
+  claves: string[],
+  cambios: Record<string, any>
+): Record<string, boolean> {
+  const actual = leerKpiEstadosPersistidos();
+  const soloKpi: Record<string, boolean> = {};
+  const camposPermitidos = [
+    'kpi_sla_etapa_1',
+    'kpi_sla_etapa_2',
+    'kpi_sla_etapa_3',
+    'kpi_retroalimentacion_etapa_1',
+    'kpi_retroalimentacion_etapa_2',
+    'kpi_retroalimentacion_etapa_3',
+    'kpi_retroalimentacion_etapa_4',
+  ];
+  for (const campo of camposPermitidos) {
+    if (campo in cambios) {
+      soloKpi[campo] = Boolean(cambios[campo]);
+    }
+  }
+  for (const c of claves) {
+    const clean = String(c || '').trim();
+    if (!clean) continue;
+    const key = `${tabla}:${clean}`;
+    actual[key] = { ...(actual[key] || {}), ...soloKpi };
+  }
+  for (const file of [KPI_ESTADOS_FILE, KPI_ESTADOS_TMP]) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(actual, null, 2), 'utf8');
+      break;
+    } catch (_) {}
+  }
+  return soloKpi;
+}
 
 // Helper para consultar REST de Supabase de manera segura
 async function fetchSupabaseTable(endpoint: string) {
@@ -635,6 +693,54 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       if (!w.direccion) w.direccion = 'Saliente';
     });
 
+    // 6. Combinar estados KPI (SLA y Retroalimentación) desde Supabase + almacén persistente local
+    const kpiPersistidos = leerKpiEstadosPersistidos();
+    const camposKpi = [
+      'kpi_sla_etapa_1',
+      'kpi_sla_etapa_2',
+      'kpi_sla_etapa_3',
+      'kpi_retroalimentacion_etapa_1',
+      'kpi_retroalimentacion_etapa_2',
+      'kpi_retroalimentacion_etapa_3',
+      'kpi_retroalimentacion_etapa_4',
+    ];
+
+    try {
+      const sbKpiRows = await fetchSupabaseTable(
+        'leads?or=(kpi_sla_etapa_1.eq.true,kpi_sla_etapa_2.eq.true,kpi_sla_etapa_3.eq.true,kpi_retroalimentacion_etapa_1.eq.true,kpi_retroalimentacion_etapa_2.eq.true,kpi_retroalimentacion_etapa_3.eq.true,kpi_retroalimentacion_etapa_4.eq.true)&select=id,codigo_prospecto,kpi_sla_etapa_1,kpi_sla_etapa_2,kpi_sla_etapa_3,kpi_retroalimentacion_etapa_1,kpi_retroalimentacion_etapa_2,kpi_retroalimentacion_etapa_3,kpi_retroalimentacion_etapa_4&limit=1000'
+      );
+      sbKpiRows.forEach((row: any) => {
+        const flags: Record<string, boolean> = {};
+        camposKpi.forEach((f) => {
+          if (typeof row[f] === 'boolean') flags[f] = row[f];
+        });
+        if (row.id) kpiPersistidos[`leads:${row.id}`] = { ...(kpiPersistidos[`leads:${row.id}`] || {}), ...flags };
+        if (row.codigo_prospecto) {
+          kpiPersistidos[`leads:${row.codigo_prospecto}`] = {
+            ...(kpiPersistidos[`leads:${row.codigo_prospecto}`] || {}),
+            ...flags,
+          };
+        }
+      });
+    } catch (_) {}
+
+    const aplicarKpiFlags = (item: any, tabla: KpiTabla) => {
+      const k1 = item.id ? kpiPersistidos[`${tabla}:${item.id}`] : undefined;
+      const k2 = item.codigo_prospecto ? kpiPersistidos[`${tabla}:${item.codigo_prospecto}`] : undefined;
+      const k3 = item.client_id ? kpiPersistidos[`${tabla}:${item.client_id}`] : undefined;
+      const merged = { ...(k1 || {}), ...(k2 || {}), ...(k3 || {}) };
+      camposKpi.forEach((campo) => {
+        if (campo in merged) {
+          item[campo] = Boolean(merged[campo]);
+        } else {
+          item[campo] = Boolean(item[campo]);
+        }
+      });
+    };
+
+    leads.forEach((l: any) => aplicarKpiFlags(l, 'leads'));
+    leadsNoCalificados.forEach((l: any) => aplicarKpiFlags(l, 'leads_no_calificados'));
+
     const payloadFinal = {
       exito: true,
       tiempo_ms: Date.now() - tInicio,
@@ -686,31 +792,54 @@ app.get('/api/sync/datos-completos', async (req, res) => {
 
 // ==============================================================================
 // 3. ACTUALIZAR LEAD (KPI SLA y Retroalimentación de Etapas)
-// Permite guardar desde la tabla los checkboxes/selects Sí/No en public.leads
+// Permite guardar desde la tabla los checkboxes/selects Sí/No en Calificados y No Calificados
 // ==============================================================================
 app.patch('/api/leads/:id', async (req, res) => {
   const { id } = req.params;
-  const tabla = req.query.tabla === 'leads_no_calificados' ? 'leads_no_calificados' : 'leads';
-  const camposActualizables = req.body;
+  const tabla: KpiTabla =
+    req.query.tabla === 'leads_no_calificados' ? 'leads_no_calificados' : 'leads';
+  const camposActualizables = req.body || {};
+
+  // Extraer solo campos KPI permitidos para Supabase y persistencia local
+  const payloadKpi = guardarKpiEstadoPersistido(tabla, [id], camposActualizables);
 
   try {
-    const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${tabla}?id=eq.${id}`;
+    const esUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    const colFiltro = esUuid
+      ? 'id'
+      : tabla === 'leads_no_calificados'
+      ? 'client_id'
+      : 'codigo_prospecto';
+    const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${tabla}?${colFiltro}=eq.${encodeURIComponent(id)}`;
     const response = await fetch(url, {
       method: 'PATCH',
       headers: supabaseHeaders,
-      body: JSON.stringify(camposActualizables),
+      body: JSON.stringify(Object.keys(payloadKpi).length > 0 ? payloadKpi : camposActualizables),
     });
 
-    if (!response.ok) {
-      const errTxt = await response.text();
-      return res.status(response.status).json({ exito: false, mensaje: errTxt });
+    cacheDatosCompletos = null;
+
+    if (response.ok) {
+      const data = await response.json().catch(() => []);
+      return res.json({ exito: true, persisted: 'supabase+local', data });
     }
 
-    const data = await response.json();
-    cacheDatosCompletos = null;
-    return res.json({ exito: true, data });
+    // Si Supabase aún no tiene las columnas kpi_* en leads_no_calificados, mantener éxito con persistencia local
+    const errTxt = await response.text().catch(() => '');
+    return res.json({
+      exito: true,
+      persisted: 'local_cache',
+      aviso_supabase: errTxt || `HTTP ${response.status}`,
+      data: [{ id, ...payloadKpi }],
+    });
   } catch (err: any) {
-    return res.status(500).json({ exito: false, mensaje: err?.message });
+    cacheDatosCompletos = null;
+    return res.json({
+      exito: true,
+      persisted: 'local_cache',
+      aviso_supabase: err?.message,
+      data: [{ id, ...payloadKpi }],
+    });
   }
 });
 

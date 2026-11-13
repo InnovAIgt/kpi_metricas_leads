@@ -298,29 +298,51 @@ export default function App() {
       : citasNoCalificadas;
   }, [modoLeads, citasCalificadas, citasNoCalificadas]);
 
-  // Guardar cambios de KPIs en lead (SLA / Retroalimentación)
+  // Guardar cambios de KPIs en lead (SLA / Retroalimentación) para Calificados y No Calificados
   const handleActualizarLeadKpi = async (
     leadId: string,
-    cambios: Partial<Cita>
+    cambios: Partial<Cita>,
+    codigoAlt?: string
   ): Promise<boolean> => {
     const tabla = modoLeads === 'calificados' ? 'leads' : 'leads_no_calificados';
+    const coincideLead = (item: any) =>
+      String(item?.id || '') === leadId ||
+      String(item?.codigo_prospecto || '') === leadId ||
+      String(item?.client_id || '') === leadId ||
+      (Boolean(codigoAlt) &&
+        (String(item?.codigo_prospecto || '') === codigoAlt ||
+          String(item?.client_id || '') === codigoAlt));
 
     if (modoLeads === 'calificados') {
-      setCitasCalificadas((prev) =>
-        prev.map((c) => (c.id === leadId ? { ...c, ...cambios } : c))
-      );
+      setCitasCalificadas((prev) => {
+        const next = prev.map((c) => (coincideLead(c) ? { ...c, ...cambios } : c));
+        safeSetLocalStorage('kpi_citas_calificadas', next);
+        return next;
+      });
+      setRawLeads((prev) => {
+        const next = prev.map((r) => (coincideLead(r) ? { ...r, ...cambios } : r));
+        safeSetLocalStorage('kpi_raw_leads_cache', next);
+        return next;
+      });
     } else {
-      setCitasNoCalificadas((prev) =>
-        prev.map((c) => (c.id === leadId ? { ...c, ...cambios } : c))
-      );
+      setCitasNoCalificadas((prev) => {
+        const next = prev.map((c) => (coincideLead(c) ? { ...c, ...cambios } : c));
+        safeSetLocalStorage('kpi_citas_no_calificadas', next);
+        return next;
+      });
+      setRawLeadsNoCalificados((prev) => {
+        const next = prev.map((r) => (coincideLead(r) ? { ...r, ...cambios } : r));
+        safeSetLocalStorage('kpi_raw_nc_cache', next);
+        return next;
+      });
     }
 
-    const ok = await actualizarLeadKpiBackend(leadId, cambios, tabla);
+    const ok = await actualizarLeadKpiBackend(leadId, cambios, tabla, codigoAlt);
     if (ok) {
       mostrarToast(`Registro actualizado en ${tabla} exitosamente`, 'exito');
       return true;
     } else {
-      mostrarToast('Error al persistir cambios en Supabase', 'error');
+      mostrarToast('Error al persistir cambios', 'error');
       return false;
     }
   };
@@ -1290,6 +1312,190 @@ export default function App() {
                 },
                 { clave: 'advisor_name', etiqueta: 'Asesor' },
                 { clave: 'campaign_name', etiqueta: 'Campaña' },
+                // KPI RETROALIMENTACION (ETAPAS 1-4)
+                {
+                  clave: 'kpi_retroalimentacion_etapa_1',
+                  etiqueta: 'ETAPA 1',
+                  grupo: 'KPI RETROALIMENTACION',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
+                  render: (val, fila) => (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nuevo = !val;
+                        await handleActualizarLeadKpi(
+                          String(fila.id || fila.client_id || ''),
+                          { kpi_retroalimentacion_etapa_1: nuevo },
+                          fila.client_id
+                        );
+                      }}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
+                        val
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
+                      }`}
+                    >
+                      {val ? 'Sí' : 'No'}
+                    </button>
+                  ),
+                },
+                {
+                  clave: 'kpi_retroalimentacion_etapa_2',
+                  etiqueta: 'ETAPA 2',
+                  grupo: 'KPI RETROALIMENTACION',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
+                  render: (val, fila) => (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nuevo = !val;
+                        await handleActualizarLeadKpi(
+                          String(fila.id || fila.client_id || ''),
+                          { kpi_retroalimentacion_etapa_2: nuevo },
+                          fila.client_id
+                        );
+                      }}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
+                        val
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
+                      }`}
+                    >
+                      {val ? 'Sí' : 'No'}
+                    </button>
+                  ),
+                },
+                {
+                  clave: 'kpi_retroalimentacion_etapa_3',
+                  etiqueta: 'ETAPA 3',
+                  grupo: 'KPI RETROALIMENTACION',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
+                  render: (val, fila) => (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nuevo = !val;
+                        await handleActualizarLeadKpi(
+                          String(fila.id || fila.client_id || ''),
+                          { kpi_retroalimentacion_etapa_3: nuevo },
+                          fila.client_id
+                        );
+                      }}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
+                        val
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
+                      }`}
+                    >
+                      {val ? 'Sí' : 'No'}
+                    </button>
+                  ),
+                },
+                {
+                  clave: 'kpi_retroalimentacion_etapa_4',
+                  etiqueta: 'ETAPA 4',
+                  grupo: 'KPI RETROALIMENTACION',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
+                  render: (val, fila) => (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nuevo = !val;
+                        await handleActualizarLeadKpi(
+                          String(fila.id || fila.client_id || ''),
+                          { kpi_retroalimentacion_etapa_4: nuevo },
+                          fila.client_id
+                        );
+                      }}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
+                        val
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
+                      }`}
+                    >
+                      {val ? 'Sí' : 'No'}
+                    </button>
+                  ),
+                },
+                // KPI SLA (ETAPAS 1-3)
+                {
+                  clave: 'kpi_sla_etapa_1',
+                  etiqueta: 'ETAPA 1',
+                  grupo: 'KPI SLA',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
+                  render: (val, fila) => (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nuevo = !val;
+                        await handleActualizarLeadKpi(
+                          String(fila.id || fila.client_id || ''),
+                          { kpi_sla_etapa_1: nuevo },
+                          fila.client_id
+                        );
+                      }}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
+                        val
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
+                      }`}
+                    >
+                      {val ? 'Sí' : 'No'}
+                    </button>
+                  ),
+                },
+                {
+                  clave: 'kpi_sla_etapa_2',
+                  etiqueta: 'ETAPA 2',
+                  grupo: 'KPI SLA',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
+                  render: (val, fila) => (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nuevo = !val;
+                        await handleActualizarLeadKpi(
+                          String(fila.id || fila.client_id || ''),
+                          { kpi_sla_etapa_2: nuevo },
+                          fila.client_id
+                        );
+                      }}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
+                        val
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
+                      }`}
+                    >
+                      {val ? 'Sí' : 'No'}
+                    </button>
+                  ),
+                },
+                {
+                  clave: 'kpi_sla_etapa_3',
+                  etiqueta: 'ETAPA 3',
+                  grupo: 'KPI SLA',
+                  exportValue: (val) => (val ? 'Sí' : 'No'),
+                  render: (val, fila) => (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nuevo = !val;
+                        await handleActualizarLeadKpi(
+                          String(fila.id || fila.client_id || ''),
+                          { kpi_sla_etapa_3: nuevo },
+                          fila.client_id
+                        );
+                      }}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
+                        val
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-500/50'
+                          : 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-500/50'
+                      }`}
+                    >
+                      {val ? 'Sí' : 'No'}
+                    </button>
+                  ),
+                },
               ]}
             />
           )}
@@ -1479,7 +1685,10 @@ export default function App() {
           {vistaActiva === 'kpi_sla' && (
             <VistaKpiSla
               citas={citasActivas}
-              onActualizarLeadKpi={handleActualizarLeadKpi}
+              onActualizarLeadKpi={(id, cambios) => {
+                const match = citasActivas.find((c) => c.id === id);
+                return handleActualizarLeadKpi(id, cambios, match?.codigo_prospecto);
+              }}
               tipoLeadActual={modoLeads}
             />
           )}
@@ -1488,7 +1697,10 @@ export default function App() {
           {vistaActiva === 'kpi_retroalimentacion' && (
             <VistaKpiRetroalimentacion
               citas={citasActivas}
-              onActualizarLeadKpi={handleActualizarLeadKpi}
+              onActualizarLeadKpi={(id, cambios) => {
+                const match = citasActivas.find((c) => c.id === id);
+                return handleActualizarLeadKpi(id, cambios, match?.codigo_prospecto);
+              }}
               tipoLeadActual={modoLeads}
             />
           )}

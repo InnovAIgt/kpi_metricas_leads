@@ -416,12 +416,75 @@ export default async function handler(req: any, res: any) {
       if (!l.campaign_name) l.campaign_name = 'Campaña Inbound';
     });
 
-    celDirecto.forEach((c: any) => {
+    const catExtSet = new Set<string>();
+    const catUserSet = new Set<string>();
+    const catNomSet = new Set<string>();
+    const catCelSet = new Set<string>();
+
+    if (catalogo.length > 0) {
+      catalogo.forEach((cat: any) => {
+        if (cat.extension && String(cat.extension).trim() !== 'null') {
+          String(cat.extension)
+            .split(/[,;/|]+/)
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean)
+            .forEach((ext) => catExtSet.add(ext));
+        }
+        if (cat.usuario && String(cat.usuario).trim() !== 'null') {
+          catUserSet.add(String(cat.usuario).trim().toLowerCase());
+        }
+        if (cat.nombre_ejecutivo && String(cat.nombre_ejecutivo).trim() !== 'null') {
+          catNomSet.add(String(cat.nombre_ejecutivo).trim().toLowerCase());
+        }
+        if (cat.celular && String(cat.celular).trim() !== 'null') {
+          const digits = String(cat.celular).replace(/\D/g, '');
+          if (digits.length >= 7) {
+            catCelSet.add(digits.length >= 8 ? digits.slice(-8) : digits.slice(-7));
+          }
+        }
+      });
+    }
+
+    const pbxFiltrado =
+      catalogo.length > 0
+        ? pbxDirecto.filter((p: any) => {
+            const extRaw = String(p?.extension ?? '').replace(/^ext\.?\s*/i, '').trim().toLowerCase();
+            if (extRaw && extRaw !== 'null' && extRaw !== 'undefined') {
+              if (catExtSet.has(extRaw)) return true;
+              const extDigits = extRaw.replace(/\D/g, '');
+              if (extDigits.length >= 7 && catCelSet.has(extDigits.length >= 8 ? extDigits.slice(-8) : extDigits.slice(-7))) {
+                return true;
+              }
+            }
+            const nomRaw = String(p?.nombre ?? '').trim().toLowerCase();
+            if (nomRaw && nomRaw !== 'null' && nomRaw !== 'undefined') {
+              if (catUserSet.has(nomRaw) || catNomSet.has(nomRaw)) return true;
+            }
+            return false;
+          })
+        : pbxDirecto;
+
+    const celFiltrado =
+      catalogo.length > 0
+        ? celDirecto.filter((c: any) => {
+            const lineaDigits = String(c?.linea ?? '').replace(/\D/g, '');
+            if (lineaDigits.length >= 7 && catCelSet.has(lineaDigits.length >= 8 ? lineaDigits.slice(-8) : lineaDigits.slice(-7))) {
+              return true;
+            }
+            const userRaw = String(c?.usuario ?? '').trim().toLowerCase();
+            if (userRaw && userRaw !== 'null' && userRaw !== 'undefined') {
+              if (catUserSet.has(userRaw) || catNomSet.has(userRaw)) return true;
+            }
+            return false;
+          })
+        : celDirecto;
+
+    celFiltrado.forEach((c: any) => {
       c.asesor_nombre = resolverAsesorBackend(c.usuario, resolverAsesorBackend(c.linea, c.usuario || 'Ejecutivo Celular'));
       if (!c.operador) c.operador = 'Claro / Tigo';
     });
 
-    pbxDirecto.forEach((p: any) => {
+    pbxFiltrado.forEach((p: any) => {
       const extStr = p.extension ? String(p.extension).trim() : '';
       p.asesor_nombre = resolverAsesorBackend(
         extStr,
@@ -451,7 +514,7 @@ export default async function handler(req: any, res: any) {
     leadsCalificadosValidos.forEach((l: any) => registrarLeadEnIndice(l, 'calificado'));
     leadsNoCalificados.forEach((l: any) => registrarLeadEnIndice(l, 'no_calificado'));
 
-    pbxDirecto.forEach((p: any) => {
+    pbxFiltrado.forEach((p: any) => {
       if (p.codigo_lead && p.cliente_nombre) return;
       const digits = String(p.destino || '').replace(/\D/g, '');
       if (digits.length < 7) return;
@@ -537,8 +600,8 @@ export default async function handler(req: any, res: any) {
       estadisticas: {
         total_leads: leadsCalificadosValidos.length,
         total_leads_no_calificados: leadsNoCalificados.length,
-        total_llamadas_pbx: pbxDirecto.length,
-        total_llamadas_celular: celDirecto.length,
+        total_llamadas_pbx: pbxFiltrado.length,
+        total_llamadas_celular: celFiltrado.length,
         total_llamadas_whatsapp: llamadasWhatsapp.length,
         total_llamadas_teams: llamadasTeams.length,
         total_catalogo: catalogo.length,
@@ -547,8 +610,8 @@ export default async function handler(req: any, res: any) {
         catalogo,
         leads: leadsCalificadosValidos,
         leadsNoCalificados,
-        llamadasPbx: pbxDirecto,
-        llamadasCelular: celDirecto,
+        llamadasPbx: pbxFiltrado,
+        llamadasCelular: celFiltrado,
         llamadasTeams,
         llamadasWhatsapp,
       },

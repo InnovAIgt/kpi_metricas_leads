@@ -24,6 +24,7 @@ import {
   getRangoDefaultLeads,
 } from './utils/dateHelpers';
 import { esLeadCalificadoValido } from './utils/leadValidation';
+import { filtrarPbxPorCatalogo, filtrarCelularPorCatalogo } from './utils/catalogoFilter';
 import {
   sincronizarDatosDesdeBackend,
   actualizarLeadKpiBackend,
@@ -98,7 +99,7 @@ export default function App() {
   });
 
   const [llamadas, setLlamadas] = useState<Llamada[]>(() => {
-    const saved = localStorage.getItem('kpi_llamadas_data');
+    const saved = localStorage.getItem('kpi_llamadas_data_v2');
     return saved ? JSON.parse(saved) : [];
   });
 
@@ -108,13 +109,13 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
   const [rawPbx, setRawPbx] = useState<any[]>(() => {
-    const saved = localStorage.getItem('kpi_raw_pbx_cache');
+    localStorage.removeItem('kpi_raw_pbx_cache');
+    const saved = localStorage.getItem('kpi_raw_pbx_cache_v2');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
           const maxFecha = parsed[0]?.fecha_hora || parsed[0]?.fecha || '';
-          // Si el cache local está atascado en el 22 de octubre o antes, ignorarlo para no mostrar datos obsoletos
           if (maxFecha && maxFecha <= '2026-10-23') {
             return [];
           }
@@ -125,7 +126,8 @@ export default function App() {
     return [];
   });
   const [rawCelular, setRawCelular] = useState<any[]>(() => {
-    const saved = localStorage.getItem('kpi_raw_cel_cache');
+    localStorage.removeItem('kpi_raw_cel_cache');
+    const saved = localStorage.getItem('kpi_raw_cel_cache_v2');
     return saved ? JSON.parse(saved) : [];
   });
   const [rawWhatsapp, setRawWhatsapp] = useState<any[]>(() => {
@@ -248,8 +250,8 @@ export default function App() {
 
       // 1. ACTUALIZAR DE INMEDIATO EL ESTADO EN MEMORIA DE REACT (PRIORITARIO)
       if (Array.isArray(data.catalogo)) setCatalogo(data.catalogo);
-      if (Array.isArray(data.rawPbx) && data.rawPbx.length > 0) setRawPbx(data.rawPbx);
-      if (Array.isArray(data.rawCelular) && data.rawCelular.length > 0) setRawCelular(data.rawCelular);
+      if (Array.isArray(data.rawPbx)) setRawPbx(data.rawPbx);
+      if (Array.isArray(data.rawCelular)) setRawCelular(data.rawCelular);
       if (Array.isArray(data.rawWhatsapp) && data.rawWhatsapp.length > 0) setRawWhatsapp(data.rawWhatsapp);
       if (Array.isArray(data.rawLeads) && data.rawLeads.length > 0) setRawLeads(data.rawLeads);
       if (Array.isArray(data.rawLeadsNoCalificados) && data.rawLeadsNoCalificados.length > 0) {
@@ -260,7 +262,7 @@ export default function App() {
         setCitasCalificadas(data.citasCalificadas);
       }
       if (Array.isArray(data.citasNoCalificadas)) setCitasNoCalificadas(data.citasNoCalificadas);
-      if (Array.isArray(data.llamadas) && data.llamadas.length > 0) setLlamadas(data.llamadas);
+      if (Array.isArray(data.llamadas)) setLlamadas(data.llamadas);
 
       // 2. Persistir en localStorage de forma segura sin romper la app
       safeSetLocalStorage('kpi_catalogo_cache', data.catalogo || []);
@@ -269,11 +271,11 @@ export default function App() {
       safeSetLocalStorage('kpi_raw_leads_cache', data.rawLeads || []);
       safeSetLocalStorage('kpi_raw_nc_cache', data.rawLeadsNoCalificados || []);
       safeSetLocalStorage('kpi_raw_teams_cache', data.rawTeams || []);
-      if (data.rawPbx && data.rawPbx.length > 0) {
-        safeSetLocalStorage('kpi_raw_pbx_cache', data.rawPbx.slice(0, 1000));
+      if (Array.isArray(data.rawPbx)) {
+        safeSetLocalStorage('kpi_raw_pbx_cache_v2', data.rawPbx.slice(0, 1000));
       }
-      if (data.rawCelular && data.rawCelular.length > 0) {
-        safeSetLocalStorage('kpi_raw_cel_cache', data.rawCelular.slice(0, 1000));
+      if (Array.isArray(data.rawCelular)) {
+        safeSetLocalStorage('kpi_raw_cel_cache_v2', data.rawCelular.slice(0, 1000));
       }
       if (data.rawWhatsapp && data.rawWhatsapp.length > 0) {
         safeSetLocalStorage('kpi_raw_wa_cache', data.rawWhatsapp.slice(0, 1000));
@@ -501,9 +503,18 @@ export default function App() {
     }
   };
 
+  // Filtrar llamadas PBX y Celular únicamente a ejecutivos/extensiones/números configurados en el catálogo
+  const rawPbxFiltrado = useMemo(() => {
+    return filtrarPbxPorCatalogo(rawPbx, catalogo);
+  }, [rawPbx, catalogo]);
+
+  const rawCelularFiltrado = useMemo(() => {
+    return filtrarCelularPorCatalogo(rawCelular, catalogo);
+  }, [rawCelular, catalogo]);
+
   // Enriquecer registros PBX con N° de Lead y Nombre del Cliente según teléfono destino (Calificados + No Calificados)
   const rawPbxEnriquecido = useMemo(() => {
-    if (!rawPbx || rawPbx.length === 0) return [];
+    if (!rawPbxFiltrado || rawPbxFiltrado.length === 0) return [];
     const indiceTel = new Map<string, any[]>();
     const indexar = (lead: any, tipo: 'calificado' | 'no_calificado') => {
       const digits = String(lead.telefono || lead.celular || lead.client_phone || '').replace(/\D/g, '');
@@ -524,7 +535,7 @@ export default function App() {
     rawLeads.forEach((l) => indexar(l, 'calificado'));
     rawLeadsNoCalificados.forEach((l) => indexar(l, 'no_calificado'));
 
-    return rawPbx.map((p) => {
+    return rawPbxFiltrado.map((p) => {
       if (p.codigo_lead && p.cliente_nombre) return p;
       const digits = String(p.destino || '').replace(/\D/g, '');
       if (digits.length < 7) return p;
@@ -556,7 +567,7 @@ export default function App() {
         tipo_lead_match: p.tipo_lead_match || mejor.tipo,
       };
     });
-  }, [rawPbx, rawLeads, rawLeadsNoCalificados]);
+  }, [rawPbxFiltrado, rawLeads, rawLeadsNoCalificados]);
 
   // Motor de Cruce Inteligente completo (cada vista aplica su DateRangeFilter sin recortar históricos)
   const crucesAuditoriaTodos = useMemo(() => {
@@ -673,10 +684,10 @@ export default function App() {
 
   // Conteos del mes actual para la barra lateral (muestra cantidad del mes o total disponible si no hay en el mes)
   const conteosMes = useMemo(() => {
-    const pbxMes = rawPbx.filter((item) =>
+    const pbxMes = rawPbxFiltrado.filter((item) =>
       esDelMesActual(item, ['fecha_hora', 'fecha', 'calldate', 'created_at'])
     ).length;
-    const celMes = rawCelular.filter((item) =>
+    const celMes = rawCelularFiltrado.filter((item) =>
       esDelMesActual(item, ['fecha', 'dia_consultado', 'created_at'])
     ).length;
     const waMes = rawWhatsapp.filter((item) =>
@@ -693,15 +704,15 @@ export default function App() {
     ).length;
 
     return {
-      pbx: pbxMes > 0 ? pbxMes : rawPbx.length,
-      celular: celMes > 0 ? celMes : rawCelular.length,
+      pbx: pbxMes > 0 ? pbxMes : rawPbxFiltrado.length,
+      celular: celMes > 0 ? celMes : rawCelularFiltrado.length,
       whatsapp: waMes > 0 ? waMes : rawWhatsapp.length,
       leads: leadsMes > 0 ? leadsMes : rawLeads.length,
       leadsNoCalificados: ncMes > 0 ? ncMes : rawLeadsNoCalificados.length,
       teams: teamsMes > 0 ? teamsMes : rawTeams.length,
       catalogo: catalogo.length,
     };
-  }, [rawPbx, rawCelular, rawWhatsapp, rawLeads, rawLeadsNoCalificados, rawTeams, catalogo]);
+  }, [rawPbxFiltrado, rawCelularFiltrado, rawWhatsapp, rawLeads, rawLeadsNoCalificados, rawTeams, catalogo]);
 
   // Pantalla de Login privada con dos entradas (Gabi / 1234)
   if (!usuarioAutenticado) {
@@ -929,7 +940,7 @@ export default function App() {
               titulo="Historial de Llamadas de Celular"
               subtitulo="Llamadas en caliente consultadas directamente desde kpi.red.com.sv (Historial Ejecutivos)"
               icono="celular"
-              datos={rawCelular}
+              datos={rawCelularFiltrado}
               catalogo={catalogo}
               leadsDisponibles={modoLeads === 'calificados' ? rawLeads : rawLeadsNoCalificados}
               onGuardarLlamadaManual={handleGuardarLlamadaManual}

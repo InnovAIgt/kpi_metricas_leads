@@ -589,9 +589,69 @@ app.get('/api/sync/datos-completos', async (req, res) => {
 
     const leadsNoCalificados = Array.from(mapaNc.values());
 
-    // PBX y Celular provienen 100% de las APIs en vivo (sin Supabase)
-    const llamadasPbx = pbxDirecto;
-    const llamadasCelular = celDirecto;
+    // Filtrar PBX y Celular únicamente a ejecutivos/números/extensiones configurados en Catálogo
+    const catExtSet = new Set<string>();
+    const catUserSet = new Set<string>();
+    const catNomSet = new Set<string>();
+    const catCelSet = new Set<string>();
+
+    if (catalogo.length > 0) {
+      catalogo.forEach((cat: any) => {
+        if (cat.extension && String(cat.extension).trim() !== 'null') {
+          String(cat.extension)
+            .split(/[,;/|]+/)
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean)
+            .forEach((ext) => catExtSet.add(ext));
+        }
+        if (cat.usuario && String(cat.usuario).trim() !== 'null') {
+          catUserSet.add(String(cat.usuario).trim().toLowerCase());
+        }
+        if (cat.nombre_ejecutivo && String(cat.nombre_ejecutivo).trim() !== 'null') {
+          catNomSet.add(String(cat.nombre_ejecutivo).trim().toLowerCase());
+        }
+        if (cat.celular && String(cat.celular).trim() !== 'null') {
+          const digits = String(cat.celular).replace(/\D/g, '');
+          if (digits.length >= 7) {
+            catCelSet.add(digits.length >= 8 ? digits.slice(-8) : digits.slice(-7));
+          }
+        }
+      });
+    }
+
+    const perteneceCatalogoPbx = (p: any): boolean => {
+      if (catalogo.length === 0) return true;
+      const extRaw = String(p?.extension ?? '').replace(/^ext\.?\s*/i, '').trim().toLowerCase();
+      if (extRaw && extRaw !== 'null' && extRaw !== 'undefined') {
+        if (catExtSet.has(extRaw)) return true;
+        const extDigits = extRaw.replace(/\D/g, '');
+        if (extDigits.length >= 7 && catCelSet.has(extDigits.length >= 8 ? extDigits.slice(-8) : extDigits.slice(-7))) {
+          return true;
+        }
+      }
+      const nomRaw = String(p?.nombre ?? '').trim().toLowerCase();
+      if (nomRaw && nomRaw !== 'null' && nomRaw !== 'undefined') {
+        if (catUserSet.has(nomRaw) || catNomSet.has(nomRaw)) return true;
+      }
+      return false;
+    };
+
+    const perteneceCatalogoCel = (c: any): boolean => {
+      if (catalogo.length === 0) return true;
+      const lineaDigits = String(c?.linea ?? '').replace(/\D/g, '');
+      if (lineaDigits.length >= 7 && catCelSet.has(lineaDigits.length >= 8 ? lineaDigits.slice(-8) : lineaDigits.slice(-7))) {
+        return true;
+      }
+      const userRaw = String(c?.usuario ?? '').trim().toLowerCase();
+      if (userRaw && userRaw !== 'null' && userRaw !== 'undefined') {
+        if (catUserSet.has(userRaw) || catNomSet.has(userRaw)) return true;
+      }
+      return false;
+    };
+
+    // PBX y Celular provienen 100% de las APIs en vivo (filtrados estrictamente por Catálogo)
+    const llamadasPbx = pbxDirecto.filter(perteneceCatalogoPbx);
+    const llamadasCelular = celDirecto.filter(perteneceCatalogoCel);
     const llamadasWhatsapp = waRaw;
 
     // Helper para detectar país según teléfono o código

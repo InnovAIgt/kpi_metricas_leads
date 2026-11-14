@@ -1,6 +1,7 @@
 import { Cita, Llamada } from '../types';
 import { esLeadCalificadoValido } from '../utils/leadValidation';
 import { formatLocalDate } from '../utils/dateHelpers';
+import { filtrarPbxPorCatalogo, filtrarCelularPorCatalogo } from '../utils/catalogoFilter';
 
 function stripFakeUtcZ(val?: string | null): string {
   if (!val) return '';
@@ -107,11 +108,14 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
           catalogo = [],
           leads = [],
           leadsNoCalificados = [],
-          llamadasPbx = [],
-          llamadasCelular = [],
+          llamadasPbx: rawPbxBackend = [],
+          llamadasCelular: rawCelBackend = [],
           llamadasTeams = [],
           llamadasWhatsapp = [],
         } = json.datos;
+
+        const llamadasPbx = filtrarPbxPorCatalogo(rawPbxBackend, catalogo);
+        const llamadasCelular = filtrarCelularPorCatalogo(rawCelBackend, catalogo);
 
         // 1. Construir Catálogo de Asesores por extensión, usuario, celular y nombre
         const mapaCatalogo = {
@@ -775,8 +779,14 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     });
 
     const leadsNoCalificados = Array.from(mapaDirectoNc.values());
-    const llamadasPbx = Array.isArray(pbxDirectoRes) ? pbxDirectoRes : [];
-    const llamadasCelular = Array.isArray(celRes?.data) ? celRes.data : [];
+    const llamadasPbx = filtrarPbxPorCatalogo(
+      Array.isArray(pbxDirectoRes) ? pbxDirectoRes : [],
+      catalogo
+    );
+    const llamadasCelular = filtrarCelularPorCatalogo(
+      Array.isArray(celRes?.data) ? celRes.data : [],
+      catalogo
+    );
     const llamadasTeams = Array.isArray(teamsRes) ? teamsRes : [];
     const llamadasWhatsapp = Array.isArray(whatsappRes) ? whatsappRes : [];
 

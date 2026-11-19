@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Cita,
   Llamada,
@@ -25,8 +25,10 @@ import {
 } from './utils/dateHelpers';
 import { esLeadCalificadoValido } from './utils/leadValidation';
 import { filtrarPbxPorCatalogo, filtrarCelularPorCatalogo } from './utils/catalogoFilter';
+import { detectarPaisLead } from './utils/paisHelpers';
 import {
   sincronizarDatosDesdeBackend,
+  sincronizarSoloProspektia,
   actualizarLeadKpiBackend,
   guardarCatalogoItemBackend,
   eliminarCatalogoItemBackend,
@@ -94,8 +96,23 @@ export default function App() {
   });
 
   const [citasNoCalificadas, setCitasNoCalificadas] = useState<Cita[]>(() => {
-    const saved = localStorage.getItem('kpi_citas_no_calificadas');
-    return saved ? JSON.parse(saved) : [];
+    localStorage.removeItem('kpi_citas_no_calificadas');
+    const saved = localStorage.getItem('kpi_citas_no_calificadas_v2');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.map((c) => ({
+            ...c,
+            pais: detectarPaisLead(
+              { ...c, pais: c.country || (c.pais && c.pais !== 'SV' ? c.pais : undefined) },
+              []
+            ),
+          }));
+        }
+      } catch (_) {}
+    }
+    return [];
   });
 
   const [llamadas, setLlamadas] = useState<Llamada[]>(() => {
@@ -155,8 +172,23 @@ export default function App() {
     return [];
   });
   const [rawLeadsNoCalificados, setRawLeadsNoCalificados] = useState<any[]>(() => {
-    const saved = localStorage.getItem('kpi_raw_nc_cache');
-    return saved ? JSON.parse(saved) : [];
+    localStorage.removeItem('kpi_raw_nc_cache');
+    const saved = localStorage.getItem('kpi_raw_nc_cache_v2');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.map((l) => ({
+            ...l,
+            pais: detectarPaisLead(
+              { ...l, pais: l.country || (l.pais && l.pais !== 'SV' ? l.pais : undefined) },
+              []
+            ),
+          }));
+        }
+      } catch (_) {}
+    }
+    return [];
   });
   const [rawTeams, setRawTeams] = useState<any[]>(() => {
     const saved = localStorage.getItem('kpi_raw_teams_cache');
@@ -196,8 +228,17 @@ export default function App() {
   const [fechaFinResumen, setFechaFinResumen] = useState<string>(
     () => getRangoDefaultLeads().fin
   );
+  const [paisResumen, setPaisResumen] = useState<'TODOS' | 'SV' | 'GT'>('TODOS');
   const [exportandoResumen, setExportandoResumen] = useState(false);
   const [sincronizando, setSincronizando] = useState(false);
+  const [sincronizandoProspektia, setSincronizandoProspektia] = useState(false);
+  const sincronizandoProspektiaRef = useRef(false);
+  const catalogoRef = useRef<any[]>(catalogo);
+  const rawLeadsRef = useRef<any[]>(rawLeads);
+  const rawLeadsNcRef = useRef<any[]>(rawLeadsNoCalificados);
+  useEffect(() => { catalogoRef.current = catalogo; }, [catalogo]);
+  useEffect(() => { rawLeadsRef.current = rawLeads; }, [rawLeads]);
+  useEffect(() => { rawLeadsNcRef.current = rawLeadsNoCalificados; }, [rawLeadsNoCalificados]);
   const [modalSupabaseAbierto, setModalSupabaseAbierto] = useState(false);
   const [llamadaReproduciendo, setLlamadaReproduciendo] = useState<any | null>(null);
   const [llamadaParaTranscripcion, setLlamadaParaTranscripcion] = useState<any | null>(null);
@@ -267,9 +308,9 @@ export default function App() {
       // 2. Persistir en localStorage de forma segura sin romper la app
       safeSetLocalStorage('kpi_catalogo_cache', data.catalogo || []);
       safeSetLocalStorage('kpi_citas_calificadas', data.citasCalificadas || []);
-      safeSetLocalStorage('kpi_citas_no_calificadas', data.citasNoCalificadas || []);
+      safeSetLocalStorage('kpi_citas_no_calificadas_v2', data.citasNoCalificadas || []);
       safeSetLocalStorage('kpi_raw_leads_cache', data.rawLeads || []);
-      safeSetLocalStorage('kpi_raw_nc_cache', data.rawLeadsNoCalificados || []);
+      safeSetLocalStorage('kpi_raw_nc_cache_v2', data.rawLeadsNoCalificados || []);
       safeSetLocalStorage('kpi_raw_teams_cache', data.rawTeams || []);
       if (Array.isArray(data.rawPbx)) {
         safeSetLocalStorage('kpi_raw_pbx_cache_v2', data.rawPbx.slice(0, 1000));
@@ -300,6 +341,113 @@ export default function App() {
     await cargarDatosDesdeBackend(true);
     mostrarToast('Datos sincronizados en vivo correctamente.', 'exito');
   };
+
+  // Sincronización exclusiva con ProspektIA API (auto cada 15 min + botón manual)
+  const handleSincronizarProspektia = async (silencioso = false) => {
+    if (sincronizandoProspektiaRef.current) return;
+    sincronizandoProspektiaRef.current = true;
+    setSincronizandoProspektia(true);
+    if (!silencioso) {
+      mostrarToast('Consultando ProspektIA para traer leads nuevos o fechas agendadas...', 'info');
+    }
+
+    try {
+      const res = await sincronizarSoloProspektia(catalogoRef.current);
+      if (!res.exito) {
+        if (!silencioso) {
+          mostrarToast('No se pudo conectar con ProspektIA en este momento.', 'error');
+        }
+        return;
+      }
+
+      const prevCalifMap = new Map<string, any>();
+      rawLeadsRef.current.forEach((l) => {
+        const key = String(l.codigo_prospecto || l.id || '').trim();
+        if (key) prevCalifMap.set(key, l);
+      });
+      const prevNcSet = new Set<string>();
+      rawLeadsNcRef.current.forEach((l) => {
+        const key = String(l.client_id || l.id || '').trim();
+        if (key) prevNcSet.add(key);
+      });
+
+      let nuevosCalif = 0;
+      let actualizadosConFecha = 0;
+      res.rawLeads.forEach((l) => {
+        const key = String(l.codigo_prospecto || l.id || '').trim();
+        if (!key) return;
+        const previo = prevCalifMap.get(key);
+        if (!previo) {
+          if (prevNcSet.has(key)) actualizadosConFecha++;
+          else nuevosCalif++;
+        } else {
+          const teniaFecha = Boolean(previo.fecha_agendada && previo.fecha_agendada !== 'null');
+          const tieneFechaAhora = Boolean(l.fecha_agendada && l.fecha_agendada !== 'null');
+          if (!teniaFecha && tieneFechaAhora) {
+            actualizadosConFecha++;
+          }
+        }
+      });
+
+      let nuevosNc = 0;
+      res.rawLeadsNoCalificados.forEach((l) => {
+        const key = String(l.client_id || l.id || '').trim();
+        if (key && !prevNcSet.has(key)) nuevosNc++;
+      });
+
+      if (Array.isArray(res.catalogo) && res.catalogo.length > 0) {
+        setCatalogo(res.catalogo);
+        safeSetLocalStorage('kpi_catalogo_cache', res.catalogo);
+      }
+      setRawLeads(res.rawLeads);
+      setRawLeadsNoCalificados(res.rawLeadsNoCalificados);
+      setCitasCalificadas(res.citasCalificadas);
+      setCitasNoCalificadas(res.citasNoCalificadas);
+
+      safeSetLocalStorage('kpi_raw_leads_cache', res.rawLeads);
+      safeSetLocalStorage('kpi_raw_nc_cache_v2', res.rawLeadsNoCalificados);
+      safeSetLocalStorage('kpi_citas_calificadas', res.citasCalificadas);
+      safeSetLocalStorage('kpi_citas_no_calificadas_v2', res.citasNoCalificadas);
+
+      const totalCambios = nuevosCalif + actualizadosConFecha + nuevosNc;
+      if (!silencioso) {
+        if (totalCambios > 0) {
+          mostrarToast(
+            `ProspektIA sincronizado: ${nuevosCalif} calificados nuevos, ${actualizadosConFecha} con fecha agendada actualizada, ${nuevosNc} no calificados nuevos.`,
+            'exito'
+          );
+        } else {
+          mostrarToast(
+            `ProspektIA al día (${res.rawLeads.length} calificados · ${res.rawLeadsNoCalificados.length} no calificados).`,
+            'exito'
+          );
+        }
+      } else if (totalCambios > 0) {
+        mostrarToast(
+          `Auto-sync ProspektIA: +${nuevosCalif + nuevosNc} leads nuevos y ${actualizadosConFecha} con fecha agendada.`,
+          'info'
+        );
+      }
+    } catch (err) {
+      console.warn('Error en sincronización con ProspektIA:', err);
+      if (!silencioso) {
+        mostrarToast('Error al sincronizar con ProspektIA.', 'error');
+      }
+    } finally {
+      sincronizandoProspektiaRef.current = false;
+      setSincronizandoProspektia(false);
+    }
+  };
+
+  // Auto-sincronización automática con ProspektIA cada 15 minutos
+  useEffect(() => {
+    if (!usuarioAutenticado) return;
+    const INTERVALO_PROSPEKTIA_MS = 15 * 60 * 1000;
+    const timer = window.setInterval(() => {
+      handleSincronizarProspektia(true);
+    }, INTERVALO_PROSPEKTIA_MS);
+    return () => window.clearInterval(timer);
+  }, [usuarioAutenticado]);
 
   // Citas activas según el modo seleccionado (¡NO SE MEZCLAN!)
   const citasActivas = useMemo(() => {
@@ -352,12 +500,12 @@ export default function App() {
     } else {
       setCitasNoCalificadas((prev) => {
         const next = prev.map((c) => (coincideLead(c) ? { ...c, ...cambios } : c));
-        safeSetLocalStorage('kpi_citas_no_calificadas', next);
+        safeSetLocalStorage('kpi_citas_no_calificadas_v2', next);
         return next;
       });
       setRawLeadsNoCalificados((prev) => {
         const next = prev.map((r) => (coincideLead(r) ? { ...r, ...cambios } : r));
-        safeSetLocalStorage('kpi_raw_nc_cache', next);
+        safeSetLocalStorage('kpi_raw_nc_cache_v2', next);
         return next;
       });
     }
@@ -576,8 +724,12 @@ export default function App() {
 
   // Cruces filtrados específicamente para la vista "Resumen KPIs"
   const crucesResumenFiltrados = useMemo(() => {
-    if (!fechaInicioResumen && !fechaFinResumen) return crucesAuditoriaTodos;
     return crucesAuditoriaTodos.filter((c) => {
+      if (paisResumen !== 'TODOS') {
+        const p = String(c.pais || c.cita?.pais || 'SV').toUpperCase();
+        if (p !== paisResumen) return false;
+      }
+      if (!fechaInicioResumen && !fechaFinResumen) return true;
       const raw =
         c.fecha_cita ||
         c.cita?.fecha_agendada ||
@@ -592,7 +744,7 @@ export default function App() {
       if (fechaFinResumen && f > fechaFinResumen) return false;
       return true;
     });
-  }, [crucesAuditoriaTodos, fechaInicioResumen, fechaFinResumen]);
+  }, [crucesAuditoriaTodos, fechaInicioResumen, fechaFinResumen, paisResumen]);
 
   const resumenKPIs = useMemo(() => {
     return calcularResumenKPIs(crucesResumenFiltrados);
@@ -767,6 +919,8 @@ export default function App() {
         }}
         onSincronizar={handleSincronizarManual}
         sincronizando={sincronizando}
+        onSincronizarProspektia={() => handleSincronizarProspektia(false)}
+        sincronizandoProspektia={sincronizandoProspektia}
       />
 
       {/* 2. ÁREA PRINCIPAL */}
@@ -786,6 +940,8 @@ export default function App() {
               onVerTranscripcion={(cruce) => setLlamadaParaTranscripcion(cruce)}
               onSincronizar={handleSincronizarManual}
               sincronizando={sincronizando}
+              onSincronizarProspektia={() => handleSincronizarProspektia(false)}
+              sincronizandoProspektia={sincronizandoProspektia}
             />
           )}
 
@@ -1027,6 +1183,8 @@ export default function App() {
               subtitulo="Leads calificados en caliente desde prospektia.red.com.sv con fecha y hora de reunión pactada"
               icono="leads"
               datos={rawLeads.filter((l) => esLeadCalificadoValido(l))}
+              onSincronizarProspektia={() => handleSincronizarProspektia(false)}
+              sincronizandoProspektia={sincronizandoProspektia}
               columnas={[
                 {
                   clave: 'codigo_prospecto',
@@ -1386,6 +1544,9 @@ export default function App() {
               titulo="Leads No Calificados (Prospectos Directos)"
               subtitulo="Leads no calificados consultados en caliente desde prospektia.red.com.sv (Auditoría)"
               icono="leads"
+              ocultarFiltroReunion={true}
+              onSincronizarProspektia={() => handleSincronizarProspektia(false)}
+              sincronizandoProspektia={sincronizandoProspektia}
               datos={rawLeadsNoCalificados}
               columnas={[
                 {
@@ -1414,6 +1575,25 @@ export default function App() {
                       {val || 'Sin teléfono'}
                     </span>
                   ),
+                },
+                {
+                  clave: 'pais',
+                  etiqueta: 'País',
+                  exportValue: (val) => (val === 'GT' ? 'GT' : 'SV'),
+                  render: (val) => {
+                    const p = val === 'GT' ? 'GT' : 'SV';
+                    return (
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${
+                          p === 'GT'
+                            ? 'bg-cyan-50 text-cyan-800 border-cyan-200 dark:bg-cyan-950 dark:text-cyan-300 dark:border-cyan-800/50'
+                            : 'bg-indigo-50 text-indigo-800 border-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800/50'
+                        }`}
+                      >
+                        {p === 'GT' ? '🇬🇹 GT' : '🇸🇻 SV'}
+                      </span>
+                    );
+                  },
                 },
                 {
                   clave: 'created_at_sv',
@@ -1774,15 +1954,33 @@ export default function App() {
                     con rango por defecto del 1 del mes al día de hoy.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleExportarResumenExcel}
-                  disabled={exportandoResumen}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition-all disabled:opacity-50 cursor-pointer shrink-0"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  <span>{exportandoResumen ? 'Generando...' : 'Descargar Excel'}</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-1">
+                    {(['TODOS', 'SV', 'GT'] as const).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setPaisResumen(p)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          paisResumen === p
+                            ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                            : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        {p === 'TODOS' ? 'Todos' : p === 'SV' ? '🇸🇻 SV' : '🇬🇹 GT'}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExportarResumenExcel}
+                    disabled={exportandoResumen}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition-all disabled:opacity-50 cursor-pointer shrink-0"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>{exportandoResumen ? 'Generando...' : 'Descargar Excel'}</span>
+                  </button>
+                </div>
               </div>
 
               <DateRangeFilter

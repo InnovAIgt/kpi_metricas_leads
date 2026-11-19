@@ -68,11 +68,15 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
   // Fila enfocada / resaltada al hacer clic para inspeccionar por qué no cumplió
   const [leadEnfocadoId, setLeadEnfocadoId] = useState<string | null>(null);
 
+  // Filtro superior de País ('TODOS' | 'SV' | 'GT')
+  const [paisFiltro, setPaisFiltro] = useState<'TODOS' | 'SV' | 'GT'>('TODOS');
+
   // Filtros dinámicos por columna (checklist y valores seleccionados)
   const [filtrosColumnas, setFiltrosColumnas] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     setFiltrosColumnas({});
+    setPaisFiltro('TODOS');
     setVendedorSeleccionado(null);
     setLeadEnfocadoId(null);
   }, [tipoLeadActual]);
@@ -91,9 +95,13 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
 
   const tieneFiltroFechas = Boolean(fechaInicio || fechaFin);
 
-  // Aplicar rango de fechas considerando cualquiera de las fechas del lead (agendada o creado)
+  // Aplicar rango de fechas y país considerando cualquiera de las fechas del lead (agendada o creado)
   const crucesConFecha = useMemo(() => {
     return crucesCitas.filter((c) => {
+      if (paisFiltro !== 'TODOS') {
+        const paisLead = String(c.pais || c.cita?.pais || 'SV').toUpperCase();
+        if (paisLead !== paisFiltro) return false;
+      }
       if (!fechaInicio && !fechaFin) return true;
       const f1 = c.fecha_cita ? c.fecha_cita.slice(0, 10) : '';
       const f2 = c.cita?.fecha_agendada || '';
@@ -109,7 +117,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
         return true;
       });
     });
-  }, [crucesCitas, fechaInicio, fechaFin]);
+  }, [crucesCitas, fechaInicio, fechaFin, paisFiltro]);
 
   // Agrupar por vendedor para la lista inicial solicitada
   const vendedoresAgrupados = useMemo(() => {
@@ -415,6 +423,22 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-1">
+              {(['TODOS', 'SV', 'GT'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setPaisFiltro(p)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    paisFiltro === p
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  {p === 'TODOS' ? 'Todos' : p === 'SV' ? '🇸🇻 SV' : '🇬🇹 GT'}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               onClick={handleExportarExcel}

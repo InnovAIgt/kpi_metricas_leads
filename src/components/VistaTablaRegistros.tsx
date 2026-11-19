@@ -17,6 +17,7 @@ import {
   Check,
   AlertCircle,
   FileText,
+  RefreshCw,
 } from 'lucide-react';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
 import { DateRangeFilter } from './DateRangeFilter';
@@ -51,6 +52,24 @@ interface VistaTablaRegistrosProps {
   onGuardarTeams?: (reunion: any) => Promise<boolean>;
   onGuardarLlamadaManual?: (tipo: 'pbx' | 'celular', datos: any) => Promise<boolean>;
   leadsDisponibles?: any[];
+  ocultarFiltroReunion?: boolean;
+  onSincronizarProspektia?: () => void;
+  sincronizandoProspektia?: boolean;
+}
+
+function extraerFechaSvLocal(valor?: any): string {
+  if (!valor || valor === 'null') return '';
+  const raw = String(valor).trim();
+  if (!raw) return '';
+  if (/(Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) {
+      const sv = new Date(d.getTime() - 6 * 3600 * 1000);
+      return sv.toISOString().slice(0, 10);
+    }
+  }
+  const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : '';
 }
 
 export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
@@ -63,6 +82,9 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
   onGuardarTeams,
   onGuardarLlamadaManual,
   leadsDisponibles = [],
+  ocultarFiltroReunion = false,
+  onSincronizarProspektia,
+  sincronizandoProspektia = false,
 }) => {
   const [busqueda, setBusqueda] = useState('');
   const [exportando, setExportando] = useState(false);
@@ -93,9 +115,22 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
   // Filtros dinámicos por cada columna: { [claveColumna]: string[] (valores marcados) }
   const [filtrosColumnas, setFiltrosColumnas] = useState<Record<string, string[]>>({});
+  const [paisFiltroRapido, setPaisFiltroRapido] = useState<'TODOS' | 'SV' | 'GT'>('TODOS');
 
-  // Para leads calificados: permitir filtrar opcionalmente solo los que tienen reunión agendada pactada (por defecto false para mostrar todos los del período)
+  // Para leads calificados: permitir filtrar opcionalmente solo los que tienen reunión agendada pactada
   const [soloConReunion, setSoloConReunion] = useState(false);
+
+  const tieneColumnaPais = useMemo(
+    () => columnas.some((c) => c.clave === 'pais'),
+    [columnas]
+  );
+
+  // Al cambiar de tabla (ej. Calificados <-> No Calificados <-> PBX/Celular), limpiar filtros de columnas previos
+  React.useEffect(() => {
+    setFiltrosColumnas({});
+    setSoloConReunion(false);
+    setPaisFiltroRapido('TODOS');
+  }, [titulo, icono]);
 
   const handleCambiarFiltroColumna = (clave: string, seleccionados: string[]) => {
     setFiltrosColumnas((prev) => ({
@@ -275,12 +310,18 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
     }
   };
 
-  // 1. Filtrado por fechas robusto y filtro de solo reuniones agendadas
+  // 1. Filtrado por país rápido, solo reuniones agendadas y fechas (sin desfase UTC)
   const datosConFecha = useMemo(() => {
     let base = datos;
 
-    // Si es leads y el usuario activó filtrar soloConReunion, filtrar solo los que tienen fecha_agendada real
-    if (icono === 'leads' && soloConReunion) {
+    if (tieneColumnaPais && paisFiltroRapido !== 'TODOS') {
+      base = base.filter(
+        (fila) => String(fila.pais || 'SV').toUpperCase() === paisFiltroRapido
+      );
+    }
+
+    // Solo aplica a Leads Calificados cuando no está oculto
+    if (icono === 'leads' && !ocultarFiltroReunion && soloConReunion) {
       base = base.filter(
         (fila) =>
           fila.fecha_agendada &&
@@ -291,15 +332,20 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
     if (!fechaInicio && !fechaFin) return base;
 
-    // Para leads: evaluar cualquiera de sus fechas válidas (fecha_agendada, fecha_creado o created_at)
-    // Esto garantiza consistencia total con el Resumen y KPIs de Cumplimiento (mostrando exactamente todos los del período)
     if (icono === 'leads') {
       return base.filter((fila) => {
-        const f1 = fila.fecha_agendada && fila.fecha_agendada !== 'null' ? String(fila.fecha_agendada).slice(0, 10) : '';
-        const f2 = fila.fecha_creado && fila.fecha_creado !== 'null' ? String(fila.fecha_creado).slice(0, 10) : '';
-        const f3 = fila.created_at && fila.created_at !== 'null' ? String(fila.created_at).slice(0, 10) : '';
-        const f4 = fila.fecha && fila.fecha !== 'null' ? String(fila.fecha).slice(0, 10) : '';
-        const fechas = [f1, f2, f3, f4].filter(Boolean);
+        const fechas = ocultarFiltroReunion
+          ? [
+              extraerFechaSvLocal(fila.fecha) ||
+                extraerFechaSvLocal(fila.created_at),
+            ].filter(Boolean)
+          : [
+              extraerFechaSvLocal(fila.fecha_agendada),
+              extraerFechaSvLocal(fila.fecha_creado),
+              extraerFechaSvLocal(fila.created_at),
+              extraerFechaSvLocal(fila.fecha),
+            ].filter(Boolean);
+
         if (fechas.length === 0) return true;
         return fechas.some((f) => {
           if (fechaInicio && f < fechaInicio) return false;
@@ -323,16 +369,26 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
         valor =
           fila.fecha_agendada ||
           fila.fecha_creado ||
-          (fila.created_at ? String(fila.created_at).slice(0, 10) : null) ||
+          fila.created_at ||
           fila.fecha;
       }
       if (!valor) return true;
-      const strFecha = String(valor).slice(0, 10);
+      const strFecha = extraerFechaSvLocal(valor) || String(valor).slice(0, 10);
       if (fechaInicio && strFecha < fechaInicio) return false;
       if (fechaFin && strFecha > fechaFin) return false;
       return true;
     });
-  }, [datos, fechaInicio, fechaFin, columnas, icono, soloConReunion]);
+  }, [
+    datos,
+    fechaInicio,
+    fechaFin,
+    columnas,
+    icono,
+    soloConReunion,
+    ocultarFiltroReunion,
+    tieneColumnaPais,
+    paisFiltroRapido,
+  ]);
 
   const obtenerValorColumna = (col: ColumnaDef, fila: any): string => {
     if (col.clave === 'consultar' && !col.exportValue) {
@@ -413,10 +469,26 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
     )?.clave;
 
     return [...resultado].sort((a, b) => {
-      let valA = colFecha ? a[colFecha] : null;
-      if (!valA) valA = a.fecha_agendada || a.fecha_hora || a.fecha_llamada || a.fecha || a.created_at || '';
-      let valB = colFecha ? b[colFecha] : null;
-      if (!valB) valB = b.fecha_agendada || b.fecha_hora || b.fecha_llamada || b.fecha || b.created_at || '';
+      const valA =
+        a.fecha && a.hora
+          ? `${a.fecha}T${a.hora}`
+          : (colFecha ? a[colFecha] : null) ||
+            a.fecha_agendada ||
+            a.fecha_hora ||
+            a.fecha_llamada ||
+            a.fecha ||
+            a.created_at ||
+            '';
+      const valB =
+        b.fecha && b.hora
+          ? `${b.fecha}T${b.hora}`
+          : (colFecha ? b[colFecha] : null) ||
+            b.fecha_agendada ||
+            b.fecha_hora ||
+            b.fecha_llamada ||
+            b.fecha ||
+            b.created_at ||
+            '';
       return String(valB).localeCompare(String(valA));
     });
   }, [datosConFecha, busqueda, filtrosColumnas, columnas]);
@@ -428,7 +500,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
   // Reiniciar a página 1 al cambiar filtros o búsqueda
   React.useEffect(() => {
     setPaginaActual(1);
-  }, [busqueda, fechaInicio, fechaFin, filtrosColumnas, datos]);
+  }, [busqueda, fechaInicio, fechaFin, filtrosColumnas, paisFiltroRapido, soloConReunion, datos]);
 
   const totalPaginas = Math.max(1, Math.ceil(filtrados.length / filasPorPagina));
   const filasPaginadas = useMemo(() => {
@@ -472,13 +544,17 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 
   const filtrosActivosTotal =
     Object.values(filtrosColumnas).filter((s) => s.length > 0).length +
-    (fechaInicio || fechaFin ? 1 : 0);
+    (fechaInicio || fechaFin ? 1 : 0) +
+    (paisFiltroRapido !== 'TODOS' ? 1 : 0) +
+    (soloConReunion && !ocultarFiltroReunion ? 1 : 0);
 
   const handleLimpiarTodosFiltros = () => {
     setBusqueda('');
     setFechaInicio('');
     setFechaFin('');
     setFiltrosColumnas({});
+    setPaisFiltroRapido('TODOS');
+    setSoloConReunion(false);
   };
 
   const handleExportarExcel = async () => {
@@ -560,7 +636,37 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {icono === 'leads' && (
+            {tieneColumnaPais && (
+              <div className="flex items-center bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-0.5">
+                {(['TODOS', 'SV', 'GT'] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setPaisFiltroRapido(p)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                      paisFiltroRapido === p
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    {p === 'TODOS' ? 'Todos' : p === 'SV' ? '🇸🇻 SV' : '🇬🇹 GT'}
+                  </button>
+                ))}
+              </div>
+            )}
+            {onSincronizarProspektia && (
+              <button
+                type="button"
+                onClick={onSincronizarProspektia}
+                disabled={sincronizandoProspektia}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+                title="Consultar ProspektIA ahora (auto-sync cada 15 min) para traer leads nuevos o fechas agendadas actualizadas"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${sincronizandoProspektia ? 'animate-spin' : ''}`} />
+                <span>{sincronizandoProspektia ? 'Sincronizando ProspektIA...' : 'Sincronizar con ProspektIA'}</span>
+              </button>
+            )}
+            {icono === 'leads' && !ocultarFiltroReunion && (
               <button
                 type="button"
                 onClick={() => setSoloConReunion(!soloConReunion)}

@@ -4,6 +4,12 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import {
+  construirMapaPaisCatalogo,
+  detectarPaisLead,
+  detectarPaisLlamada,
+  normalizarTextoComparacion,
+} from './src/utils/paisHelpers';
 
 dotenv.config();
 
@@ -402,6 +408,78 @@ let cacheDatosCompletos: { data: any; timestamp: number } | null = null;
 let syncPromiseEnVuelo: Promise<any> | null = null;
 const CACHE_TTL_MS = 30000; // 30 segundos de cache
 
+// Helpers de ProspektIA (paginación dinámica, fecha SV y detección de país)
+const PROSPEKTIA_HEADERS = {
+  'X-API-Key': 'RedApi_2026_SuperSegura_9XK2',
+  Accept: 'application/json',
+};
+
+async function fetchProspektiaCalificados(): Promise<any> {
+  return fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
+    headers: PROSPEKTIA_HEADERS,
+    cache: 'no-store',
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+}
+
+async function fetchProspektiaNoCalificadosPaginado(maxTotal = 10000): Promise<any[]> {
+  const todos: any[] = [];
+  const pageSize = 1000;
+  let offset = 0;
+
+  try {
+    while (offset < maxTotal) {
+      const r = await fetch(
+        `https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=${pageSize}&offset=${offset}`,
+        { headers: PROSPEKTIA_HEADERS, cache: 'no-store' }
+      );
+      if (!r.ok) break;
+      const json = await r.json();
+      const items = Array.isArray(json?.items) ? json.items : [];
+      if (items.length === 0) break;
+      todos.push(...items);
+      if (items.length < pageSize) break;
+      offset += pageSize;
+    }
+  } catch (err) {
+    console.warn('Error paginando ProspektIA leads-no-calificados:', err);
+  }
+  return todos;
+}
+
+function parseFechaHoraNcSv(createdAtSv?: string | null, createdAtIso?: string | null): { fecha: string; hora: string } {
+  if (createdAtSv && typeof createdAtSv === 'string') {
+    const m = createdAtSv.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    if (m) {
+      const [, dd, mm, yyyy, hh, min, ampm] = m;
+      let hourNum = parseInt(hh, 10);
+      if (ampm?.toUpperCase() === 'PM' && hourNum < 12) hourNum += 12;
+      if (ampm?.toUpperCase() === 'AM' && hourNum === 12) hourNum = 0;
+      return {
+        fecha: `${yyyy}-${String(parseInt(mm, 10)).padStart(2, '0')}-${String(parseInt(dd, 10)).padStart(2, '0')}`,
+        hora: `${String(hourNum).padStart(2, '0')}:${min}:00`,
+      };
+    }
+  }
+  if (createdAtIso) {
+    const raw = String(createdAtIso).trim();
+    const d = new Date(raw);
+    if (!isNaN(d.getTime()) && /(Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+      const sv = new Date(d.getTime() - 6 * 3600 * 1000);
+      return {
+        fecha: sv.toISOString().slice(0, 10),
+        hora: sv.toISOString().slice(11, 19),
+      };
+    }
+    return {
+      fecha: raw.slice(0, 10),
+      hora: raw.slice(11, 19) || '09:00:00',
+    };
+  }
+  return { fecha: '', hora: '' };
+}
+
 // ==============================================================================
 // 2. ENDPOINT PROXY UNIFICADO DE DATOS (PBX, Celular y Leads EN CALIENTE)
 // ==============================================================================
@@ -425,8 +503,9 @@ app.get('/api/sync/datos-completos', async (req, res) => {
   syncPromiseEnVuelo = (async () => {
     // 1. Obtener primero el Catálogo de Asesores Oficial desde Supabase
     const catalogo = await fetchSupabaseTable('catalogo?select=*&order=id.asc');
+    const mapaPaisCat = construirMapaPaisCatalogo(catalogo);
 
-    // Construir mapa de búsqueda rápida
+    // Construir mapa de búsqueda rápida (insensible a acentos/mayúsculas)
     const mapaCatalogo = {
       porExtension: {} as Record<string, any>,
       porUsuario: {} as Record<string, any>,
@@ -437,8 +516,8 @@ app.get('/api/sync/datos-completos', async (req, res) => {
 
     catalogo.forEach((cat: any) => {
       if (cat.extension && cat.extension !== 'null') mapaCatalogo.porExtension[String(cat.extension).trim()] = cat;
-      if (cat.usuario && cat.usuario !== 'null') mapaCatalogo.porUsuario[String(cat.usuario).trim().toLowerCase()] = cat;
-      if (cat.nombre_ejecutivo) mapaCatalogo.porNombre[String(cat.nombre_ejecutivo).trim().toLowerCase()] = cat;
+      if (cat.usuario && cat.usuario !== 'null') mapaCatalogo.porUsuario[normalizarTextoComparacion(cat.usuario)] = cat;
+      if (cat.nombre_ejecutivo) mapaCatalogo.porNombre[normalizarTextoComparacion(cat.nombre_ejecutivo)] = cat;
       if (cat.celular && cat.celular !== 'null') {
         const cleanTel = String(cat.celular).replace(/[^0-9]/g, '').slice(-8);
         if (cleanTel) mapaCatalogo.porCelular[cleanTel] = cat;
@@ -448,16 +527,18 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     const resolverAsesorBackend = (ident: string, fallback: string) => {
       if (!ident || ident === 'null' || ident === 'undefined') return fallback;
       const idTrim = String(ident).trim();
-      const idLower = idTrim.toLowerCase();
-      if (mapaCatalogo.porUsuario[idLower]) return mapaCatalogo.porUsuario[idLower].nombre_ejecutivo;
+      const idNorm = normalizarTextoComparacion(idTrim);
+      if (mapaCatalogo.porUsuario[idNorm]) return mapaCatalogo.porUsuario[idNorm].nombre_ejecutivo;
       if (mapaCatalogo.porExtension[idTrim]) return mapaCatalogo.porExtension[idTrim].nombre_ejecutivo;
-      if (mapaCatalogo.porNombre[idLower]) return mapaCatalogo.porNombre[idLower].nombre_ejecutivo;
+      if (mapaCatalogo.porNombre[idNorm]) return mapaCatalogo.porNombre[idNorm].nombre_ejecutivo;
       const cleanDigits = idTrim.replace(/[^0-9]/g, '').slice(-8);
       if (cleanDigits && mapaCatalogo.porCelular[cleanDigits]) return mapaCatalogo.porCelular[cleanDigits].nombre_ejecutivo;
-      
+
       for (const cat of catalogo) {
-        if (cat.usuario && idLower.includes(String(cat.usuario).toLowerCase())) return cat.nombre_ejecutivo;
-        if (cat.nombre_ejecutivo && idLower.includes(String(cat.nombre_ejecutivo).toLowerCase())) return cat.nombre_ejecutivo;
+        const uNorm = normalizarTextoComparacion(cat.usuario);
+        const nNorm = normalizarTextoComparacion(cat.nombre_ejecutivo);
+        if (uNorm && idNorm.includes(uNorm)) return cat.nombre_ejecutivo;
+        if (nNorm && (idNorm.includes(nNorm) || nNorm.includes(idNorm))) return cat.nombre_ejecutivo;
       }
       return fallback;
     };
@@ -484,20 +565,8 @@ app.get('/api/sync/datos-completos', async (req, res) => {
           )
         )
       ).then((pages) => pages.flat()),
-      fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
-        headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null),
-      Promise.all([
-        fetch('https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=1000&offset=0', {
-          headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
-        }).then((r) => (r.ok ? r.json() : null)),
-        fetch('https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=1000&offset=1000', {
-          headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
-        }).then((r) => (r.ok ? r.json() : null)),
-      ]).then(([p1, p2]) => [...(p1?.items || []), ...(p2?.items || [])])
-        .catch(() => []),
+      fetchProspektiaCalificados(),
+      fetchProspektiaNoCalificadosPaginado(),
     ]);
 
     // 3. Procesar leads DIRECTAMENTE desde Prospektia API (0 dependencia de tabla leads en Supabase)
@@ -509,8 +578,12 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       if (!cod) return;
       const fAg = pl.fecha_agendada ? String(pl.fecha_agendada).trim() : null;
       const hAg = pl.hora_agendada ? String(pl.hora_agendada).trim() : null;
+      const asesorRes = resolverAsesorBackend(
+        pl.asesor_nombre || pl.asesor_id || '',
+        pl.asesor_nombre ? String(pl.asesor_nombre).trim() : ''
+      );
 
-      const leadItem = {
+      const leadItem: any = {
         id: String(pl.id || cod).trim(),
         codigo_prospecto: cod,
         nombre_prospecto: pl.nombre_prospecto || pl.nombre || '',
@@ -520,13 +593,14 @@ app.get('/api/sync/datos-completos', async (req, res) => {
         fecha_creado: pl.fecha_creado || null,
         hora_creado: pl.hora_creado || null,
         tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
-        pais: pl.pais || 'SV',
+        pais: pl.pais || '',
         asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
-        asesor_nombre: pl.asesor_nombre || null,
+        asesor_nombre: asesorRes || pl.asesor_nombre || null,
         asesor_email: pl.asesor_email || null,
         status: pl.status || 'Agendado',
         created_at: pl.created_at || (pl.fecha_creado ? `${pl.fecha_creado}T${pl.hora_creado || '00:00:00'}Z` : new Date().toISOString()),
       };
+      leadItem.pais = detectarPaisLead(leadItem, catalogo, mapaPaisCat);
 
       mapaLeads.set(cod, leadItem);
     });
@@ -544,23 +618,41 @@ app.get('/api/sync/datos-completos', async (req, res) => {
 
     const leads = leadsCalificadosValidos;
 
-    // Procesar Leads No Calificados de Prospektia API (sin tocar Supabase)
+    // Procesar Leads No Calificados de Prospektia API (sin tocar Supabase) con inferencia real de país (SV / GT)
     const mapaNc = new Map<string, any>();
+    const clientIdsNc = new Set<string>();
     const prospektiaNcItems = Array.isArray(prospektiaNcRes) ? prospektiaNcRes : [];
     prospektiaNcItems.forEach((pnc: any) => {
       const k = String(pnc.id || `${pnc.client_id}_${pnc.created_at}`).trim();
       if (!k) return;
+      if (pnc.client_id) clientIdsNc.add(String(pnc.client_id).trim());
       if (!mapaNc.has(k)) {
+        const advisorRes = resolverAsesorBackend(
+          pnc.advisor_name || '',
+          pnc.advisor_name ? String(pnc.advisor_name).trim() : 'Asesor Asignado'
+        );
+        const { fecha, hora } = parseFechaHoraNcSv(pnc.created_at_sv, pnc.created_at);
+        const paisInferido = detectarPaisLead(
+          {
+            pais: pnc.pais || pnc.country,
+            telefono: pnc.client_phone,
+            advisor_name: advisorRes,
+            asesor_nombre: pnc.advisor_name,
+          },
+          catalogo,
+          mapaPaisCat
+        );
         mapaNc.set(k, {
           id: pnc.client_id || pnc.id,
           client_id: pnc.client_id,
           client_name: pnc.client_name || '',
-          advisor_name: pnc.advisor_name || '',
+          advisor_name: advisorRes,
           telefono: pnc.client_phone || '',
           created_at: pnc.created_at,
           created_at_sv: pnc.created_at_sv || '',
-          fecha: pnc.created_at ? String(pnc.created_at).slice(0, 10) : '',
-          hora: pnc.created_at ? String(pnc.created_at).slice(11, 19) : '',
+          fecha,
+          hora,
+          pais: paisInferido,
         });
       }
     });
@@ -569,9 +661,9 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     leadsNoCalificadosTransferidos.forEach((l: any) => {
       const k = String(l.codigo_prospecto || l.id || '').trim();
       if (!k) return;
-      if (!mapaNc.has(k)) {
-        const fRef = l.fecha_creado || (l.created_at ? String(l.created_at).slice(0, 10) : '');
-        const hRef = l.hora_creado || (l.created_at ? String(l.created_at).slice(11, 19) : '');
+      if (!mapaNc.has(k) && !clientIdsNc.has(k)) {
+        const fRef = l.fecha_creado || (l.created_at ? parseFechaHoraNcSv(null, l.created_at).fecha : '');
+        const hRef = l.hora_creado || (l.created_at ? parseFechaHoraNcSv(null, l.created_at).hora : '');
         mapaNc.set(k, {
           id: l.id || l.codigo_prospecto,
           client_id: l.codigo_prospecto,
@@ -582,7 +674,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
           fecha: fRef,
           hora: hRef,
           campaign_name: l.tipo_reunion || 'Lead Sin Cita Agendada',
-          pais: l.pais || 'SV',
+          pais: detectarPaisLead(l, catalogo, mapaPaisCat),
         });
       }
     });
@@ -671,18 +763,20 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     leads.forEach((l: any) => {
       l.asesor_nombre = resolverAsesorBackend(l.asesor_nombre || l.asesor_id, l.asesor_nombre ? String(l.asesor_nombre).trim() : 'Asesor General');
       if (!l.nombre_prospecto) l.nombre_prospecto = l.codigo_prospecto ? `Prospecto ${l.codigo_prospecto}` : 'Prospecto Sin Nombre';
-      l.pais = l.pais || detectarPais(l.telefono, 'SV');
+      l.pais = detectarPaisLead(l, catalogo, mapaPaisCat);
       if (!l.status) l.status = 'Agendado';
     });
 
     leadsNoCalificados.forEach((l: any) => {
       l.advisor_name = resolverAsesorBackend(l.advisor_name, l.advisor_name ? String(l.advisor_name).trim() : 'Asesor Asignado');
+      l.pais = detectarPaisLead(l, catalogo, mapaPaisCat);
       if (!l.campaign_name) l.campaign_name = 'Campaña Inbound';
     });
 
     llamadasCelular.forEach((c: any) => {
       c.asesor_nombre = resolverAsesorBackend(c.usuario, resolverAsesorBackend(c.linea, c.usuario || 'Ejecutivo Celular'));
       if (!c.operador) c.operador = 'Claro / Tigo';
+      c.pais = detectarPaisLlamada(c, 'Celular', catalogo, mapaPaisCat);
     });
 
     llamadasPbx.forEach((p: any) => {
@@ -812,12 +906,14 @@ app.get('/api/sync/datos-completos', async (req, res) => {
         t.cliente = `Prospecto ${t.codigo_prospecto}`;
       }
       if (!t.estado_teams) t.estado_teams = 'Pendiente de realizar';
+      t.pais = detectarPaisLlamada(t, 'Teams', catalogo, mapaPaisCat);
     });
 
     llamadasWhatsapp.forEach((w: any) => {
       w.asesor_nombre = resolverAsesorBackend(w.numero_ejecutivo, w.numero_ejecutivo ? `Asesor ${w.numero_ejecutivo}` : 'Asesor WhatsApp');
       if (!w.estado) w.estado = 'Entregado';
       if (!w.direccion) w.direccion = 'Saliente';
+      w.pais = detectarPaisLlamada(w, 'WhatsApp', catalogo, mapaPaisCat);
     });
 
     // 6. Combinar estados KPI (SLA y Retroalimentación) desde Supabase + almacén persistente local
@@ -914,6 +1010,234 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     });
   } finally {
     syncPromiseEnVuelo = null;
+  }
+});
+
+// ==============================================================================
+// 2B. ENDPOINT RÁPIDO EXCLUSIVO DE SINCRONIZACIÓN CON PROSPEKTIA (15 min / Botón manual)
+// Trae leads nuevos y leads que antes no tenían fecha_agendada y ya la tienen.
+// ==============================================================================
+app.all('/api/sync/prospektia', async (_req, res) => {
+  const tInicio = Date.now();
+  cacheDatosCompletos = null; // Invalidar caché general para reflejar cambios al instante
+
+  try {
+    const [catalogo, prospektiaRes, prospektiaNcItems] = await Promise.all([
+      fetchSupabaseTable('catalogo?select=*&order=id.asc'),
+      fetchProspektiaCalificados(),
+      fetchProspektiaNoCalificadosPaginado(),
+    ]);
+
+    const mapaPaisCat = construirMapaPaisCatalogo(catalogo);
+    const mapaCatalogo = {
+      porExtension: {} as Record<string, any>,
+      porUsuario: {} as Record<string, any>,
+      porCelular: {} as Record<string, any>,
+      porNombre: {} as Record<string, any>,
+    };
+
+    catalogo.forEach((cat: any) => {
+      if (cat.extension && cat.extension !== 'null') mapaCatalogo.porExtension[String(cat.extension).trim()] = cat;
+      if (cat.usuario && cat.usuario !== 'null') mapaCatalogo.porUsuario[normalizarTextoComparacion(cat.usuario)] = cat;
+      if (cat.nombre_ejecutivo) mapaCatalogo.porNombre[normalizarTextoComparacion(cat.nombre_ejecutivo)] = cat;
+      if (cat.celular && cat.celular !== 'null') {
+        const cleanTel = String(cat.celular).replace(/[^0-9]/g, '').slice(-8);
+        if (cleanTel) mapaCatalogo.porCelular[cleanTel] = cat;
+      }
+    });
+
+    const resolverAsesorBackend = (ident: string, fallback: string) => {
+      if (!ident || ident === 'null' || ident === 'undefined') return fallback;
+      const idTrim = String(ident).trim();
+      const idNorm = normalizarTextoComparacion(idTrim);
+      if (mapaCatalogo.porUsuario[idNorm]) return mapaCatalogo.porUsuario[idNorm].nombre_ejecutivo;
+      if (mapaCatalogo.porExtension[idTrim]) return mapaCatalogo.porExtension[idTrim].nombre_ejecutivo;
+      if (mapaCatalogo.porNombre[idNorm]) return mapaCatalogo.porNombre[idNorm].nombre_ejecutivo;
+      const cleanDigits = idTrim.replace(/[^0-9]/g, '').slice(-8);
+      if (cleanDigits && mapaCatalogo.porCelular[cleanDigits]) return mapaCatalogo.porCelular[cleanDigits].nombre_ejecutivo;
+
+      for (const cat of catalogo) {
+        const uNorm = normalizarTextoComparacion(cat.usuario);
+        const nNorm = normalizarTextoComparacion(cat.nombre_ejecutivo);
+        if (uNorm && idNorm.includes(uNorm)) return cat.nombre_ejecutivo;
+        if (nNorm && (idNorm.includes(nNorm) || nNorm.includes(idNorm))) return cat.nombre_ejecutivo;
+      }
+      return fallback;
+    };
+
+    const mapaLeads = new Map<string, any>();
+    const leadsProspektiaApi = prospektiaRes?.leads || [];
+
+    leadsProspektiaApi.forEach((pl: any) => {
+      const cod = String(pl.codigo_prospecto || pl.id || '').trim();
+      if (!cod) return;
+      const fAg = pl.fecha_agendada ? String(pl.fecha_agendada).trim() : null;
+      const hAg = pl.hora_agendada ? String(pl.hora_agendada).trim() : null;
+      const asesorRes = resolverAsesorBackend(
+        pl.asesor_nombre || pl.asesor_id || '',
+        pl.asesor_nombre ? String(pl.asesor_nombre).trim() : 'Asesor General'
+      );
+
+      const leadItem: any = {
+        id: String(pl.id || cod).trim(),
+        codigo_prospecto: cod,
+        nombre_prospecto: pl.nombre_prospecto || pl.nombre || `Prospecto ${cod}`,
+        telefono: pl.telefono || '',
+        fecha_agendada: fAg,
+        hora_agendada: hAg,
+        fecha_creado: pl.fecha_creado || null,
+        hora_creado: pl.hora_creado || null,
+        tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
+        pais: pl.pais || '',
+        asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
+        asesor_nombre: asesorRes,
+        asesor_email: pl.asesor_email || null,
+        status: pl.status || 'Agendado',
+        created_at:
+          pl.created_at ||
+          (pl.fecha_creado ? `${pl.fecha_creado}T${pl.hora_creado || '00:00:00'}Z` : new Date().toISOString()),
+      };
+      leadItem.pais = detectarPaisLead(leadItem, catalogo, mapaPaisCat);
+      mapaLeads.set(cod, leadItem);
+    });
+
+    const todosLosLeads = Array.from(mapaLeads.values());
+    const leads: any[] = [];
+    const leadsTransferidos: any[] = [];
+
+    todosLosLeads.forEach((l: any) => {
+      if (esLeadCalificadoValido(l)) {
+        leads.push(l);
+      } else {
+        leadsTransferidos.push(l);
+      }
+    });
+
+    const mapaNc = new Map<string, any>();
+    const clientIdsNc = new Set<string>();
+    (Array.isArray(prospektiaNcItems) ? prospektiaNcItems : []).forEach((pnc: any) => {
+      const k = String(pnc.id || `${pnc.client_id}_${pnc.created_at}`).trim();
+      if (!k) return;
+      if (pnc.client_id) clientIdsNc.add(String(pnc.client_id).trim());
+      if (!mapaNc.has(k)) {
+        const advisorRes = resolverAsesorBackend(
+          pnc.advisor_name || '',
+          pnc.advisor_name ? String(pnc.advisor_name).trim() : 'Asesor Asignado'
+        );
+        const { fecha, hora } = parseFechaHoraNcSv(pnc.created_at_sv, pnc.created_at);
+        const paisInferido = detectarPaisLead(
+          {
+            pais: pnc.pais || pnc.country,
+            telefono: pnc.client_phone,
+            advisor_name: advisorRes,
+            asesor_nombre: pnc.advisor_name,
+          },
+          catalogo,
+          mapaPaisCat
+        );
+        mapaNc.set(k, {
+          id: pnc.client_id || pnc.id,
+          client_id: pnc.client_id,
+          client_name: pnc.client_name || '',
+          advisor_name: advisorRes,
+          telefono: pnc.client_phone || '',
+          created_at: pnc.created_at,
+          created_at_sv: pnc.created_at_sv || '',
+          fecha,
+          hora,
+          campaign_name: 'Campaña Inbound',
+          pais: paisInferido,
+        });
+      }
+    });
+
+    leadsTransferidos.forEach((l: any) => {
+      const k = String(l.codigo_prospecto || l.id || '').trim();
+      if (!k || mapaNc.has(k) || clientIdsNc.has(k)) return;
+      const fRef = l.fecha_creado || (l.created_at ? parseFechaHoraNcSv(null, l.created_at).fecha : '');
+      const hRef = l.hora_creado || (l.created_at ? parseFechaHoraNcSv(null, l.created_at).hora : '');
+      mapaNc.set(k, {
+        id: l.id || l.codigo_prospecto,
+        client_id: l.codigo_prospecto,
+        client_name: l.nombre_prospecto || l.nombre || 'Lead No Calificado',
+        advisor_name: l.asesor_nombre || 'Asesor Asignado',
+        telefono: l.telefono || '',
+        created_at: l.created_at || (fRef ? `${fRef}T${hRef || '00:00:00'}` : new Date().toISOString()),
+        fecha: fRef,
+        hora: hRef,
+        campaign_name: l.tipo_reunion || 'Lead Sin Cita Agendada',
+        pais: detectarPaisLead(l, catalogo, mapaPaisCat),
+      });
+    });
+
+    const leadsNoCalificados = Array.from(mapaNc.values());
+
+    // Aplicar flags KPI persistidos
+    const kpiPersistidos = leerKpiEstadosPersistidos();
+    const camposKpi = [
+      'kpi_sla_etapa_1',
+      'kpi_sla_etapa_2',
+      'kpi_sla_etapa_3',
+      'kpi_retroalimentacion_etapa_1',
+      'kpi_retroalimentacion_etapa_2',
+      'kpi_retroalimentacion_etapa_3',
+      'kpi_retroalimentacion_etapa_4',
+    ];
+    try {
+      const sbKpiRows = await fetchSupabaseTable(
+        'leads?or=(kpi_sla_etapa_1.eq.true,kpi_sla_etapa_2.eq.true,kpi_sla_etapa_3.eq.true,kpi_retroalimentacion_etapa_1.eq.true,kpi_retroalimentacion_etapa_2.eq.true,kpi_retroalimentacion_etapa_3.eq.true,kpi_retroalimentacion_etapa_4.eq.true)&select=id,codigo_prospecto,kpi_sla_etapa_1,kpi_sla_etapa_2,kpi_sla_etapa_3,kpi_retroalimentacion_etapa_1,kpi_retroalimentacion_etapa_2,kpi_retroalimentacion_etapa_3,kpi_retroalimentacion_etapa_4&limit=1000'
+      );
+      sbKpiRows.forEach((row: any) => {
+        const flags: Record<string, boolean> = {};
+        camposKpi.forEach((f) => {
+          if (typeof row[f] === 'boolean') flags[f] = row[f];
+        });
+        if (row.id) kpiPersistidos[`leads:${row.id}`] = { ...(kpiPersistidos[`leads:${row.id}`] || {}), ...flags };
+        if (row.codigo_prospecto) {
+          kpiPersistidos[`leads:${row.codigo_prospecto}`] = {
+            ...(kpiPersistidos[`leads:${row.codigo_prospecto}`] || {}),
+            ...flags,
+          };
+        }
+      });
+    } catch (_) {}
+
+    const aplicarKpiFlags = (item: any, tabla: KpiTabla) => {
+      const k1 = item.id ? kpiPersistidos[`${tabla}:${item.id}`] : undefined;
+      const k2 = item.codigo_prospecto ? kpiPersistidos[`${tabla}:${item.codigo_prospecto}`] : undefined;
+      const k3 = item.client_id ? kpiPersistidos[`${tabla}:${item.client_id}`] : undefined;
+      const merged = { ...(k1 || {}), ...(k2 || {}), ...(k3 || {}) };
+      camposKpi.forEach((campo) => {
+        item[campo] = campo in merged ? Boolean(merged[campo]) : Boolean(item[campo]);
+      });
+    };
+
+    leads.forEach((l: any) => aplicarKpiFlags(l, 'leads'));
+    leadsNoCalificados.forEach((l: any) => aplicarKpiFlags(l, 'leads_no_calificados'));
+
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      exito: true,
+      timestamp: Date.now(),
+      tiempo_ms: Date.now() - tInicio,
+      estadisticas: {
+        total_leads: leads.length,
+        total_leads_no_calificados: leadsNoCalificados.length,
+        total_nc_sv: leadsNoCalificados.filter((l: any) => l.pais === 'SV').length,
+        total_nc_gt: leadsNoCalificados.filter((l: any) => l.pais === 'GT').length,
+      },
+      datos: {
+        catalogo,
+        leads,
+        leadsNoCalificados,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error en /api/sync/prospektia:', error);
+    return res.status(500).json({
+      exito: false,
+      mensaje: error?.message || 'Error al sincronizar con ProspektIA',
+    });
   }
 });
 

@@ -45,6 +45,8 @@ interface SidebarProps {
   onLogout?: () => void;
   onSincronizar?: () => void;
   sincronizando?: boolean;
+  onSincronizarProspektia?: () => void;
+  sincronizandoProspektia?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -58,6 +60,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onLogout,
   onSincronizar,
   sincronizando = false,
+  onSincronizarProspektia,
+  sincronizandoProspektia = false,
 }) => {
   const [menuRegistrosAbierto, setMenuRegistrosAbierto] = useState(true);
   const [menuResumenAbierto, setMenuResumenAbierto] = useState(true);
@@ -401,9 +405,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
+        {/* Botón rápido de Sincronización ProspektIA (cada 15m + manual) */}
+        {onSincronizarProspektia && (
+          <button
+            type="button"
+            onClick={onSincronizarProspektia}
+            disabled={sincronizandoProspektia}
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-cyan-50 dark:bg-cyan-950/60 hover:bg-cyan-100 dark:hover:bg-cyan-900/70 border border-cyan-200 dark:border-cyan-700/60 text-cyan-700 dark:text-cyan-300 text-[11px] font-semibold transition-all disabled:opacity-50 cursor-pointer shadow-xs"
+            title="Consultar ProspektIA ahora (auto-sync cada 15 min) para traer leads nuevos o fechas agendadas actualizadas"
+          >
+            <RefreshCw className={`h-3 w-3 ${sincronizandoProspektia ? 'animate-spin' : ''}`} />
+            <span>{sincronizandoProspektia ? 'Sincronizando ProspektIA...' : 'Sincronizar con ProspektIA'}</span>
+          </button>
+        )}
+
         {/* Botón rápido de Sincronizar en vivo */}
         {onSincronizar && (
           <button
+            type="button"
             onClick={onSincronizar}
             disabled={sincronizando}
             className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800/90 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 text-[11px] font-medium transition-all disabled:opacity-50 cursor-pointer shadow-xs"

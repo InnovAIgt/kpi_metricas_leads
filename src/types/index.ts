@@ -57,6 +57,7 @@ export interface Llamada {
   canal_tipo?: 'PBX' | 'Celular' | 'WhatsApp' | 'Teams';
   estado_llamada?: string;
   fuente?: string;
+  pais?: string;
 }
 
 export type EstadoCumplimiento =

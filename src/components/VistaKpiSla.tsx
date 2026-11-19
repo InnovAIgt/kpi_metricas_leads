@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Shield, Search, Download } from 'lucide-react';
 import { Cita, ModoLeads } from '../types';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
@@ -24,8 +24,16 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
   const [fechaFin, setFechaFin] = useState(rangoInicial.fin);
   const [guardandoId, setGuardandoId] = useState<string | null>(null);
 
+  // Filtro superior de país
+  const [paisFiltro, setPaisFiltro] = useState<'TODOS' | 'SV' | 'GT'>('TODOS');
+
   // Filtros dinámicos por columnas
   const [filtrosColumnas, setFiltrosColumnas] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    setFiltrosColumnas({});
+    setPaisFiltro('TODOS');
+  }, [tipoLeadActual]);
 
   const handleCambiarFiltroColumna = (clave: string, seleccionados: string[]) => {
     setFiltrosColumnas((prev) => ({
@@ -34,10 +42,14 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
     }));
   };
 
-  // 1. Filtrar por rango de fecha
+  // 1. Filtrar por rango de fecha y país
   const citasConFecha = useMemo(() => {
-    if (!fechaInicio && !fechaFin) return citas;
     return citas.filter((c) => {
+      if (paisFiltro !== 'TODOS') {
+        const paisLead = String(c.pais || 'SV').toUpperCase();
+        if (paisLead !== paisFiltro) return false;
+      }
+      if (!fechaInicio && !fechaFin) return true;
       const f =
         c.fecha_agendada ||
         c.fecha_creado ||
@@ -48,7 +60,7 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
       if (fechaFin && f > fechaFin) return false;
       return true;
     });
-  }, [citas, fechaInicio, fechaFin]);
+  }, [citas, fechaInicio, fechaFin, paisFiltro]);
 
   // 2. Extraer valores únicos por columna
   const valoresUnicosPorColumna = useMemo(() => {
@@ -225,6 +237,22 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-1">
+              {(['TODOS', 'SV', 'GT'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setPaisFiltro(p)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    paisFiltro === p
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  {p === 'TODOS' ? 'Todos' : p === 'SV' ? '🇸🇻 SV' : '🇬🇹 GT'}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               onClick={handleExportarExcel}

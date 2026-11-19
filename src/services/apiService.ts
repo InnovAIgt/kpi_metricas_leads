@@ -2,6 +2,12 @@ import { Cita, Llamada } from '../types';
 import { esLeadCalificadoValido } from '../utils/leadValidation';
 import { formatLocalDate } from '../utils/dateHelpers';
 import { filtrarPbxPorCatalogo, filtrarCelularPorCatalogo } from '../utils/catalogoFilter';
+import {
+  construirMapaPaisCatalogo,
+  detectarPaisLead,
+  detectarPaisLlamada,
+  normalizarTextoComparacion,
+} from '../utils/paisHelpers';
 
 function stripFakeUtcZ(val?: string | null): string {
   if (!val) return '';
@@ -92,6 +98,530 @@ function getSupabaseConfig() {
   };
 }
 
+const PROSPEKTIA_HEADERS = {
+  'X-API-Key': 'RedApi_2026_SuperSegura_9XK2',
+  Accept: 'application/json',
+};
+
+function crearResolverAsesor(catalogo: any[] = []) {
+  const mapaExt: Record<string, string> = {};
+  const mapaUser: Record<string, string> = {};
+  const mapaNom: Record<string, string> = {};
+  const mapaCel: Record<string, string> = {};
+
+  (Array.isArray(catalogo) ? catalogo : []).forEach((cat: any) => {
+    const nom = String(cat?.nombre_ejecutivo || '').trim();
+    if (!nom) return;
+    if (cat.extension && String(cat.extension).trim() !== 'null') {
+      String(cat.extension)
+        .split(/[,;/|]+/)
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+        .forEach((ext) => {
+          mapaExt[ext] = nom;
+        });
+    }
+    if (cat.usuario && String(cat.usuario).trim() !== 'null') {
+      mapaUser[normalizarTextoComparacion(cat.usuario)] = nom;
+    }
+    mapaNom[normalizarTextoComparacion(nom)] = nom;
+    if (cat.celular && String(cat.celular).trim() !== 'null') {
+      const celDigits = String(cat.celular).replace(/\D/g, '').slice(-8);
+      if (celDigits.length >= 7) mapaCel[celDigits] = nom;
+    }
+  });
+
+  return (ident: string, fallback: string): string => {
+    if (!ident || ident === 'null' || ident === 'undefined') return fallback;
+    const idTrim = String(ident).trim();
+    const idNorm = normalizarTextoComparacion(idTrim);
+    if (!idNorm) return fallback;
+    if (mapaUser[idNorm]) return mapaUser[idNorm];
+    if (mapaExt[idTrim.toLowerCase()]) return mapaExt[idTrim.toLowerCase()];
+    if (mapaNom[idNorm]) return mapaNom[idNorm];
+
+    const digits = idTrim.replace(/\D/g, '');
+    if (digits.length >= 7) {
+      const suf = digits.length >= 8 ? digits.slice(-8) : digits;
+      if (mapaCel[suf]) return mapaCel[suf];
+    }
+
+    for (const cat of catalogo || []) {
+      const uNorm = normalizarTextoComparacion(cat?.usuario);
+      const nNorm = normalizarTextoComparacion(cat?.nombre_ejecutivo);
+      if (uNorm && idNorm.includes(uNorm)) return cat.nombre_ejecutivo;
+      if (nNorm && (idNorm.includes(nNorm) || nNorm.includes(idNorm))) return cat.nombre_ejecutivo;
+    }
+    return fallback;
+  };
+}
+
+function parseFechaHoraNcSvClient(
+  createdAtSv?: string | null,
+  createdAtIso?: string | null
+): { fecha: string; hora: string } {
+  if (createdAtSv && typeof createdAtSv === 'string') {
+    const m = createdAtSv.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    if (m) {
+      const [, dd, mm, yyyy, hh, min, ampm] = m;
+      let hourNum = parseInt(hh, 10);
+      if (ampm?.toUpperCase() === 'PM' && hourNum < 12) hourNum += 12;
+      if (ampm?.toUpperCase() === 'AM' && hourNum === 12) hourNum = 0;
+      return {
+        fecha: `${yyyy}-${String(parseInt(mm, 10)).padStart(2, '0')}-${String(parseInt(dd, 10)).padStart(2, '0')}`,
+        hora: `${String(hourNum).padStart(2, '0')}:${min}:00`,
+      };
+    }
+  }
+  if (createdAtIso) {
+    const raw = String(createdAtIso).trim();
+    const sv = utcToSvWallClock(raw);
+    if (sv && sv.length >= 10) {
+      return {
+        fecha: sv.slice(0, 10),
+        hora: sv.slice(11, 19) || '09:00:00',
+      };
+    }
+  }
+  return { fecha: '', hora: '' };
+}
+
+async function fetchProspektiaNoCalificadosPaginadoCliente(maxTotal = 10000): Promise<any[]> {
+  const todos: any[] = [];
+  const pageSize = 1000;
+  let offset = 0;
+
+  try {
+    while (offset < maxTotal) {
+      const res = await fetch(
+        `https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=${pageSize}&offset=${offset}`,
+        { headers: PROSPEKTIA_HEADERS, cache: 'no-store' }
+      );
+      if (!res.ok) break;
+      const json = await res.json();
+      const items = Array.isArray(json?.items) ? json.items : [];
+      if (items.length === 0) break;
+      todos.push(...items);
+      if (items.length < pageSize) break;
+      offset += pageSize;
+    }
+  } catch (err) {
+    console.warn('Error paginando ProspektIA leads-no-calificados en cliente:', err);
+  }
+  return todos;
+}
+
+function procesarLeadsProspektia({
+  leads = [],
+  leadsNoCalificados = [],
+  catalogo = [],
+}: {
+  leads: any[];
+  leadsNoCalificados: any[];
+  catalogo: any[];
+}): {
+  rawLeads: any[];
+  rawLeadsNoCalificados: any[];
+  citasCalificadas: Cita[];
+  citasNoCalificadas: Cita[];
+} {
+  const resolverAsesor = crearResolverAsesor(catalogo);
+  const mapaPaisCat = construirMapaPaisCatalogo(catalogo);
+  const overridesCalif = leerKpiOverridesLocal('leads');
+  const overridesNc = leerKpiOverridesLocal('leads_no_calificados');
+
+  const leadsCalificadosValidos: any[] = [];
+  const leadsTransferidos: any[] = [];
+
+  (Array.isArray(leads) ? leads : []).forEach((orig: any, idx: number) => {
+    const cod = String(orig.codigo_prospecto || orig.id || `lead-${idx}`).trim();
+    const idLead =
+      orig.id && String(orig.id) !== 'undefined' && String(orig.id) !== 'null'
+        ? String(orig.id).trim()
+        : cod;
+    const asesor = resolverAsesor(
+      orig.asesor_nombre || orig.asesor_id || '',
+      orig.asesor_nombre ? String(orig.asesor_nombre).trim() : 'Asesor General'
+    );
+    const fAg =
+      orig.fecha_agendada && orig.fecha_agendada !== 'null'
+        ? String(orig.fecha_agendada).slice(0, 10)
+        : '';
+    const hAg =
+      orig.hora_agendada && orig.hora_agendada !== 'null'
+        ? normalizarHoraStr(orig.hora_agendada, '09:00:00')
+        : '';
+    const createdSv = orig.created_at ? utcToSvWallClock(orig.created_at) : '';
+    const fCre =
+      orig.fecha_creado && orig.fecha_creado !== 'null'
+        ? String(orig.fecha_creado).slice(0, 10)
+        : createdSv
+        ? createdSv.slice(0, 10)
+        : '';
+    const hCre =
+      orig.hora_creado && orig.hora_creado !== 'null'
+        ? normalizarHoraStr(orig.hora_creado, '09:00:00')
+        : createdSv
+        ? createdSv.slice(11, 19)
+        : '09:00:00';
+
+    const pais = detectarPaisLead(
+      { ...orig, asesor_nombre: asesor },
+      catalogo,
+      mapaPaisCat
+    );
+
+    const ov = {
+      ...(overridesCalif[idLead] || {}),
+      ...(overridesCalif[cod] || {}),
+    };
+
+    const enriched = {
+      ...orig,
+      id: idLead,
+      codigo_prospecto: cod,
+      nombre_prospecto:
+        orig.nombre_prospecto ||
+        orig.nombre ||
+        (cod ? `Prospecto ${cod}` : 'Prospecto Sin Nombre'),
+      asesor_nombre: asesor,
+      pais,
+      fecha_agendada: fAg || null,
+      hora_agendada: hAg || null,
+      fecha_creado: fCre || null,
+      hora_creado: hCre || null,
+      kpi_sla_etapa_1: Boolean(ov.kpi_sla_etapa_1 ?? orig.kpi_sla_etapa_1),
+      kpi_sla_etapa_2: Boolean(ov.kpi_sla_etapa_2 ?? orig.kpi_sla_etapa_2),
+      kpi_sla_etapa_3: Boolean(ov.kpi_sla_etapa_3 ?? orig.kpi_sla_etapa_3),
+      kpi_retroalimentacion_etapa_1: Boolean(
+        ov.kpi_retroalimentacion_etapa_1 ?? orig.kpi_retroalimentacion_etapa_1
+      ),
+      kpi_retroalimentacion_etapa_2: Boolean(
+        ov.kpi_retroalimentacion_etapa_2 ?? orig.kpi_retroalimentacion_etapa_2
+      ),
+      kpi_retroalimentacion_etapa_3: Boolean(
+        ov.kpi_retroalimentacion_etapa_3 ?? orig.kpi_retroalimentacion_etapa_3
+      ),
+      kpi_retroalimentacion_etapa_4: Boolean(
+        ov.kpi_retroalimentacion_etapa_4 ?? orig.kpi_retroalimentacion_etapa_4
+      ),
+    };
+
+    if (esLeadCalificadoValido(enriched)) {
+      leadsCalificadosValidos.push(enriched);
+    } else {
+      leadsTransferidos.push(enriched);
+    }
+  });
+
+  const citasCalificadas: Cita[] = leadsCalificadosValidos.map((l: any) => {
+    const fObj = l.fecha_agendada || l.fecha_creado || formatLocalDate();
+    const hObj = l.hora_agendada || l.hora_creado || '09:00:00';
+    return {
+      id: String(l.id || l.codigo_prospecto),
+      codigo_prospecto: l.codigo_prospecto,
+      prospecto_nombre: l.nombre_prospecto || 'Prospecto Sin Nombre',
+      prospecto_telefono: String(l.telefono || l.celular || '').trim(),
+      vendedor_id: String(l.asesor_nombre || 'asesor')
+        .toLowerCase()
+        .replace(/\s+/g, '_'),
+      vendedor_nombre: l.asesor_nombre || 'Asesor General',
+      fecha_hora_programada: `${fObj}T${normalizarHoraStr(hObj, '09:00:00')}`,
+      estado_cita: 'programada',
+      fuente: 'Supabase',
+      tipo_reunion: l.tipo_reunion || 'Llamada Telefonica',
+      fecha_agendada: l.fecha_agendada || undefined,
+      hora_agendada: l.hora_agendada || undefined,
+      fecha_creado: l.fecha_creado || undefined,
+      hora_creado: l.hora_creado || undefined,
+      pais: l.pais || 'SV',
+      created_at: l.created_at,
+      tipo_lead: 'calificados',
+      kpi_sla_etapa_1: Boolean(l.kpi_sla_etapa_1),
+      kpi_sla_etapa_2: Boolean(l.kpi_sla_etapa_2),
+      kpi_sla_etapa_3: Boolean(l.kpi_sla_etapa_3),
+      kpi_retroalimentacion_etapa_1: Boolean(l.kpi_retroalimentacion_etapa_1),
+      kpi_retroalimentacion_etapa_2: Boolean(l.kpi_retroalimentacion_etapa_2),
+      kpi_retroalimentacion_etapa_3: Boolean(l.kpi_retroalimentacion_etapa_3),
+      kpi_retroalimentacion_etapa_4: Boolean(l.kpi_retroalimentacion_etapa_4),
+    };
+  });
+
+  const mapaNc = new Map<string, any>();
+  const clientIdsNc = new Set<string>();
+
+  (Array.isArray(leadsNoCalificados) ? leadsNoCalificados : []).forEach(
+    (raw: any, idx: number) => {
+      const k = String(raw.client_id || raw.id || `nc-${idx}`).trim();
+      if (!k) return;
+      if (raw.client_id) clientIdsNc.add(String(raw.client_id).trim());
+
+      const parsedDt = parseFechaHoraNcSvClient(raw.created_at_sv, raw.created_at);
+      const fecha =
+        raw.fecha && /^\d{4}-\d{2}-\d{2}$/.test(String(raw.fecha).slice(0, 10))
+          ? String(raw.fecha).slice(0, 10)
+          : parsedDt.fecha || formatLocalDate();
+      const hora =
+        raw.hora && /^\d{2}:\d{2}/.test(String(raw.hora))
+          ? normalizarHoraStr(raw.hora, '09:00:00')
+          : parsedDt.hora || '09:00:00';
+
+      const advisor = resolverAsesor(
+        raw.advisor_name || raw.asesor_nombre || '',
+        raw.advisor_name
+          ? String(raw.advisor_name).trim()
+          : raw.asesor_nombre
+          ? String(raw.asesor_nombre).trim()
+          : 'Asesor Asignado'
+      );
+
+      // Para No Calificados, si venía pre-etiquetado erróneamente como SV sin verificar 502/asesor GT,
+      // detectarPaisLead respeta prefijo +502 / asesor GT si ignoramos fallback SV previo cuando no había campo country real.
+      const tel = String(raw.telefono || raw.client_phone || '').trim();
+      const pais = detectarPaisLead(
+        {
+          pais: raw.country || (raw.pais && raw.pais !== 'SV' ? raw.pais : undefined),
+          telefono: tel,
+          advisor_name: advisor,
+          asesor_nombre: raw.advisor_name || advisor,
+        },
+        catalogo,
+        mapaPaisCat
+      );
+
+      const idNc = String(raw.id || raw.client_id || k).trim();
+      const cid = String(raw.client_id || idNc).trim();
+      const ov = {
+        ...(overridesNc[idNc] || {}),
+        ...(overridesNc[cid] || {}),
+      };
+
+      if (!mapaNc.has(k)) {
+        mapaNc.set(k, {
+          ...raw,
+          id: idNc,
+          client_id: cid,
+          client_name: raw.client_name || raw.nombre_prospecto || 'Prospecto Sin Nombre',
+          advisor_name: advisor,
+          telefono: tel,
+          fecha,
+          hora,
+          created_at: raw.created_at || `${fecha}T${hora}`,
+          created_at_sv: raw.created_at_sv || `${fecha} ${hora}`,
+          campaign_name: raw.campaign_name || 'Campaña Inbound',
+          pais,
+          kpi_sla_etapa_1: Boolean(ov.kpi_sla_etapa_1 ?? raw.kpi_sla_etapa_1),
+          kpi_sla_etapa_2: Boolean(ov.kpi_sla_etapa_2 ?? raw.kpi_sla_etapa_2),
+          kpi_sla_etapa_3: Boolean(ov.kpi_sla_etapa_3 ?? raw.kpi_sla_etapa_3),
+          kpi_retroalimentacion_etapa_1: Boolean(
+            ov.kpi_retroalimentacion_etapa_1 ?? raw.kpi_retroalimentacion_etapa_1
+          ),
+          kpi_retroalimentacion_etapa_2: Boolean(
+            ov.kpi_retroalimentacion_etapa_2 ?? raw.kpi_retroalimentacion_etapa_2
+          ),
+          kpi_retroalimentacion_etapa_3: Boolean(
+            ov.kpi_retroalimentacion_etapa_3 ?? raw.kpi_retroalimentacion_etapa_3
+          ),
+          kpi_retroalimentacion_etapa_4: Boolean(
+            ov.kpi_retroalimentacion_etapa_4 ?? raw.kpi_retroalimentacion_etapa_4
+          ),
+        });
+      }
+    }
+  );
+
+  leadsTransferidos.forEach((l: any) => {
+    const k = String(l.codigo_prospecto || l.id || '').trim();
+    if (!k || mapaNc.has(k) || clientIdsNc.has(k)) return;
+    const parsedDt = parseFechaHoraNcSvClient(null, l.created_at);
+    const fecha = l.fecha_creado || parsedDt.fecha || formatLocalDate();
+    const hora = l.hora_creado || parsedDt.hora || '09:00:00';
+    const ov = {
+      ...(overridesNc[String(l.id || k)] || {}),
+      ...(overridesNc[k] || {}),
+    };
+
+    mapaNc.set(k, {
+      id: l.id || k,
+      client_id: k,
+      client_name: l.nombre_prospecto || l.nombre || 'Lead No Calificado',
+      advisor_name: l.asesor_nombre || 'Asesor Asignado',
+      telefono: l.telefono || '',
+      created_at: l.created_at || `${fecha}T${hora}`,
+      created_at_sv: `${fecha} ${hora}`,
+      fecha,
+      hora,
+      campaign_name: l.tipo_reunion || 'Lead Sin Cita Agendada',
+      pais: detectarPaisLead(l, catalogo, mapaPaisCat),
+      kpi_sla_etapa_1: Boolean(ov.kpi_sla_etapa_1 ?? l.kpi_sla_etapa_1),
+      kpi_sla_etapa_2: Boolean(ov.kpi_sla_etapa_2 ?? l.kpi_sla_etapa_2),
+      kpi_sla_etapa_3: Boolean(ov.kpi_sla_etapa_3 ?? l.kpi_sla_etapa_3),
+      kpi_retroalimentacion_etapa_1: Boolean(
+        ov.kpi_retroalimentacion_etapa_1 ?? l.kpi_retroalimentacion_etapa_1
+      ),
+      kpi_retroalimentacion_etapa_2: Boolean(
+        ov.kpi_retroalimentacion_etapa_2 ?? l.kpi_retroalimentacion_etapa_2
+      ),
+      kpi_retroalimentacion_etapa_3: Boolean(
+        ov.kpi_retroalimentacion_etapa_3 ?? l.kpi_retroalimentacion_etapa_3
+      ),
+      kpi_retroalimentacion_etapa_4: Boolean(
+        ov.kpi_retroalimentacion_etapa_4 ?? l.kpi_retroalimentacion_etapa_4
+      ),
+    });
+  });
+
+  const leadsNoCalificadosProcesados = Array.from(mapaNc.values());
+
+  const citasNoCalificadas: Cita[] = leadsNoCalificadosProcesados.map((nc: any) => {
+    const fecha = nc.fecha || formatLocalDate();
+    const hora = normalizarHoraStr(nc.hora, '09:00:00');
+    return {
+      id: String(nc.id || nc.client_id),
+      codigo_prospecto: String(nc.client_id || nc.id || ''),
+      prospecto_nombre: nc.client_name || 'Prospecto Sin Nombre',
+      prospecto_telefono: String(nc.telefono || '').trim(),
+      vendedor_id: String(nc.advisor_name || 'asesor')
+        .toLowerCase()
+        .replace(/\s+/g, '_'),
+      vendedor_nombre: nc.advisor_name || 'Asesor Asignado',
+      fecha_hora_programada: `${fecha}T${hora}`,
+      estado_cita: 'programada',
+      fuente: 'Supabase',
+      tipo_reunion: nc.campaign_name || 'Lead Directo',
+      fecha_creado: fecha,
+      hora_creado: hora,
+      pais: nc.pais || 'SV',
+      created_at: nc.created_at,
+      tipo_lead: 'no_calificados',
+      kpi_sla_etapa_1: Boolean(nc.kpi_sla_etapa_1),
+      kpi_sla_etapa_2: Boolean(nc.kpi_sla_etapa_2),
+      kpi_sla_etapa_3: Boolean(nc.kpi_sla_etapa_3),
+      kpi_retroalimentacion_etapa_1: Boolean(nc.kpi_retroalimentacion_etapa_1),
+      kpi_retroalimentacion_etapa_2: Boolean(nc.kpi_retroalimentacion_etapa_2),
+      kpi_retroalimentacion_etapa_3: Boolean(nc.kpi_retroalimentacion_etapa_3),
+      kpi_retroalimentacion_etapa_4: Boolean(nc.kpi_retroalimentacion_etapa_4),
+    };
+  });
+
+  return {
+    rawLeads: leadsCalificadosValidos,
+    rawLeadsNoCalificados: leadsNoCalificadosProcesados,
+    citasCalificadas,
+    citasNoCalificadas,
+  };
+}
+
+export interface ResultadoSyncProspektia {
+  exito: boolean;
+  timestamp: string;
+  tiempo_ms: number;
+  catalogo: any[];
+  rawLeads: any[];
+  rawLeadsNoCalificados: any[];
+  citasCalificadas: Cita[];
+  citasNoCalificadas: Cita[];
+  estadisticas?: Record<string, number>;
+}
+
+/**
+ * Sincronización rápida exclusiva con ProspektIA API (Calificados + No Calificados).
+ * Trae leads nuevos y detecta leads que ya recibieron fecha_agendada.
+ */
+export async function sincronizarSoloProspektia(
+  catalogoFallback: any[] = []
+): Promise<ResultadoSyncProspektia> {
+  const inicio = performance.now();
+  try {
+    const res = await fetch('/api/sync/prospektia', { cache: 'no-store' });
+    if (res.ok) {
+      const json = await res.json();
+      if (json?.exito && json?.datos) {
+        const cat =
+          Array.isArray(json.datos.catalogo) && json.datos.catalogo.length > 0
+            ? json.datos.catalogo
+            : catalogoFallback;
+        const processed = procesarLeadsProspektia({
+          leads: json.datos.leads || [],
+          leadsNoCalificados: json.datos.leadsNoCalificados || [],
+          catalogo: cat,
+        });
+        return {
+          exito: true,
+          timestamp: json.timestamp || new Date().toISOString(),
+          tiempo_ms: Math.round(performance.now() - inicio),
+          catalogo: cat,
+          ...processed,
+          estadisticas: json.estadisticas || {},
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Fallo proxy /api/sync/prospektia, usando consulta directa ProspektIA:', err);
+  }
+
+  // Fallback directo en cliente
+  try {
+    const { url, headers } = getSupabaseConfig();
+    const [catRes, prospektiaRes, prospektiaNcRes] = await Promise.all([
+      catalogoFallback.length > 0
+        ? Promise.resolve(catalogoFallback)
+        : fetch(`${url}/rest/v1/catalogo?select=*&order=id.asc`, { headers })
+            .then((r) => (r.ok ? r.json() : []))
+            .catch(() => []),
+      fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
+        headers: PROSPEKTIA_HEADERS,
+        cache: 'no-store',
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+      fetchProspektiaNoCalificadosPaginadoCliente(),
+    ]);
+
+    const cat = Array.isArray(catRes) ? catRes : catalogoFallback;
+    const rawCalif = Array.isArray(prospektiaRes?.leads) ? prospektiaRes.leads : [];
+    const rawNc = Array.isArray(prospektiaNcRes) ? prospektiaNcRes : [];
+
+    const processed = procesarLeadsProspektia({
+      leads: rawCalif,
+      leadsNoCalificados: rawNc.map((pnc: any) => ({
+        id: pnc.client_id || pnc.id,
+        client_id: pnc.client_id,
+        client_name: pnc.client_name || '',
+        advisor_name: pnc.advisor_name || '',
+        telefono: pnc.client_phone || '',
+        created_at: pnc.created_at,
+        created_at_sv: pnc.created_at_sv || '',
+      })),
+      catalogo: cat,
+    });
+
+    return {
+      exito: rawCalif.length > 0 || rawNc.length > 0,
+      timestamp: new Date().toISOString(),
+      tiempo_ms: Math.round(performance.now() - inicio),
+      catalogo: cat,
+      ...processed,
+      estadisticas: {
+        total_leads: processed.rawLeads.length,
+        total_leads_no_calificados: processed.rawLeadsNoCalificados.length,
+      },
+    };
+  } catch (err) {
+    console.error('Error en fallback directo ProspektIA:', err);
+    return {
+      exito: false,
+      timestamp: new Date().toISOString(),
+      tiempo_ms: Math.round(performance.now() - inicio),
+      catalogo: catalogoFallback,
+      rawLeads: [],
+      rawLeadsNoCalificados: [],
+      citasCalificadas: [],
+      citasNoCalificadas: [],
+    };
+  }
+}
+
 /**
  * Consulta el endpoint proxy del backend (/api/sync/datos-completos)
  * donde las credenciales de Supabase están 100% protegidas en variables de entorno.
@@ -117,328 +647,22 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
         const llamadasPbx = filtrarPbxPorCatalogo(rawPbxBackend, catalogo);
         const llamadasCelular = filtrarCelularPorCatalogo(rawCelBackend, catalogo);
 
-        // 1. Construir Catálogo de Asesores por extensión, usuario, celular y nombre
-        const mapaCatalogo = {
-          porExtension: {} as Record<string, any>,
-          porUsuario: {} as Record<string, any>,
-          porCelular: {} as Record<string, any>,
-          porNombre: {} as Record<string, any>,
-        };
+        const resolverAsesor = crearResolverAsesor(catalogo);
+        const mapaPaisCat = construirMapaPaisCatalogo(catalogo);
 
-        catalogo.forEach((c: any) => {
-          if (c.extension) mapaCatalogo.porExtension[String(c.extension).trim()] = c;
-          if (c.usuario) mapaCatalogo.porUsuario[String(c.usuario).trim().toLowerCase()] = c;
-          if (c.nombre_ejecutivo) mapaCatalogo.porNombre[String(c.nombre_ejecutivo).trim().toLowerCase()] = c;
-          if (c.celular) {
-            const cleanTel = String(c.celular).replace(/[^0-9]/g, '');
-            mapaCatalogo.porCelular[cleanTel] = c;
-          }
+        // 2. Mapear Leads a Citas (SEPARANDO ESTRICTAMENTE CALIFICADOS Y NO CALIFICADOS E INFERENCIA DE PAÍS)
+        const {
+          rawLeads: leadsCalificadosValidos,
+          rawLeadsNoCalificados: leadsNoCalificadosProcesados,
+          citasCalificadas,
+          citasNoCalificadas,
+        } = procesarLeadsProspektia({
+          leads,
+          leadsNoCalificados,
+          catalogo,
         });
 
-        const resolverAsesor = (
-          extOrUserOrCel: string,
-          fallback: string = 'Asesor General'
-        ): string => {
-          if (!extOrUserOrCel) return fallback;
-          const clean = String(extOrUserOrCel).trim();
-          const cleanUser = clean.toLowerCase();
-          if (mapaCatalogo.porUsuario[cleanUser]) return mapaCatalogo.porUsuario[cleanUser].nombre_ejecutivo;
-          if (mapaCatalogo.porExtension[clean]) return mapaCatalogo.porExtension[clean].nombre_ejecutivo;
-          if (mapaCatalogo.porNombre[cleanUser]) return mapaCatalogo.porNombre[cleanUser].nombre_ejecutivo;
-          const cleanTel = clean.replace(/[^0-9]/g, '');
-          if (cleanTel && mapaCatalogo.porCelular[cleanTel]) return mapaCatalogo.porCelular[cleanTel].nombre_ejecutivo;
-
-          for (const cat of catalogo) {
-            if (cat.usuario && cleanUser.includes(String(cat.usuario).toLowerCase())) return cat.nombre_ejecutivo;
-            if (cat.nombre_ejecutivo && cleanUser.includes(String(cat.nombre_ejecutivo).toLowerCase())) return cat.nombre_ejecutivo;
-          }
-          return fallback;
-        };
-
-        // 2. Mapear Leads a Citas (SEPARANDO ESTRICTAMENTE CALIFICADOS Y NO CALIFICADOS)
-        const citasCalificadas: Cita[] = [];
-        const citasNoCalificadas: Cita[] = [];
-
-        // Helper para procesar fecha y hora exacta sin perder datos
-        const extraerFechaHoraLead = (lead: any) => {
-          const fAgendada = lead.fecha_agendada && lead.fecha_agendada !== 'null' ? String(lead.fecha_agendada).trim() : '';
-          let hAgendada = lead.hora_agendada && lead.hora_agendada !== 'null' ? String(lead.hora_agendada).trim() : '';
-          const fCreado = lead.fecha_creado && lead.fecha_creado !== 'null' ? String(lead.fecha_creado).trim() : '';
-          let hCreado = lead.hora_creado && lead.hora_creado !== 'null' ? String(lead.hora_creado).trim() : '';
-          const fCreatedAt = lead.created_at ? String(lead.created_at).slice(0, 10) : '';
-          let hCreatedAt = lead.created_at ? String(lead.created_at).slice(11, 19) : '';
-
-          const tieneCitaAgendada = Boolean(fAgendada && fAgendada.length >= 8);
-
-          // Si tiene fecha agendada pactada, se usa esa fecha y hora
-          const fechaDef = fAgendada || fCreado || fCreatedAt || formatLocalDate();
-          let horaDef = hAgendada || hCreado || hCreatedAt || '09:00:00';
-          if (horaDef.length === 5) horaDef += ':00';
-
-          return {
-            fechaIso: `${fechaDef}T${horaDef}`,
-            fechaAgendada: fAgendada || '', // Fecha agendada real (no inventada)
-            horaAgendada: hAgendada || '',   // Hora agendada real
-            fechaCreado: fCreado || fCreatedAt,
-            horaCreado: hCreado || hCreatedAt,
-            tieneCitaAgendada,
-          };
-        };
-
-        const extraerFechaHoraNoCalificado = (lead: any) => {
-          // Si tiene created_at_sv (ej: "27/08/2026 07:58 AM" o "18/09/2026 02:48 PM")
-          if (lead.created_at_sv && typeof lead.created_at_sv === 'string') {
-            const match = lead.created_at_sv.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
-            if (match) {
-              const [, dd, mm, yyyy, hh, min, ampm] = match;
-              let hourNum = parseInt(hh, 10);
-              if (ampm) {
-                if (ampm.toUpperCase() === 'PM' && hourNum < 12) hourNum += 12;
-                if (ampm.toUpperCase() === 'AM' && hourNum === 12) hourNum = 0;
-              }
-              const dStr = String(parseInt(dd, 10)).padStart(2, '0');
-              const mStr = String(parseInt(mm, 10)).padStart(2, '0');
-              const hourStr = String(hourNum).padStart(2, '0');
-              const f = `${yyyy}-${mStr}-${dStr}`;
-              const h = `${hourStr}:${min}:00`;
-              return { fechaIso: `${f}T${h}`, fecha: f, hora: h };
-            }
-          }
-
-          // Si tiene created_at ISO UTC, restar 6 horas para zona horaria El Salvador (UTC-6)
-          if (lead.created_at) {
-            const d = new Date(lead.created_at);
-            if (!isNaN(d.getTime())) {
-              const svDate = new Date(d.getTime() - 6 * 3600 * 1000);
-              const yyyy = svDate.getUTCFullYear();
-              const mm = String(svDate.getUTCMonth() + 1).padStart(2, '0');
-              const dd = String(svDate.getUTCDate()).padStart(2, '0');
-              const hh = String(svDate.getUTCHours()).padStart(2, '0');
-              const min = String(svDate.getUTCMinutes()).padStart(2, '0');
-              const ss = String(svDate.getUTCSeconds()).padStart(2, '0');
-              const f = `${yyyy}-${mm}-${dd}`;
-              const h = `${hh}:${min}:${ss}`;
-              return { fechaIso: `${f}T${h}`, fecha: f, hora: h };
-            }
-          }
-
-          return { fechaIso: new Date().toISOString(), fecha: '', hora: '' };
-        };
-
-        // A. Separar Leads Calificados (con reunión agendada real y nombre válido) y No Calificados
-        const leadsCalificadosValidos: any[] = [];
-        const ovCal = leerKpiOverridesLocal('leads');
-        const ovNc = leerKpiOverridesLocal('leads_no_calificados');
-
-        leads.forEach((lead: any, idx: number) => {
-          if (!lead.id || lead.id === 'undefined' || lead.id === 'null') {
-            lead.id = String(lead.codigo_prospecto || `lead-${idx}`).trim();
-          }
-          const { fechaIso, fechaAgendada, horaAgendada, fechaCreado, horaCreado, tieneCitaAgendada } =
-            extraerFechaHoraLead(lead);
-
-          // Conservar valores reales en el objeto raw del lead
-          lead.fecha_agendada = fechaAgendada || null;
-          lead.hora_agendada = horaAgendada || null;
-          lead.fecha_creado = fechaCreado;
-          lead.hora_creado = horaCreado;
-          lead.fecha_hora_programada = fechaIso;
-          lead.tiene_cita_agendada = tieneCitaAgendada;
-
-          const asesor =
-            lead.asesor_nombre ||
-            resolverAsesor(lead.asesor_id || '', 'Asesor General');
-
-          const nombreProspecto =
-            lead.nombre_prospecto ||
-            lead.nombre ||
-            lead.cliente ||
-            (lead.codigo_prospecto ? `Prospecto ${lead.codigo_prospecto}` : `Lead #${idx + 1}`);
-
-          const esCalificado = esLeadCalificadoValido(lead);
-          const flagsOv = esCalificado
-            ? {
-                ...(lead.id ? ovCal[String(lead.id)] : {}),
-                ...(lead.codigo_prospecto ? ovCal[String(lead.codigo_prospecto)] : {}),
-              }
-            : {
-                ...(lead.id ? ovNc[String(lead.id)] : {}),
-                ...(lead.codigo_prospecto ? ovNc[String(lead.codigo_prospecto)] : {}),
-              };
-
-          const sla1 = Boolean(flagsOv.kpi_sla_etapa_1 ?? lead.kpi_sla_etapa_1);
-          const sla2 = Boolean(flagsOv.kpi_sla_etapa_2 ?? lead.kpi_sla_etapa_2);
-          const sla3 = Boolean(flagsOv.kpi_sla_etapa_3 ?? lead.kpi_sla_etapa_3);
-          const ret1 = Boolean(flagsOv.kpi_retroalimentacion_etapa_1 ?? lead.kpi_retroalimentacion_etapa_1);
-          const ret2 = Boolean(flagsOv.kpi_retroalimentacion_etapa_2 ?? lead.kpi_retroalimentacion_etapa_2);
-          const ret3 = Boolean(flagsOv.kpi_retroalimentacion_etapa_3 ?? lead.kpi_retroalimentacion_etapa_3);
-          const ret4 = Boolean(flagsOv.kpi_retroalimentacion_etapa_4 ?? lead.kpi_retroalimentacion_etapa_4);
-
-          lead.kpi_sla_etapa_1 = sla1;
-          lead.kpi_sla_etapa_2 = sla2;
-          lead.kpi_sla_etapa_3 = sla3;
-          lead.kpi_retroalimentacion_etapa_1 = ret1;
-          lead.kpi_retroalimentacion_etapa_2 = ret2;
-          lead.kpi_retroalimentacion_etapa_3 = ret3;
-          lead.kpi_retroalimentacion_etapa_4 = ret4;
-
-          if (esCalificado) {
-            leadsCalificadosValidos.push(lead);
-            citasCalificadas.push({
-              id: String(lead.id || lead.codigo_prospecto || `lead-${idx}`),
-              codigo_prospecto: lead.codigo_prospecto,
-              prospecto_nombre: nombreProspecto,
-              prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
-              prospecto_email: lead.asesor_email || lead.email || '',
-              vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
-              vendedor_nombre: asesor,
-              fecha_hora_programada: fechaIso,
-              fecha_agendada: fechaAgendada || undefined,
-              hora_agendada: horaAgendada || undefined,
-              fecha_creado: fechaCreado || undefined,
-              hora_creado: horaCreado || undefined,
-              created_at: lead.created_at || undefined,
-              pais: lead.pais || 'SV',
-              estado_cita: lead.status === 'cancelada' ? 'cancelada' : 'programada',
-              fuente: 'Supabase',
-              tipo_reunion: (lead.tipo_reunion as any) || 'Llamada Telefonica',
-              tipo_lead: 'calificados',
-              notas: `País: ${lead.pais || 'SV'}`,
-              kpi_sla_etapa_1: sla1,
-              kpi_sla_etapa_2: sla2,
-              kpi_sla_etapa_3: sla3,
-              kpi_retroalimentacion_etapa_1: ret1,
-              kpi_retroalimentacion_etapa_2: ret2,
-              kpi_retroalimentacion_etapa_3: ret3,
-              kpi_retroalimentacion_etapa_4: ret4,
-            });
-          } else {
-            // No cumple criterios de calificado (sin reunión, emoji, inicial o apodo) -> va a No Calificados
-            const fRef = fechaCreado || (lead.created_at ? String(lead.created_at).slice(0, 10) : formatLocalDate());
-            let hRef = horaCreado || (lead.created_at ? String(lead.created_at).slice(11, 19) : '09:00:00');
-            if (hRef.length === 5) hRef += ':00';
-            const fIsoNoCal = `${fRef}T${hRef}`;
-
-            leadsNoCalificados.push({
-              id: lead.id || lead.codigo_prospecto,
-              client_id: lead.codigo_prospecto,
-              client_name: nombreProspecto,
-              advisor_name: asesor,
-              telefono: lead.telefono || lead.celular || '',
-              created_at: lead.created_at || fIsoNoCal,
-              fecha: fRef,
-              hora: hRef,
-              campaign_name: lead.tipo_reunion || 'Lead Sin Cita Agendada',
-              pais: lead.pais || 'SV',
-              kpi_sla_etapa_1: sla1,
-              kpi_sla_etapa_2: sla2,
-              kpi_sla_etapa_3: sla3,
-              kpi_retroalimentacion_etapa_1: ret1,
-              kpi_retroalimentacion_etapa_2: ret2,
-              kpi_retroalimentacion_etapa_3: ret3,
-              kpi_retroalimentacion_etapa_4: ret4,
-            });
-
-            citasNoCalificadas.push({
-              id: String(lead.id || lead.codigo_prospecto || `lead-nc-${idx}`),
-              codigo_prospecto: lead.codigo_prospecto,
-              prospecto_nombre: nombreProspecto,
-              prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
-              prospecto_email: lead.asesor_email || lead.email || '',
-              vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
-              vendedor_nombre: asesor,
-              fecha_hora_programada: fIsoNoCal,
-              fecha_agendada: fRef,
-              hora_agendada: hRef,
-              fecha_creado: fRef,
-              hora_creado: hRef,
-              created_at: lead.created_at || undefined,
-              pais: lead.pais || 'SV',
-              estado_cita: 'no_show',
-              fuente: 'Supabase',
-              tipo_reunion: lead.tipo_reunion || '(sin reunion)',
-              tipo_lead: 'no_calificados',
-              notas: `Lead No Calificado (${lead.tipo_reunion || 'Sin reunión'})`,
-              kpi_sla_etapa_1: sla1,
-              kpi_sla_etapa_2: sla2,
-              kpi_sla_etapa_3: sla3,
-              kpi_retroalimentacion_etapa_1: ret1,
-              kpi_retroalimentacion_etapa_2: ret2,
-              kpi_retroalimentacion_etapa_3: ret3,
-              kpi_retroalimentacion_etapa_4: ret4,
-            });
-          }
-        });
-
-        // B. Leads No Calificados (public.leads_no_calificados)
-        leadsNoCalificados.forEach((lead: any, idx: number) => {
-          const parsed = extraerFechaHoraNoCalificado(lead);
-          // Asegurar que el objeto raw conserve fecha y hora estandarizadas
-          lead.fecha = parsed.fecha;
-          lead.hora = parsed.hora;
-          lead.fecha_hora_programada = parsed.fechaIso;
-
-          const asesorRaw = lead.advisor_name || lead.asesor || '';
-          const asesor = resolverAsesor(asesorRaw, asesorRaw || 'Asesor Asignado');
-          lead.advisor_name = asesor;
-
-          const ov = {
-            ...(lead.id ? ovNc[String(lead.id)] : {}),
-            ...(lead.client_id ? ovNc[String(lead.client_id)] : {}),
-          };
-          const sla1 = Boolean(ov.kpi_sla_etapa_1 ?? lead.kpi_sla_etapa_1);
-          const sla2 = Boolean(ov.kpi_sla_etapa_2 ?? lead.kpi_sla_etapa_2);
-          const sla3 = Boolean(ov.kpi_sla_etapa_3 ?? lead.kpi_sla_etapa_3);
-          const ret1 = Boolean(ov.kpi_retroalimentacion_etapa_1 ?? lead.kpi_retroalimentacion_etapa_1);
-          const ret2 = Boolean(ov.kpi_retroalimentacion_etapa_2 ?? lead.kpi_retroalimentacion_etapa_2);
-          const ret3 = Boolean(ov.kpi_retroalimentacion_etapa_3 ?? lead.kpi_retroalimentacion_etapa_3);
-          const ret4 = Boolean(ov.kpi_retroalimentacion_etapa_4 ?? lead.kpi_retroalimentacion_etapa_4);
-
-          lead.kpi_sla_etapa_1 = sla1;
-          lead.kpi_sla_etapa_2 = sla2;
-          lead.kpi_sla_etapa_3 = sla3;
-          lead.kpi_retroalimentacion_etapa_1 = ret1;
-          lead.kpi_retroalimentacion_etapa_2 = ret2;
-          lead.kpi_retroalimentacion_etapa_3 = ret3;
-          lead.kpi_retroalimentacion_etapa_4 = ret4;
-
-          const nombreCliente =
-            lead.client_name ||
-            lead.nombre ||
-            lead.prospecto ||
-            (lead.client_id ? `Cliente ${lead.client_id}` : `No Calif. #${idx + 1}`);
-
-          citasNoCalificadas.push({
-            id: String(lead.id || lead.client_id || `no-calif-${idx}`),
-            codigo_prospecto: lead.client_id,
-            prospecto_nombre: nombreCliente,
-            prospecto_telefono: String(lead.telefono || lead.celular || lead.numero || '').trim(),
-            prospecto_email: lead.email || '',
-            vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
-            vendedor_nombre: asesor,
-            fecha_hora_programada: parsed.fechaIso,
-            fecha_agendada: parsed.fecha,
-            hora_agendada: parsed.hora,
-            fecha_creado: parsed.fecha,
-            hora_creado: parsed.hora,
-            created_at: lead.created_at || undefined,
-            pais: lead.pais || 'SV',
-            estado_cita: 'no_show',
-            fuente: 'Supabase',
-            tipo_reunion: 'Discovery Call',
-            tipo_lead: 'no_calificados',
-            notas: `Lead No Calificado`,
-            kpi_sla_etapa_1: sla1,
-            kpi_sla_etapa_2: sla2,
-            kpi_sla_etapa_3: sla3,
-            kpi_retroalimentacion_etapa_1: ret1,
-            kpi_retroalimentacion_etapa_2: ret2,
-            kpi_retroalimentacion_etapa_3: ret3,
-            kpi_retroalimentacion_etapa_4: ret4,
-          });
-        });
-
-        // 3. Mapear Llamadas Multicanal
+        // 3. Mapear Llamadas Multicanal (con país inferido)
         const llamadas: Llamada[] = [];
 
         // A. PBX (getCalls2)
@@ -455,6 +679,13 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
           const asesor =
             call.asesor_nombre ||
             resolverAsesor(call.nombre || '', resolverAsesor(ext, ext ? `Ext. ${ext}` : 'Línea PBX'));
+          const paisCall = detectarPaisLlamada(
+            { ...call, asesor_nombre: asesor },
+            'PBX',
+            catalogo,
+            mapaPaisCat
+          );
+          call.pais = paisCall;
 
           llamadas.push({
             id: String(call.uniqueid || call.id || `pbx-${idx}`),
@@ -468,6 +699,7 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
             resultado: esPbxContestada(call.estado, durSec) ? 'contestada' : 'no_contesta',
             proveedor: 'VoIP',
             canal_tipo: 'PBX',
+            pais: paisCall,
             grabacion_url: call.audio_url || call.grabacion_url || undefined,
             notas_llamada: `[PBX] Ext: ${ext || 'N/D'} | QA: ${call.resumen_qa || 'Sin evaluar'}`,
           });
@@ -498,7 +730,15 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
               : cel.created_at || new Date().toISOString();
 
           const asesor =
+            cel.asesor_nombre ||
             resolverAsesor(cel.usuario || '', resolverAsesor(cel.linea || '', cel.usuario || 'Ejecutivo Celular'));
+          const paisCall = detectarPaisLlamada(
+            { ...cel, asesor_nombre: asesor },
+            'Celular',
+            catalogo,
+            mapaPaisCat
+          );
+          cel.pais = paisCall;
 
           llamadas.push({
             id: String(cel.id || `cel-${idx}`),
@@ -511,6 +751,7 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
             resultado: durSec > 0 || cel.tipo === 'Saliente' ? 'contestada' : 'no_contesta',
             proveedor: 'Twilio',
             canal_tipo: 'Celular',
+            pais: paisCall,
             notas_llamada: `[Celular] Operador: ${cel.operador || 'N/D'} | Línea: ${cel.linea || 'Móvil'}`,
           });
         });
@@ -522,7 +763,14 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
               ? `${tm.fecha_reunion}T${tm.hora_reunion}`
               : tm.created_at || new Date().toISOString();
 
-          const asesor = tm.ejecutivo || 'Ejecutivo Teams';
+          const asesor = tm.ejecutivo_nombre || tm.ejecutivo || 'Ejecutivo Teams';
+          const paisCall = detectarPaisLlamada(
+            { ...tm, ejecutivo_nombre: asesor },
+            'Teams',
+            catalogo,
+            mapaPaisCat
+          );
+          tm.pais = paisCall;
 
           llamadas.push({
             id: String(tm.id || `teams-${idx}`),
@@ -536,6 +784,7 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
             resultado: 'contestada',
             proveedor: 'RingCentral',
             canal_tipo: 'Teams',
+            pais: paisCall,
             grabacion_url: tm.evidencia_url || undefined,
             notas_llamada: `[Teams] Estado: ${tm.estado_teams || 'Completada'}`,
           });
@@ -546,10 +795,19 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
           const durSec = Number(wa.duracion_segundos || 45);
           const fechaInicio = utcToSvWallClock(wa.fecha_llamada || wa.created_at) || `${formatLocalDate()}T09:00:00`;
 
-          const asesor = resolverAsesor(
-            String(wa.ejecutivo_id || ''),
-            resolverAsesor(wa.numero_ejecutivo || '', 'Asesor WhatsApp')
+          const asesor =
+            wa.asesor_nombre ||
+            resolverAsesor(
+              String(wa.ejecutivo_id || ''),
+              resolverAsesor(wa.numero_ejecutivo || '', 'Asesor WhatsApp')
+            );
+          const paisCall = detectarPaisLlamada(
+            { ...wa, asesor_nombre: asesor },
+            'WhatsApp',
+            catalogo,
+            mapaPaisCat
           );
+          wa.pais = paisCall;
 
           llamadas.push({
             id: String(wa.id || `wa-${idx}`),
@@ -565,6 +823,7 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
                 : 'no_contesta',
             proveedor: 'Vapi',
             canal_tipo: 'WhatsApp',
+            pais: paisCall,
             notas_llamada: `[WhatsApp] Dirección: ${wa.direccion || 'Saliente'}`,
           });
         });
@@ -580,7 +839,7 @@ export async function sincronizarDatosDesdeBackend(forzar = false): Promise<Dato
           rawCelular: llamadasCelular,
           rawWhatsapp: llamadasWhatsapp,
           rawLeads: leadsCalificadosValidos,
-          rawLeadsNoCalificados: leadsNoCalificados,
+          rawLeadsNoCalificados: leadsNoCalificadosProcesados,
           rawTeams: llamadasTeams,
           estadisticas: json.estadisticas || {},
           tiempo_ms: Math.round(fin - inicio),
@@ -707,20 +966,12 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         )
       ).then((p) => p.flat()),
       fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
-        headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
+        headers: PROSPEKTIA_HEADERS,
+        cache: 'no-store',
       })
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
-      Promise.all([
-        fetch('https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=1000&offset=0', {
-          headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
-        }).then((r) => (r.ok ? r.json() : null)),
-        fetch('https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=1000&offset=1000', {
-          headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
-        }).then((r) => (r.ok ? r.json() : null)),
-      ])
-        .then(([p1, p2]) => [...(p1?.items || []), ...(p2?.items || [])])
-        .catch(() => []),
+      fetchProspektiaNoCalificadosPaginadoCliente(),
       fetch('https://kpi.red.com.sv/api/historial-llamadas-ejecutivos', {
         headers: { 'X-API-KEY': 'mso_papi_2026_7f2b9c4d8e6a1b3f5d7c9e0a2b4c6d8f' },
       }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
@@ -728,7 +979,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     ]);
 
     const catalogo = Array.isArray(catalogoRes) ? catalogoRes : [];
-    
+
     // Leads 100% de Prospektia API en vivo
     const mapaDirectoLeads = new Map<string, any>();
     const leadsProspektiaApi = prospektiaRes?.leads || [];
@@ -738,6 +989,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       const fAg = pl.fecha_agendada ? String(pl.fecha_agendada).trim() : null;
       const hAg = pl.hora_agendada ? String(pl.hora_agendada).trim() : null;
       mapaDirectoLeads.set(cod, {
+        id: String(pl.id || cod).trim(),
         codigo_prospecto: cod,
         nombre_prospecto: pl.nombre_prospecto || pl.nombre || '',
         telefono: pl.telefono || '',
@@ -746,7 +998,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         fecha_creado: pl.fecha_creado || null,
         hora_creado: pl.hora_creado || null,
         tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
-        pais: pl.pais || 'SV',
+        pais: pl.pais || '',
         asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
         asesor_nombre: pl.asesor_nombre || null,
         asesor_email: pl.asesor_email || null,
@@ -772,8 +1024,6 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
           telefono: pnc.client_phone || '',
           created_at: pnc.created_at,
           created_at_sv: pnc.created_at_sv || '',
-          fecha: pnc.created_at ? String(pnc.created_at).slice(0, 10) : '',
-          hora: pnc.created_at ? String(pnc.created_at).slice(11, 19) : '',
         });
       }
     });
@@ -790,269 +1040,21 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     const llamadasTeams = Array.isArray(teamsRes) ? teamsRes : [];
     const llamadasWhatsapp = Array.isArray(whatsappRes) ? whatsappRes : [];
 
-    // Construir mapa de catálogo
-    const mapaCatalogo = {
-      porExtension: {} as Record<string, any>,
-      porUsuario: {} as Record<string, any>,
-      porCelular: {} as Record<string, any>,
-      porNombre: {} as Record<string, any>,
-    };
+    const resolverAsesor = crearResolverAsesor(catalogo);
+    const mapaPaisCat = construirMapaPaisCatalogo(catalogo);
 
-    catalogo.forEach((c: any) => {
-      if (c.extension) mapaCatalogo.porExtension[String(c.extension).trim()] = c;
-      if (c.usuario) mapaCatalogo.porUsuario[String(c.usuario).trim().toLowerCase()] = c;
-      if (c.nombre_ejecutivo) mapaCatalogo.porNombre[String(c.nombre_ejecutivo).trim().toLowerCase()] = c;
-      if (c.celular) {
-        const cleanTel = String(c.celular).replace(/[^0-9]/g, '');
-        mapaCatalogo.porCelular[cleanTel] = c;
-      }
+    const {
+      rawLeads: leadsCalificadosValidos,
+      rawLeadsNoCalificados: leadsNoCalificadosProcesados,
+      citasCalificadas,
+      citasNoCalificadas,
+    } = procesarLeadsProspektia({
+      leads,
+      leadsNoCalificados,
+      catalogo,
     });
 
-    const resolverAsesor = (extOrUserOrCel: string, fallback: string = 'Asesor General'): string => {
-      if (!extOrUserOrCel) return fallback;
-      const clean = String(extOrUserOrCel).trim();
-      const cleanUser = clean.toLowerCase();
-      if (mapaCatalogo.porUsuario[cleanUser]) return mapaCatalogo.porUsuario[cleanUser].nombre_ejecutivo;
-      if (mapaCatalogo.porExtension[clean]) return mapaCatalogo.porExtension[clean].nombre_ejecutivo;
-      if (mapaCatalogo.porNombre[cleanUser]) return mapaCatalogo.porNombre[cleanUser].nombre_ejecutivo;
-      const cleanTel = clean.replace(/[^0-9]/g, '');
-      if (cleanTel && mapaCatalogo.porCelular[cleanTel]) return mapaCatalogo.porCelular[cleanTel].nombre_ejecutivo;
-
-      for (const cat of catalogo) {
-        if (cat.usuario && cleanUser.includes(String(cat.usuario).toLowerCase())) return cat.nombre_ejecutivo;
-        if (cat.nombre_ejecutivo && cleanUser.includes(String(cat.nombre_ejecutivo).toLowerCase())) return cat.nombre_ejecutivo;
-      }
-      return fallback;
-    };
-
-    // Mapear Leads Calificados y preparar No Calificados
-    const citasCalificadas: Cita[] = [];
-    const citasNoCalificadas: Cita[] = [];
-    const leadsCalificadosValidos: any[] = [];
-
-    leads.forEach((lead: any, idx: number) => {
-      const fAgendada = lead.fecha_agendada && lead.fecha_agendada !== 'null' ? String(lead.fecha_agendada).trim() : '';
-      let hAgendada = lead.hora_agendada && lead.hora_agendada !== 'null' ? String(lead.hora_agendada).trim() : '';
-      const fCreado = lead.fecha_creado && lead.fecha_creado !== 'null' ? String(lead.fecha_creado).trim() : '';
-      let hCreado = lead.hora_creado && lead.hora_creado !== 'null' ? String(lead.hora_creado).trim() : '';
-      const fCreatedAt = lead.created_at ? String(lead.created_at).slice(0, 10) : '';
-      let hCreatedAt = lead.created_at ? String(lead.created_at).slice(11, 19) : '';
-
-      const fechaDef = fAgendada || fCreado || fCreatedAt || formatLocalDate();
-      let horaDef = hAgendada || hCreado || hCreatedAt || '09:00:00';
-      if (horaDef.length === 5) horaDef += ':00';
-      const fechaIso = `${fechaDef}T${horaDef}`;
-
-      const asesor = lead.asesor_nombre || resolverAsesor(lead.asesor_id || '', 'Asesor General');
-      const nombreProspecto =
-        lead.nombre_prospecto ||
-        lead.nombre ||
-        lead.cliente ||
-        (lead.codigo_prospecto ? `Prospecto ${lead.codigo_prospecto}` : `Lead #${idx + 1}`);
-
-      lead.asesor_nombre = asesor;
-      lead.fecha_agendada = fAgendada || null;
-      lead.hora_agendada = hAgendada || null;
-      lead.fecha_creado = fCreado || fCreatedAt;
-      lead.hora_creado = hCreado || hCreatedAt;
-
-      const esCalificado = esLeadCalificadoValido(lead);
-      const ovCal = leerKpiOverridesLocal('leads');
-      const ovNc = leerKpiOverridesLocal('leads_no_calificados');
-      const flagsOv = esCalificado
-        ? {
-            ...(lead.id ? ovCal[String(lead.id)] : {}),
-            ...(lead.codigo_prospecto ? ovCal[String(lead.codigo_prospecto)] : {}),
-          }
-        : {
-            ...(lead.id ? ovNc[String(lead.id)] : {}),
-            ...(lead.codigo_prospecto ? ovNc[String(lead.codigo_prospecto)] : {}),
-          };
-
-      const sla1 = Boolean(flagsOv.kpi_sla_etapa_1 ?? lead.kpi_sla_etapa_1);
-      const sla2 = Boolean(flagsOv.kpi_sla_etapa_2 ?? lead.kpi_sla_etapa_2);
-      const sla3 = Boolean(flagsOv.kpi_sla_etapa_3 ?? lead.kpi_sla_etapa_3);
-      const ret1 = Boolean(flagsOv.kpi_retroalimentacion_etapa_1 ?? lead.kpi_retroalimentacion_etapa_1);
-      const ret2 = Boolean(flagsOv.kpi_retroalimentacion_etapa_2 ?? lead.kpi_retroalimentacion_etapa_2);
-      const ret3 = Boolean(flagsOv.kpi_retroalimentacion_etapa_3 ?? lead.kpi_retroalimentacion_etapa_3);
-      const ret4 = Boolean(flagsOv.kpi_retroalimentacion_etapa_4 ?? lead.kpi_retroalimentacion_etapa_4);
-
-      lead.kpi_sla_etapa_1 = sla1;
-      lead.kpi_sla_etapa_2 = sla2;
-      lead.kpi_sla_etapa_3 = sla3;
-      lead.kpi_retroalimentacion_etapa_1 = ret1;
-      lead.kpi_retroalimentacion_etapa_2 = ret2;
-      lead.kpi_retroalimentacion_etapa_3 = ret3;
-      lead.kpi_retroalimentacion_etapa_4 = ret4;
-
-      if (esCalificado) {
-        leadsCalificadosValidos.push(lead);
-        citasCalificadas.push({
-          id: String(lead.id || lead.codigo_prospecto || `lead-${idx}`),
-          codigo_prospecto: lead.codigo_prospecto,
-          prospecto_nombre: nombreProspecto,
-          prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
-          prospecto_email: lead.asesor_email || lead.email || '',
-          vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
-          vendedor_nombre: asesor,
-          fecha_hora_programada: fechaIso,
-          fecha_agendada: fAgendada || undefined,
-          hora_agendada: hAgendada || undefined,
-          fecha_creado: fCreado || fCreatedAt || undefined,
-          hora_creado: hCreado || hCreatedAt || undefined,
-          created_at: lead.created_at || undefined,
-          pais: lead.pais || 'SV',
-          estado_cita: lead.status === 'cancelada' ? 'cancelada' : 'programada',
-          fuente: 'Supabase',
-          tipo_reunion: (lead.tipo_reunion as any) || 'Llamada Telefonica',
-          tipo_lead: 'calificados',
-          notas: `País: ${lead.pais || 'SV'}`,
-          kpi_sla_etapa_1: sla1,
-          kpi_sla_etapa_2: sla2,
-          kpi_sla_etapa_3: sla3,
-          kpi_retroalimentacion_etapa_1: ret1,
-          kpi_retroalimentacion_etapa_2: ret2,
-          kpi_retroalimentacion_etapa_3: ret3,
-          kpi_retroalimentacion_etapa_4: ret4,
-        });
-      } else {
-        // Enviar a no calificados
-        const fRef = fCreado || fCreatedAt || formatLocalDate();
-        const hRef = hCreado || hCreatedAt || '09:00:00';
-        const fIsoNoCal = `${fRef}T${hRef.length === 5 ? hRef + ':00' : hRef}`;
-
-        leadsNoCalificados.push({
-          id: lead.id || lead.codigo_prospecto,
-          client_id: lead.codigo_prospecto,
-          client_name: nombreProspecto,
-          advisor_name: asesor,
-          telefono: lead.telefono || lead.celular || '',
-          created_at: lead.created_at || fIsoNoCal,
-          fecha: fRef,
-          hora: hRef,
-          campaign_name: lead.tipo_reunion || 'Lead Sin Cita Agendada',
-          pais: lead.pais || 'SV',
-          kpi_sla_etapa_1: sla1,
-          kpi_sla_etapa_2: sla2,
-          kpi_sla_etapa_3: sla3,
-          kpi_retroalimentacion_etapa_1: ret1,
-          kpi_retroalimentacion_etapa_2: ret2,
-          kpi_retroalimentacion_etapa_3: ret3,
-          kpi_retroalimentacion_etapa_4: ret4,
-        });
-
-        citasNoCalificadas.push({
-          id: String(lead.id || lead.codigo_prospecto || `lead-nc-${idx}`),
-          codigo_prospecto: lead.codigo_prospecto,
-          prospecto_nombre: nombreProspecto,
-          prospecto_telefono: String(lead.telefono || lead.celular || lead.movil || '').trim(),
-          prospecto_email: lead.asesor_email || lead.email || '',
-          vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
-          vendedor_nombre: asesor,
-          fecha_hora_programada: fIsoNoCal,
-          fecha_agendada: fRef,
-          hora_agendada: hRef,
-          fecha_creado: fRef,
-          hora_creado: hRef,
-          created_at: lead.created_at || undefined,
-          pais: lead.pais || 'SV',
-          estado_cita: 'no_show',
-          fuente: 'Supabase',
-          tipo_reunion: lead.tipo_reunion || '(sin reunion)',
-          tipo_lead: 'no_calificados',
-          notas: `Lead No Calificado (${lead.tipo_reunion || 'Sin reunión'})`,
-          kpi_sla_etapa_1: sla1,
-          kpi_sla_etapa_2: sla2,
-          kpi_sla_etapa_3: sla3,
-          kpi_retroalimentacion_etapa_1: ret1,
-          kpi_retroalimentacion_etapa_2: ret2,
-          kpi_retroalimentacion_etapa_3: ret3,
-          kpi_retroalimentacion_etapa_4: ret4,
-        });
-      }
-    });
-
-    // Mapear Leads No Calificados
-    const ovNcDirecto = leerKpiOverridesLocal('leads_no_calificados');
-    leadsNoCalificados.forEach((lead: any, idx: number) => {
-      let fecha = '';
-      let hora = '10:00:00';
-      if (lead.created_at_sv && typeof lead.created_at_sv === 'string') {
-        const m = lead.created_at_sv.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
-        if (m) {
-          const [, dd, mm, yyyy, hh, min, ampm] = m;
-          let hourNum = parseInt(hh, 10);
-          if (ampm?.toUpperCase() === 'PM' && hourNum < 12) hourNum += 12;
-          if (ampm?.toUpperCase() === 'AM' && hourNum === 12) hourNum = 0;
-          fecha = `${yyyy}-${String(parseInt(mm, 10)).padStart(2, '0')}-${String(parseInt(dd, 10)).padStart(2, '0')}`;
-          hora = `${String(hourNum).padStart(2, '0')}:${min}:00`;
-        }
-      } else if (lead.created_at) {
-        const wall = utcToSvWallClock(lead.created_at);
-        if (wall) {
-          fecha = wall.slice(0, 10);
-          hora = wall.slice(11, 19);
-        }
-      }
-      const fechaIso = `${fecha || formatLocalDate()}T${hora}`;
-      const asesorRaw = lead.advisor_name || lead.asesor || '';
-      const asesor = resolverAsesor(asesorRaw, asesorRaw || 'Asesor Asignado');
-      const nombreCliente = lead.client_name || lead.nombre || lead.prospecto || `No Calif. #${idx + 1}`;
-
-      const ov = {
-        ...(lead.id ? ovNcDirecto[String(lead.id)] : {}),
-        ...(lead.client_id ? ovNcDirecto[String(lead.client_id)] : {}),
-      };
-      const sla1 = Boolean(ov.kpi_sla_etapa_1 ?? lead.kpi_sla_etapa_1);
-      const sla2 = Boolean(ov.kpi_sla_etapa_2 ?? lead.kpi_sla_etapa_2);
-      const sla3 = Boolean(ov.kpi_sla_etapa_3 ?? lead.kpi_sla_etapa_3);
-      const ret1 = Boolean(ov.kpi_retroalimentacion_etapa_1 ?? lead.kpi_retroalimentacion_etapa_1);
-      const ret2 = Boolean(ov.kpi_retroalimentacion_etapa_2 ?? lead.kpi_retroalimentacion_etapa_2);
-      const ret3 = Boolean(ov.kpi_retroalimentacion_etapa_3 ?? lead.kpi_retroalimentacion_etapa_3);
-      const ret4 = Boolean(ov.kpi_retroalimentacion_etapa_4 ?? lead.kpi_retroalimentacion_etapa_4);
-
-      lead.fecha = fecha;
-      lead.hora = hora;
-      lead.fecha_hora_programada = fechaIso;
-      lead.asesor_nombre = asesor;
-      lead.advisor_name = asesor;
-      lead.kpi_sla_etapa_1 = sla1;
-      lead.kpi_sla_etapa_2 = sla2;
-      lead.kpi_sla_etapa_3 = sla3;
-      lead.kpi_retroalimentacion_etapa_1 = ret1;
-      lead.kpi_retroalimentacion_etapa_2 = ret2;
-      lead.kpi_retroalimentacion_etapa_3 = ret3;
-      lead.kpi_retroalimentacion_etapa_4 = ret4;
-
-      citasNoCalificadas.push({
-        id: String(lead.id || lead.client_id || `no-calif-${idx}`),
-        codigo_prospecto: lead.client_id ? String(lead.client_id) : undefined,
-        prospecto_nombre: nombreCliente,
-        prospecto_telefono: String(lead.phone || lead.telefono || lead.celular || '').trim(),
-        vendedor_id: asesor.toLowerCase().replace(/\s+/g, '_'),
-        vendedor_nombre: asesor,
-        fecha_hora_programada: fechaIso,
-        fecha_agendada: fecha,
-        hora_agendada: hora,
-        fecha_creado: fecha,
-        hora_creado: hora,
-        created_at: lead.created_at || undefined,
-        pais: lead.country || lead.pais || 'SV',
-        estado_cita: 'programada',
-        fuente: 'Supabase',
-        tipo_reunion: 'Llamada Telefonica',
-        tipo_lead: 'no_calificados',
-        kpi_sla_etapa_1: sla1,
-        kpi_sla_etapa_2: sla2,
-        kpi_sla_etapa_3: sla3,
-        kpi_retroalimentacion_etapa_1: ret1,
-        kpi_retroalimentacion_etapa_2: ret2,
-        kpi_retroalimentacion_etapa_3: ret3,
-        kpi_retroalimentacion_etapa_4: ret4,
-      });
-    });
-
-    // Mapear Llamadas Unificadas (PBX, Celular, Teams, WhatsApp)
+    // Mapear Llamadas Unificadas (PBX, Celular, Teams, WhatsApp) con inferencia de país
     const llamadas: Llamada[] = [];
 
     llamadasPbx.forEach((pbx: any, idx: number) => {
@@ -1061,6 +1063,8 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         pbx.asesor_nombre ||
         resolverAsesor(extStr, resolverAsesor(pbx.nombre || '', extStr ? `Ext. ${extStr}` : 'Asesor PBX'));
       pbx.asesor_nombre = asesor;
+      const paisCall = detectarPaisLlamada({ ...pbx, asesor_nombre: asesor }, 'PBX', catalogo, mapaPaisCat);
+      pbx.pais = paisCall;
       const fechaInicio = stripFakeUtcZ(pbx.fecha_hora || pbx.calldate) || `${formatLocalDate()}T00:00:00`;
       const durSec = Number(pbx.duracion_segundos || 0);
       let audioFinal = String(pbx.audio_url || pbx.grabacion_url || '').trim();
@@ -1076,7 +1080,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
           const dia = String(d.getDate()).padStart(2, '0');
           const fn = `Grabacion_Ext_${extStr}_${pbx.uniqueid}.wav`;
           audioFinal =
-            String(pbx.pais).toUpperCase() === 'GT'
+            String(paisCall).toUpperCase() === 'GT'
               ? `https://api.red.com.sv/pbx/api/v1/rawCalls?pais=GT&anio=${y}&mes=${m}&dia=${dia}&archivo=${encodeURIComponent(fn)}`
               : `https://api.red.com.sv/pbx/api/v1/getAudio/${y}/${m}/${dia}/${fn}`;
         }
@@ -1095,6 +1099,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         resultado: esPbxContestada(pbx.estado, durSec) ? 'contestada' : 'no_contesta',
         proveedor: 'PBX',
         canal_tipo: 'PBX',
+        pais: paisCall,
         audio_url: audioFinal || undefined,
       });
     });
@@ -1102,6 +1107,8 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
     llamadasCelular.forEach((cel: any, idx: number) => {
       const asesor = resolverAsesor(cel.usuario || cel.linea || '', 'Ejecutivo Celular');
       cel.asesor_nombre = asesor;
+      const paisCall = detectarPaisLlamada({ ...cel, asesor_nombre: asesor }, 'Celular', catalogo, mapaPaisCat);
+      cel.pais = paisCall;
       let durSec = 0;
       if (typeof cel.duracion === 'number') durSec = cel.duracion;
       else if (typeof cel.duracion === 'string') {
@@ -1122,12 +1129,15 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         resultado: durSec > 0 ? 'contestada' : 'no_contesta',
         proveedor: 'Celular',
         canal_tipo: 'Celular',
+        pais: paisCall,
       });
     });
 
     llamadasTeams.forEach((teams: any, idx: number) => {
-      const asesor = teams.ejecutivo || teams.ejecutivo_nombre || resolverAsesor(teams.asesor || '', 'Ejecutivo Teams');
+      const asesor = teams.ejecutivo_nombre || teams.ejecutivo || resolverAsesor(teams.asesor || '', 'Ejecutivo Teams');
       teams.asesor_nombre = asesor;
+      const paisCall = detectarPaisLlamada({ ...teams, ejecutivo_nombre: asesor }, 'Teams', catalogo, mapaPaisCat);
+      teams.pais = paisCall;
       const fReunion = teams.fecha_reunion || (teams.fecha_agendada ? String(teams.fecha_agendada).slice(0, 10) : new Date().toISOString().slice(0, 10));
       const hReunion = teams.hora_reunion || (teams.hora_agendada ? String(teams.hora_agendada).slice(0, 5) : '10:00');
       const fechaHora = `${fReunion}T${hReunion.length === 5 ? hReunion + ':00' : hReunion}`;
@@ -1142,6 +1152,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         resultado: 'contestada',
         proveedor: 'Teams',
         canal_tipo: 'Teams',
+        pais: paisCall,
         notas_llamada: teams.evidencia_url || teams.notas,
       });
     });
@@ -1152,6 +1163,8 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         resolverAsesor(wa.numero_ejecutivo || '', 'Bot WhatsApp')
       );
       wa.asesor_nombre = asesor;
+      const paisCall = detectarPaisLlamada({ ...wa, asesor_nombre: asesor }, 'WhatsApp', catalogo, mapaPaisCat);
+      wa.pais = paisCall;
       const fechaInicio = utcToSvWallClock(wa.fecha_llamada || wa.created_at) || `${formatLocalDate()}T09:00:00`;
       let durSec = 0;
       if (typeof wa.duracion_segundos === 'number') durSec = wa.duracion_segundos;
@@ -1167,6 +1180,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         resultado: wa.estado?.toLowerCase() === 'contestada' || durSec > 0 ? 'contestada' : 'no_contesta',
         proveedor: 'Vapi',
         canal_tipo: 'WhatsApp',
+        pais: paisCall,
       });
     });
 
@@ -1181,11 +1195,11 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       rawCelular: llamadasCelular,
       rawWhatsapp: llamadasWhatsapp,
       rawLeads: leadsCalificadosValidos,
-      rawLeadsNoCalificados: leadsNoCalificados,
+      rawLeadsNoCalificados: leadsNoCalificadosProcesados,
       rawTeams: llamadasTeams,
       estadisticas: {
         total_leads_calificados: leadsCalificadosValidos.length,
-        total_leads_no_calificados: leadsNoCalificados.length,
+        total_leads_no_calificados: leadsNoCalificadosProcesados.length,
         total_llamadas_pbx: llamadasPbx.length,
         total_llamadas_celular: llamadasCelular.length,
         total_llamadas_teams: llamadasTeams.length,

@@ -216,6 +216,97 @@ function esLeadCalificadoValido(lead: any): boolean {
   return true;
 }
 
+const PROSPEKTIA_HEADERS = {
+  'X-API-Key': 'RedApi_2026_SuperSegura_9XK2',
+  Accept: 'application/json',
+};
+
+function normalizarTexto(val?: string | null): string {
+  if (!val) return '';
+  return String(val)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function normalizarPais(pais?: string | null): 'SV' | 'GT' | null {
+  if (!pais) return null;
+  const clean = normalizarTexto(pais).toUpperCase();
+  if (clean === 'GT' || clean === 'GUATEMALA' || clean === 'GUA') return 'GT';
+  if (clean === 'SV' || clean === 'EL SALVADOR' || clean === 'SLV' || clean === 'ESA') return 'SV';
+  return null;
+}
+
+function detectarPaisTel(tel?: string | number | null): 'SV' | 'GT' | null {
+  if (tel === undefined || tel === null) return null;
+  const digits = String(tel).replace(/\D/g, '');
+  if (!digits || digits.length < 7) return null;
+  if (digits.startsWith('502')) return 'GT';
+  if (digits.startsWith('503')) return 'SV';
+  if (digits.length === 8) {
+    if (['3', '4', '5'].includes(digits[0])) return 'GT';
+    if (['2', '6', '7'].includes(digits[0])) return 'SV';
+  }
+  return null;
+}
+
+function parseFechaHoraNcSv(createdAtSv?: string | null, createdAtIso?: string | null): { fecha: string; hora: string } {
+  if (createdAtSv && typeof createdAtSv === 'string') {
+    const m = createdAtSv.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    if (m) {
+      const [, dd, mm, yyyy, hh, min, ampm] = m;
+      let hourNum = parseInt(hh, 10);
+      if (ampm?.toUpperCase() === 'PM' && hourNum < 12) hourNum += 12;
+      if (ampm?.toUpperCase() === 'AM' && hourNum === 12) hourNum = 0;
+      return {
+        fecha: `${yyyy}-${String(parseInt(mm, 10)).padStart(2, '0')}-${String(parseInt(dd, 10)).padStart(2, '0')}`,
+        hora: `${String(hourNum).padStart(2, '0')}:${min}:00`,
+      };
+    }
+  }
+  if (createdAtIso) {
+    const raw = String(createdAtIso).trim();
+    const d = new Date(raw);
+    if (!isNaN(d.getTime()) && /(Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+      const sv = new Date(d.getTime() - 6 * 3600 * 1000);
+      return {
+        fecha: sv.toISOString().slice(0, 10),
+        hora: sv.toISOString().slice(11, 19),
+      };
+    }
+    return {
+      fecha: raw.slice(0, 10),
+      hora: raw.slice(11, 19) || '09:00:00',
+    };
+  }
+  return { fecha: '', hora: '' };
+}
+
+async function fetchProspektiaNoCalificadosPaginado(maxTotal = 10000): Promise<any[]> {
+  const todos: any[] = [];
+  const pageSize = 1000;
+  let offset = 0;
+  try {
+    while (offset < maxTotal) {
+      const r = await fetch(
+        `https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=${pageSize}&offset=${offset}`,
+        { headers: PROSPEKTIA_HEADERS, cache: 'no-store' }
+      );
+      if (!r.ok) break;
+      const json = await r.json();
+      const items = Array.isArray(json?.items) ? json.items : [];
+      if (items.length === 0) break;
+      todos.push(...items);
+      if (items.length < pageSize) break;
+      offset += pageSize;
+    }
+  } catch (err) {
+    console.warn('Error paginando ProspektIA NC Vercel:', err);
+  }
+  return todos;
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -248,66 +339,115 @@ export default async function handler(req: any, res: any) {
         )
       ).then(pages => pages.flat()),
       fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
-        headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
+        headers: PROSPEKTIA_HEADERS,
+        cache: 'no-store',
       }).then(r => r.ok ? r.json() : null).catch(() => null),
-      Promise.all([
-        fetch('https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=1000&offset=0', {
-          headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
-        }).then(r => r.ok ? r.json() : null),
-        fetch('https://prospektia.red.com.sv/api/audit/leads-no-calificados?limit=1000&offset=1000', {
-          headers: { 'X-API-Key': 'RedApi_2026_SuperSegura_9XK2', Accept: 'application/json' },
-        }).then(r => r.ok ? r.json() : null),
-      ]).then(([p1, p2]) => [...(p1?.items || []), ...(p2?.items || [])]).catch(() => []),
+      fetchProspektiaNoCalificadosPaginado(),
     ]);
 
     const catalogo = Array.isArray(catalogoRes) ? catalogoRes : [];
     const teamsRaw = Array.isArray(teamsRawRes) ? teamsRawRes : [];
     const llamadasWhatsapp = Array.isArray(waRawRes) ? waRawRes : [];
 
-    // Construir catálogo de asesores para enriquecimiento uniforme
+    // Construir catálogo de asesores para enriquecimiento uniforme (sin sensibilidad a acentos)
     const mapaCatalogo = {
       porExtension: {} as Record<string, any>,
       porUsuario: {} as Record<string, any>,
       porCelular: {} as Record<string, any>,
       porNombre: {} as Record<string, any>,
     };
+    const paisPorUsuario: Record<string, 'SV' | 'GT'> = {};
+    const paisPorNombre: Record<string, 'SV' | 'GT'> = {};
+    const paisPorExt: Record<string, 'SV' | 'GT'> = {};
+    const paisPorCel: Record<string, 'SV' | 'GT'> = {};
 
     catalogo.forEach((cat: any) => {
-      if (cat.extension && cat.extension !== 'null') mapaCatalogo.porExtension[String(cat.extension).trim()] = cat;
-      if (cat.usuario && cat.usuario !== 'null') mapaCatalogo.porUsuario[String(cat.usuario).trim().toLowerCase()] = cat;
-      if (cat.nombre_ejecutivo) mapaCatalogo.porNombre[String(cat.nombre_ejecutivo).trim().toLowerCase()] = cat;
+      const pCat = normalizarPais(cat.pais);
+      if (cat.extension && cat.extension !== 'null') {
+        const ext = String(cat.extension).trim();
+        mapaCatalogo.porExtension[ext] = cat;
+        if (pCat) paisPorExt[ext.toLowerCase()] = pCat;
+      }
+      if (cat.usuario && cat.usuario !== 'null') {
+        const uNorm = normalizarTexto(cat.usuario);
+        mapaCatalogo.porUsuario[uNorm] = cat;
+        if (pCat) paisPorUsuario[uNorm] = pCat;
+      }
+      if (cat.nombre_ejecutivo) {
+        const nNorm = normalizarTexto(cat.nombre_ejecutivo);
+        mapaCatalogo.porNombre[nNorm] = cat;
+        if (pCat) paisPorNombre[nNorm] = pCat;
+      }
       if (cat.celular && cat.celular !== 'null') {
         const cleanTel = String(cat.celular).replace(/[^0-9]/g, '').slice(-8);
-        if (cleanTel) mapaCatalogo.porCelular[cleanTel] = cat;
+        if (cleanTel) {
+          mapaCatalogo.porCelular[cleanTel] = cat;
+          if (pCat) paisPorCel[cleanTel] = pCat;
+        }
       }
     });
 
     const resolverAsesorBackend = (ident: string, fallback: string) => {
       if (!ident || ident === 'null' || ident === 'undefined') return fallback;
       const idTrim = String(ident).trim();
-      const idLower = idTrim.toLowerCase();
-      if (mapaCatalogo.porUsuario[idLower]) return mapaCatalogo.porUsuario[idLower].nombre_ejecutivo;
+      const idNorm = normalizarTexto(idTrim);
+      if (mapaCatalogo.porUsuario[idNorm]) return mapaCatalogo.porUsuario[idNorm].nombre_ejecutivo;
       if (mapaCatalogo.porExtension[idTrim]) return mapaCatalogo.porExtension[idTrim].nombre_ejecutivo;
-      if (mapaCatalogo.porNombre[idLower]) return mapaCatalogo.porNombre[idLower].nombre_ejecutivo;
+      if (mapaCatalogo.porNombre[idNorm]) return mapaCatalogo.porNombre[idNorm].nombre_ejecutivo;
       const cleanDigits = idTrim.replace(/[^0-9]/g, '').slice(-8);
       if (cleanDigits && mapaCatalogo.porCelular[cleanDigits]) return mapaCatalogo.porCelular[cleanDigits].nombre_ejecutivo;
       for (const cat of catalogo) {
-        if (cat.usuario && idLower.includes(String(cat.usuario).toLowerCase())) return cat.nombre_ejecutivo;
-        if (cat.nombre_ejecutivo && idLower.includes(String(cat.nombre_ejecutivo).toLowerCase())) return cat.nombre_ejecutivo;
+        const uNorm = normalizarTexto(cat.usuario);
+        const nNorm = normalizarTexto(cat.nombre_ejecutivo);
+        if (uNorm && idNorm.includes(uNorm)) return cat.nombre_ejecutivo;
+        if (nNorm && (idNorm.includes(nNorm) || nNorm.includes(idNorm))) return cat.nombre_ejecutivo;
       }
       return fallback;
     };
 
-    const detectarPais = (tel?: string, fallback = 'SV'): string => {
-      if (!tel) return fallback;
-      const num = String(tel).replace(/[^0-9]/g, '');
-      if (num.startsWith('503')) return 'SV';
-      if (num.startsWith('502')) return 'GT';
-      if (num.length === 8) {
-        if (['2', '6', '7'].includes(num[0])) return 'SV';
-        if (['3', '4', '5'].includes(num[0])) return 'GT';
+    const detectarPaisPorAsesor = (ident?: string | null, email?: string | null): 'SV' | 'GT' | null => {
+      if (email) {
+        const eLow = String(email).toLowerCase().trim();
+        if (eLow.endsWith('.gt') || eLow.includes('.gt@')) return 'GT';
+        if (eLow.endsWith('.sv') || eLow.includes('.sv@')) return 'SV';
       }
-      return fallback;
+      if (!ident) return null;
+      const norm = normalizarTexto(ident);
+      if (!norm || norm === 'null' || norm === 'undefined') return null;
+      if (paisPorUsuario[norm]) return paisPorUsuario[norm];
+      if (paisPorNombre[norm]) return paisPorNombre[norm];
+      if (paisPorExt[norm]) return paisPorExt[norm];
+      const digits = norm.replace(/\D/g, '');
+      if (digits.length >= 7) {
+        const k = digits.length >= 8 ? digits.slice(-8) : digits;
+        if (paisPorCel[k]) return paisPorCel[k];
+      }
+      for (const [nomCat, paisCat] of Object.entries(paisPorNombre)) {
+        if (norm.includes(nomCat) || nomCat.includes(norm)) return paisCat;
+        const tNorm = norm.split(/\s+/).filter(t => t.length >= 4);
+        const tCat = nomCat.split(/\s+/).filter(t => t.length >= 4);
+        if (tNorm.length > 0 && tCat.length > 0) {
+          const comunes = tNorm.filter(t => tCat.includes(t));
+          if (comunes.length >= 2 || (comunes.length === 1 && tNorm.length === 1)) return paisCat;
+        }
+      }
+      for (const [uCat, paisCat] of Object.entries(paisPorUsuario)) {
+        if (uCat.length >= 4 && norm.includes(uCat)) return paisCat;
+      }
+      return null;
+    };
+
+    const detectarPaisLeadBackend = (lead: any): 'SV' | 'GT' => {
+      const explicito = normalizarPais(lead?.pais || lead?.country);
+      if (explicito) return explicito;
+      const porTel = detectarPaisTel(lead?.telefono || lead?.client_phone || lead?.phone || lead?.celular);
+      if (porTel) return porTel;
+      const porAsesor = detectarPaisPorAsesor(
+        lead?.asesor_nombre || lead?.advisor_name || lead?.asesor || lead?.asesor_id,
+        lead?.asesor_email || lead?.email
+      );
+      if (porAsesor) return porAsesor;
+      return 'SV';
     };
 
     const mapaLeads = new Map<string, any>();
@@ -317,7 +457,11 @@ export default async function handler(req: any, res: any) {
       if (!cod) return;
       const fAg = pl.fecha_agendada ? String(pl.fecha_agendada).trim() : null;
       const hAg = pl.hora_agendada ? String(pl.hora_agendada).trim() : null;
-      mapaLeads.set(cod, {
+      const asesorRes = resolverAsesorBackend(
+        pl.asesor_nombre || pl.asesor_id || '',
+        pl.asesor_nombre ? String(pl.asesor_nombre).trim() : ''
+      );
+      const leadObj: any = {
         id: String(pl.id || cod).trim(),
         codigo_prospecto: cod,
         nombre_prospecto: pl.nombre_prospecto || pl.nombre || '',
@@ -327,13 +471,15 @@ export default async function handler(req: any, res: any) {
         fecha_creado: pl.fecha_creado || null,
         hora_creado: pl.hora_creado || null,
         tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
-        pais: pl.pais || 'SV',
+        pais: pl.pais || '',
         asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
-        asesor_nombre: pl.asesor_nombre || null,
+        asesor_nombre: asesorRes || pl.asesor_nombre || null,
         asesor_email: pl.asesor_email || null,
         status: pl.status || 'Agendado',
         created_at: pl.created_at || (pl.fecha_creado ? `${pl.fecha_creado}T${pl.hora_creado || '00:00:00'}Z` : new Date().toISOString()),
-      });
+      };
+      leadObj.pais = detectarPaisLeadBackend(leadObj);
+      mapaLeads.set(cod, leadObj);
     });
 
     const todosLosLeads = Array.from(mapaLeads.values());
@@ -355,21 +501,35 @@ export default async function handler(req: any, res: any) {
     });
 
     const mapaNc = new Map<string, any>();
+    const clientIdsNc = new Set<string>();
     const prospektiaNcItems = Array.isArray(prospektiaNcRes) ? prospektiaNcRes : [];
     prospektiaNcItems.forEach((pnc: any) => {
       const k = String(pnc.id || `${pnc.client_id}_${pnc.created_at}`).trim();
       if (!k) return;
+      if (pnc.client_id) clientIdsNc.add(String(pnc.client_id).trim());
       if (!mapaNc.has(k)) {
+        const advisorRes = resolverAsesorBackend(
+          pnc.advisor_name || '',
+          pnc.advisor_name ? String(pnc.advisor_name).trim() : 'Asesor Asignado'
+        );
+        const { fecha, hora } = parseFechaHoraNcSv(pnc.created_at_sv, pnc.created_at);
+        const paisInf = detectarPaisLeadBackend({
+          pais: pnc.pais || pnc.country,
+          telefono: pnc.client_phone,
+          advisor_name: advisorRes,
+          asesor_nombre: pnc.advisor_name,
+        });
         mapaNc.set(k, {
           id: pnc.client_id || pnc.id,
           client_id: pnc.client_id,
           client_name: pnc.client_name || '',
-          advisor_name: pnc.advisor_name || '',
+          advisor_name: advisorRes,
           telefono: pnc.client_phone || '',
           created_at: pnc.created_at,
           created_at_sv: pnc.created_at_sv || '',
-          fecha: pnc.created_at ? String(pnc.created_at).slice(0, 10) : '',
-          hora: pnc.created_at ? String(pnc.created_at).slice(11, 19) : '',
+          fecha,
+          hora,
+          pais: paisInf,
         });
       }
     });
@@ -377,9 +537,10 @@ export default async function handler(req: any, res: any) {
     leadsNoCalificadosTransferidos.forEach((l: any) => {
       const k = String(l.codigo_prospecto || l.id || '').trim();
       if (!k) return;
-      if (!mapaNc.has(k)) {
-        const fRef = l.fecha_creado || (l.created_at ? String(l.created_at).slice(0, 10) : '');
-        const hRef = l.hora_creado || (l.created_at ? String(l.created_at).slice(11, 19) : '');
+      if (!mapaNc.has(k) && !clientIdsNc.has(k)) {
+        const parsedCreado = l.created_at ? parseFechaHoraNcSv(null, l.created_at) : { fecha: '', hora: '' };
+        const fRef = l.fecha_creado || parsedCreado.fecha;
+        const hRef = l.hora_creado || parsedCreado.hora;
         mapaNc.set(k, {
           id: l.id || l.codigo_prospecto,
           client_id: l.codigo_prospecto,
@@ -390,7 +551,7 @@ export default async function handler(req: any, res: any) {
           fecha: fRef,
           hora: hRef,
           campaign_name: l.tipo_reunion || 'Lead Sin Cita Agendada',
-          pais: l.pais || 'SV',
+          pais: detectarPaisLeadBackend(l),
         });
       }
     });
@@ -404,7 +565,7 @@ export default async function handler(req: any, res: any) {
         l.asesor_nombre ? String(l.asesor_nombre).trim() : 'Asesor General'
       );
       if (!l.nombre_prospecto) l.nombre_prospecto = l.codigo_prospecto ? `Prospecto ${l.codigo_prospecto}` : 'Prospecto Sin Nombre';
-      l.pais = l.pais || detectarPais(l.telefono, 'SV');
+      l.pais = detectarPaisLeadBackend(l);
       if (!l.status) l.status = 'Agendado';
     });
 
@@ -413,6 +574,7 @@ export default async function handler(req: any, res: any) {
         l.advisor_name,
         l.advisor_name ? String(l.advisor_name).trim() : 'Asesor Asignado'
       );
+      l.pais = detectarPaisLeadBackend(l);
       if (!l.campaign_name) l.campaign_name = 'Campaña Inbound';
     });
 
@@ -482,6 +644,14 @@ export default async function handler(req: any, res: any) {
     celFiltrado.forEach((c: any) => {
       c.asesor_nombre = resolverAsesorBackend(c.usuario, resolverAsesorBackend(c.linea, c.usuario || 'Ejecutivo Celular'));
       if (!c.operador) c.operador = 'Claro / Tigo';
+      const opUpper = normalizarTexto(c.operador).toUpperCase();
+      c.pais =
+        normalizarPais(c.pais) ||
+        (opUpper.includes('GT') || opUpper.includes('GUATE') ? 'GT' : opUpper.includes('SV') ? 'SV' : null) ||
+        detectarPaisTel(c.linea) ||
+        detectarPaisPorAsesor(c.asesor_nombre || c.usuario || c.linea) ||
+        detectarPaisTel(c.destino) ||
+        'SV';
     });
 
     pbxFiltrado.forEach((p: any) => {
@@ -490,7 +660,11 @@ export default async function handler(req: any, res: any) {
         extStr,
         resolverAsesorBackend(p.nombre, p.nombre || (extStr ? `Ext. ${extStr}` : 'Línea PBX'))
       );
-      p.pais = p.pais || detectarPais(p.destino, 'SV');
+      p.pais =
+        normalizarPais(p.pais) ||
+        detectarPaisPorAsesor(extStr || p.asesor_nombre || p.nombre) ||
+        detectarPaisTel(p.destino) ||
+        'SV';
     });
 
     // Enriquecer cada llamada PBX con N° Lead y Nombre del Cliente
@@ -583,6 +757,11 @@ export default async function handler(req: any, res: any) {
         t.cliente = `Prospecto ${t.codigo_prospecto}`;
       }
       if (!t.estado_teams) t.estado_teams = 'Pendiente de realizar';
+      t.pais =
+        normalizarPais(t.pais) ||
+        detectarPaisPorAsesor(t.ejecutivo_nombre || t.ejecutivo) ||
+        detectarPaisTel(t.telefono) ||
+        'SV';
     });
 
     llamadasWhatsapp.forEach((w: any) => {
@@ -592,6 +771,11 @@ export default async function handler(req: any, res: any) {
       );
       if (!w.estado) w.estado = 'Entregado';
       if (!w.direccion) w.direccion = 'Saliente';
+      w.pais =
+        normalizarPais(w.pais) ||
+        detectarPaisPorAsesor(w.asesor_nombre || w.numero_ejecutivo || w.ejecutivo_id) ||
+        detectarPaisTel(w.numero_cliente || w.numero_ejecutivo) ||
+        'SV';
     });
 
     return res.status(200).json({

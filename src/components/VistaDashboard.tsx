@@ -63,6 +63,8 @@ interface VistaDashboardProps {
   onVerTranscripcion?: (llamada: any) => void;
   onSincronizar?: () => void;
   sincronizando?: boolean;
+  onSincronizarProspektia?: () => void;
+  sincronizandoProspektia?: boolean;
 }
 
 const ETIQUETA_ESTADO: Record<string, string> = {
@@ -111,6 +113,8 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
   onVerTranscripcion,
   onSincronizar,
   sincronizando = false,
+  onSincronizarProspektia,
+  sincronizandoProspektia = false,
 }) => {
   const esCalificado = modoLeads === 'calificados';
   const mesInfo = useMemo(() => getMesActualInfo(), []);
@@ -128,13 +132,9 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
   const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 15;
   const umbralGrave = parametros.umbral_retraso_grave_minutos ?? 30;
 
-  // Filtrado por rango de fechas y país
-  const crucesFiltrados = useMemo(() => {
+  // Cruces filtrados solo por período (para calcular el split SV vs GT real sin anular el otro país)
+  const crucesPeriodo = useMemo(() => {
     return crucesTodos.filter((c) => {
-      if (paisFiltro !== 'TODOS') {
-        const pais = (c.pais || c.cita?.pais || 'SV').toUpperCase();
-        if (pais !== paisFiltro) return false;
-      }
       if (fechaInicio || fechaFin) {
         const f = extraerFechaStr(c);
         if (!f) return false;
@@ -143,7 +143,16 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
       }
       return true;
     });
-  }, [crucesTodos, fechaInicio, fechaFin, paisFiltro]);
+  }, [crucesTodos, fechaInicio, fechaFin]);
+
+  // Filtrado por rango de fechas y país
+  const crucesFiltrados = useMemo(() => {
+    if (paisFiltro === 'TODOS') return crucesPeriodo;
+    return crucesPeriodo.filter((c) => {
+      const pais = (c.pais || c.cita?.pais || 'SV').toUpperCase();
+      return pais === paisFiltro;
+    });
+  }, [crucesPeriodo, paisFiltro]);
 
   const citasFiltradas = useMemo(() => {
     return citasActivas.filter((c) => {
@@ -163,6 +172,10 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
 
   const llamadasEnPeriodo = useMemo(() => {
     return llamadas.filter((ll) => {
+      if (paisFiltro !== 'TODOS') {
+        const paisCall = String(ll.pais || 'SV').toUpperCase();
+        if (paisCall !== paisFiltro) return false;
+      }
       if (fechaInicio || fechaFin) {
         const match = String(ll.fecha_hora_inicio || '').match(
           /^(\d{4}-\d{2}-\d{2})/
@@ -174,7 +187,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
       }
       return true;
     });
-  }, [llamadas, fechaInicio, fechaFin]);
+  }, [llamadas, fechaInicio, fechaFin, paisFiltro]);
 
   const resumenKPIs = useMemo(
     () => calcularResumenKPIs(crucesFiltrados),
@@ -215,7 +228,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     conteosEstado.TARDE_GRAVE +
     conteosEstado.LLAMO_OTRO_DIA;
 
-  // Distribución por País (SV vs GT)
+  // Distribución real por País en el período (SV vs GT siempre visible para comparar)
   const splitPais = useMemo(() => {
     let svTotal = 0;
     let svOk = 0;
@@ -224,7 +237,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     let gtOk = 0;
     let gtPend = 0;
 
-    crucesFiltrados.forEach((c) => {
+    crucesPeriodo.forEach((c) => {
       const p = (c.pais || c.cita?.pais || 'SV').toUpperCase();
       if (p === 'GT') {
         gtTotal++;
@@ -251,7 +264,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
         pct: gtAudit > 0 ? Math.round((gtOk / gtAudit) * 100) : 0,
       },
     };
-  }, [crucesFiltrados]);
+  }, [crucesPeriodo]);
 
   // Actividad multicanal en el período
   const canalesPeriodo = useMemo(() => {
@@ -648,6 +661,21 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
             ))}
           </div>
 
+          {onSincronizarProspektia && (
+            <button
+              type="button"
+              onClick={onSincronizarProspektia}
+              disabled={sincronizandoProspektia}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-cyan-50 dark:bg-cyan-950/60 hover:bg-cyan-100 dark:hover:bg-cyan-900/70 border border-cyan-200 dark:border-cyan-700/60 text-cyan-700 dark:text-cyan-300 text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
+              title="Consultar ProspektIA ahora (auto-sync cada 15 min) para traer leads nuevos o fechas agendadas actualizadas"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${sincronizandoProspektia ? 'animate-spin' : ''}`}
+              />
+              <span>{sincronizandoProspektia ? 'Sincronizando ProspektIA...' : 'Sincronizar con ProspektIA'}</span>
+            </button>
+          )}
+
           {onSincronizar && (
             <button
               type="button"
@@ -850,7 +878,16 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
           </h3>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/40">
+            <button
+              type="button"
+              onClick={() => setPaisFiltro(paisFiltro === 'SV' ? 'TODOS' : 'SV')}
+              className={`p-3 rounded-xl text-left transition-all cursor-pointer border ${
+                paisFiltro === 'SV'
+                  ? 'bg-indigo-100/90 dark:bg-indigo-950/60 border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-500/30'
+                  : 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-200/80 dark:border-indigo-800/40 hover:border-indigo-300 dark:hover:border-indigo-700'
+              }`}
+              title="Clic para filtrar por El Salvador o ver todos"
+            >
               <div className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
                 🇸🇻 El Salvador
               </div>
@@ -860,9 +897,18 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
               <div className="text-[11px] text-slate-500 dark:text-slate-400">
                 {splitPais.sv.ok} OK de {splitPais.sv.total} leads
               </div>
-            </div>
+            </button>
 
-            <div className="p-3 rounded-xl bg-cyan-50/70 dark:bg-cyan-950/30 border border-cyan-200/80 dark:border-cyan-800/40">
+            <button
+              type="button"
+              onClick={() => setPaisFiltro(paisFiltro === 'GT' ? 'TODOS' : 'GT')}
+              className={`p-3 rounded-xl text-left transition-all cursor-pointer border ${
+                paisFiltro === 'GT'
+                  ? 'bg-cyan-100/90 dark:bg-cyan-950/60 border-cyan-400 dark:border-cyan-500 ring-2 ring-cyan-500/30'
+                  : 'bg-cyan-50/70 dark:bg-cyan-950/30 border-cyan-200/80 dark:border-cyan-800/40 hover:border-cyan-300 dark:hover:border-cyan-700'
+              }`}
+              title="Clic para filtrar por Guatemala o ver todos"
+            >
               <div className="text-xs font-bold text-cyan-700 dark:text-cyan-300">
                 🇬🇹 Guatemala
               </div>
@@ -872,7 +918,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
               <div className="text-[11px] text-slate-500 dark:text-slate-400">
                 {splitPais.gt.ok} OK de {splitPais.gt.total} leads
               </div>
-            </div>
+            </button>
           </div>
 
           <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">

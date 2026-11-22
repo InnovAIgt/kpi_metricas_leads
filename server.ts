@@ -53,6 +53,14 @@ const supabaseHeaders = {
   Prefer: 'return=representation',
 };
 
+const supabaseMinimalHeaders = {
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
+  Prefer: 'return=minimal',
+};
+
 // ==========================================
 // 1. ENDPOINT DE AUTENTICACIÓN (LOGIN)
 // Usuario: Gabi | Password: 1234
@@ -137,6 +145,18 @@ function guardarKpiEstadoPersistido(
   return soloKpi;
 }
 
+// Columnas mínimas estrictamente necesarias por tabla (evita SELECT *)
+const COLS_CATALOGO = 'id,pais,nombre_ejecutivo,usuario,extension,celular';
+const COLS_TEAMS = 'id,codigo_prospecto,pais,ejecutivo,cliente,fecha_reunion,hora_reunion,evidencia_url,estado_teams';
+const COLS_WHATSAPP = 'id,ejecutivo_id,numero_ejecutivo,numero_cliente,fecha_llamada,duracion_segundos,estado,direccion,nota';
+const COLS_LEADS_KPI =
+  'id,codigo_prospecto,kpi_sla_etapa_1,kpi_sla_etapa_2,kpi_sla_etapa_3,kpi_retroalimentacion_etapa_1,kpi_retroalimentacion_etapa_2,kpi_retroalimentacion_etapa_3,kpi_retroalimentacion_etapa_4';
+
+function calcularFechaCorteIso(diasAtras = 120): string {
+  const d = new Date(Date.now() - diasAtras * 24 * 3600 * 1000);
+  return d.toISOString().slice(0, 10);
+}
+
 // Helper para consultar REST de Supabase de manera segura
 async function fetchSupabaseTable(endpoint: string) {
   try {
@@ -154,18 +174,21 @@ async function fetchSupabaseTable(endpoint: string) {
   }
 }
 
-// Helper con paginación automática para no truncar a 1,000 registros
+// Helper con paginación dinámica y selección explícita de columnas
 async function fetchSupabaseTablePaginado(
   tabla: string,
   orden: string,
-  maxTotal: number = 6000
+  maxTotal: number = 3000,
+  columnas: string = '*',
+  filtroExtra: string = ''
 ) {
   let all: any[] = [];
   let offset = 0;
   const pageSize = 1000;
   try {
     while (offset < maxTotal) {
-      const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${tabla}?select=*&order=${orden}&offset=${offset}&limit=${pageSize}`;
+      const filtro = filtroExtra ? `&${filtroExtra}` : '';
+      const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${tabla}?select=${columnas}${filtro}&order=${orden}&offset=${offset}&limit=${pageSize}`;
       const response = await fetch(url, { headers: supabaseHeaders });
       if (!response.ok) {
         console.warn(`Supabase ${tabla} respondió HTTP ${response.status}`);
@@ -403,10 +426,73 @@ async function fetchCelularEnCaliente(): Promise<any[]> {
   }
 }
 
-// Cache en memoria para respuestas ultra-rápidas (<5ms)
-let cacheDatosCompletos: { data: any; timestamp: number } | null = null;
+// Caché en memoria por capas con TTL para minimizar egress hacia Supabase
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+let cacheDatosCompletos: CacheEntry<any> | null = null;
+let cacheCatalogo: CacheEntry<any[]> | null = null;
+let cacheTeams: CacheEntry<any[]> | null = null;
+let cacheWhatsapp: CacheEntry<any[]> | null = null;
+let cacheKpiFlags: CacheEntry<any[]> | null = null;
 let syncPromiseEnVuelo: Promise<any> | null = null;
-const CACHE_TTL_MS = 30000; // 30 segundos de cache
+
+const CACHE_TTL_MS = 3 * 60 * 1000;         // 3 minutos para respuesta unificada
+const CACHE_CATALOGO_TTL_MS = 5 * 60 * 1000; // 5 minutos para catálogo
+const CACHE_SUPABASE_TTL_MS = 5 * 60 * 1000; // 5 minutos para tablas Supabase (Teams / WhatsApp)
+const CACHE_KPI_FLAGS_TTL_MS = 3 * 60 * 1000; // 3 minutos para flags KPI en Supabase
+
+async function fetchCatalogoCached(forzar = false): Promise<any[]> {
+  if (!forzar && cacheCatalogo && Date.now() - cacheCatalogo.timestamp < CACHE_CATALOGO_TTL_MS) {
+    return cacheCatalogo.data;
+  }
+  const rows = await fetchSupabaseTable(`catalogo?select=${COLS_CATALOGO}&order=id.asc&limit=500`);
+  cacheCatalogo = { data: rows, timestamp: Date.now() };
+  return rows;
+}
+
+async function fetchTeamsCached(forzar = false): Promise<any[]> {
+  if (!forzar && cacheTeams && Date.now() - cacheTeams.timestamp < CACHE_SUPABASE_TTL_MS) {
+    return cacheTeams.data;
+  }
+  const rows = await fetchSupabaseTable(
+    `llamadas_teams?select=${COLS_TEAMS}&order=fecha_reunion.desc.nullslast&limit=500`
+  );
+  cacheTeams = { data: rows, timestamp: Date.now() };
+  return rows;
+}
+
+async function fetchWhatsappCached(forzar = false, incluirHistorico = false): Promise<any[]> {
+  if (!forzar && !incluirHistorico && cacheWhatsapp && Date.now() - cacheWhatsapp.timestamp < CACHE_SUPABASE_TTL_MS) {
+    return cacheWhatsapp.data;
+  }
+  const fechaCorte = calcularFechaCorteIso(120); // Últimos 120 días por defecto para acotar egress
+  const filtroFecha = incluirHistorico ? '' : `fecha_llamada=gte.${fechaCorte}T00:00:00Z`;
+  const rows = await fetchSupabaseTablePaginado(
+    'llamadas_whatsapp',
+    'fecha_llamada.desc.nullslast',
+    incluirHistorico ? 3000 : 2000,
+    COLS_WHATSAPP,
+    filtroFecha
+  );
+  if (!incluirHistorico) {
+    cacheWhatsapp = { data: rows, timestamp: Date.now() };
+  }
+  return rows;
+}
+
+async function fetchKpiFlagsCached(forzar = false): Promise<any[]> {
+  if (!forzar && cacheKpiFlags && Date.now() - cacheKpiFlags.timestamp < CACHE_KPI_FLAGS_TTL_MS) {
+    return cacheKpiFlags.data;
+  }
+  const rows = await fetchSupabaseTable(
+    `leads?or=(kpi_sla_etapa_1.eq.true,kpi_sla_etapa_2.eq.true,kpi_sla_etapa_3.eq.true,kpi_retroalimentacion_etapa_1.eq.true,kpi_retroalimentacion_etapa_2.eq.true,kpi_retroalimentacion_etapa_3.eq.true,kpi_retroalimentacion_etapa_4.eq.true)&select=${COLS_LEADS_KPI}&limit=1000`
+  );
+  cacheKpiFlags = { data: rows, timestamp: Date.now() };
+  return rows;
+}
 
 // Helpers de ProspektIA (paginación dinámica, fecha SV y detección de país)
 const PROSPEKTIA_HEADERS = {
@@ -485,14 +571,15 @@ function parseFechaHoraNcSv(createdAtSv?: string | null, createdAtIso?: string |
 // ==============================================================================
 app.get('/api/sync/datos-completos', async (req, res) => {
   const forzar = req.query.forzar === 'true';
+  const incluirHistorico = req.query.historico === 'true';
 
   // Si tenemos caché reciente y no se fuerza recarga, responder al instante
-  if (!forzar && cacheDatosCompletos && Date.now() - cacheDatosCompletos.timestamp < CACHE_TTL_MS) {
+  if (!forzar && !incluirHistorico && cacheDatosCompletos && Date.now() - cacheDatosCompletos.timestamp < CACHE_TTL_MS) {
     return res.json(cacheDatosCompletos.data);
   }
 
   // Si ya hay una consulta en proceso, esperar la misma promesa
-  if (syncPromiseEnVuelo) {
+  if (!incluirHistorico && syncPromiseEnVuelo) {
     try {
       const data = await syncPromiseEnVuelo;
       return res.json(data);
@@ -500,9 +587,9 @@ app.get('/api/sync/datos-completos', async (req, res) => {
   }
 
   const tInicio = Date.now();
-  syncPromiseEnVuelo = (async () => {
-    // 1. Obtener primero el Catálogo de Asesores Oficial desde Supabase
-    const catalogo = await fetchSupabaseTable('catalogo?select=*&order=id.asc');
+  const ejecutarSync = (async () => {
+    // 1. Obtener primero el Catálogo de Asesores Oficial desde caché / Supabase (solo columnas necesarias)
+    const catalogo = await fetchCatalogoCached(forzar);
     const mapaPaisCat = construirMapaPaisCatalogo(catalogo);
 
     // Construir mapa de búsqueda rápida (insensible a acentos/mayúsculas)
@@ -544,9 +631,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     };
 
     // 2. Consultas: PBX, Celular y Leads 100% EN VIVO de sus APIs externas.
-    // Solo WhatsApp, Catálogo y Teams provienen de Supabase.
-    const waOffsets = [0, 1000]; // 2,000 llamadas WhatsApp
-
+    // Solo WhatsApp, Catálogo y Teams provienen de Supabase (cacheados + columnas mínimas + rango de fechas).
     const [
       pbxDirecto,
       celDirecto,
@@ -557,14 +642,8 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     ] = await Promise.all([
       fetchPbxEnCaliente(),     // 100% EN VIVO PBX api.red.com.sv
       fetchCelularEnCaliente(), // 100% EN VIVO Celular kpi.red.com.sv
-      fetchSupabaseTable('llamadas_teams?select=*&order=fecha_reunion.desc.nullslast'),
-      Promise.all(
-        waOffsets.map((offset) =>
-          fetchSupabaseTable(
-            `llamadas_whatsapp?select=*&order=fecha_llamada.desc.nullslast&offset=${offset}&limit=1000`
-          )
-        )
-      ).then((pages) => pages.flat()),
+      fetchTeamsCached(forzar),
+      fetchWhatsappCached(forzar, incluirHistorico),
       fetchProspektiaCalificados(),
       fetchProspektiaNoCalificadosPaginado(),
     ]);
@@ -929,9 +1008,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     ];
 
     try {
-      const sbKpiRows = await fetchSupabaseTable(
-        'leads?or=(kpi_sla_etapa_1.eq.true,kpi_sla_etapa_2.eq.true,kpi_sla_etapa_3.eq.true,kpi_retroalimentacion_etapa_1.eq.true,kpi_retroalimentacion_etapa_2.eq.true,kpi_retroalimentacion_etapa_3.eq.true,kpi_retroalimentacion_etapa_4.eq.true)&select=id,codigo_prospecto,kpi_sla_etapa_1,kpi_sla_etapa_2,kpi_sla_etapa_3,kpi_retroalimentacion_etapa_1,kpi_retroalimentacion_etapa_2,kpi_retroalimentacion_etapa_3,kpi_retroalimentacion_etapa_4&limit=1000'
-      );
+      const sbKpiRows = await fetchKpiFlagsCached(forzar);
       sbKpiRows.forEach((row: any) => {
         const flags: Record<string, boolean> = {};
         camposKpi.forEach((f) => {
@@ -988,16 +1065,22 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       },
     };
 
-    cacheDatosCompletos = {
-      data: payloadFinal,
-      timestamp: Date.now(),
-    };
+    if (!incluirHistorico) {
+      cacheDatosCompletos = {
+        data: payloadFinal,
+        timestamp: Date.now(),
+      };
+    }
 
     return payloadFinal;
   })();
 
+  if (!incluirHistorico) {
+    syncPromiseEnVuelo = ejecutarSync;
+  }
+
   try {
-    const data = await syncPromiseEnVuelo;
+    const data = await ejecutarSync;
     return res.json(data);
   } catch (error: any) {
     console.error('Error en /api/sync/datos-completos:', error);
@@ -1009,7 +1092,9 @@ app.get('/api/sync/datos-completos', async (req, res) => {
       mensaje: error?.message || 'Error al obtener datos desde Supabase',
     });
   } finally {
-    syncPromiseEnVuelo = null;
+    if (!incluirHistorico) {
+      syncPromiseEnVuelo = null;
+    }
   }
 });
 
@@ -1019,11 +1104,11 @@ app.get('/api/sync/datos-completos', async (req, res) => {
 // ==============================================================================
 app.all('/api/sync/prospektia', async (_req, res) => {
   const tInicio = Date.now();
-  cacheDatosCompletos = null; // Invalidar caché general para reflejar cambios al instante
 
   try {
+    // Reutiliza caché TTL del catálogo para evitar reconsultas a Supabase cada 15 minutos
     const [catalogo, prospektiaRes, prospektiaNcItems] = await Promise.all([
-      fetchSupabaseTable('catalogo?select=*&order=id.asc'),
+      fetchCatalogoCached(false),
       fetchProspektiaCalificados(),
       fetchProspektiaNoCalificadosPaginado(),
     ]);
@@ -1184,9 +1269,7 @@ app.all('/api/sync/prospektia', async (_req, res) => {
       'kpi_retroalimentacion_etapa_4',
     ];
     try {
-      const sbKpiRows = await fetchSupabaseTable(
-        'leads?or=(kpi_sla_etapa_1.eq.true,kpi_sla_etapa_2.eq.true,kpi_sla_etapa_3.eq.true,kpi_retroalimentacion_etapa_1.eq.true,kpi_retroalimentacion_etapa_2.eq.true,kpi_retroalimentacion_etapa_3.eq.true,kpi_retroalimentacion_etapa_4.eq.true)&select=id,codigo_prospecto,kpi_sla_etapa_1,kpi_sla_etapa_2,kpi_sla_etapa_3,kpi_retroalimentacion_etapa_1,kpi_retroalimentacion_etapa_2,kpi_retroalimentacion_etapa_3,kpi_retroalimentacion_etapa_4&limit=1000'
-      );
+      const sbKpiRows = await fetchKpiFlagsCached(false);
       sbKpiRows.forEach((row: any) => {
         const flags: Record<string, boolean> = {};
         camposKpi.forEach((f) => {
@@ -1214,6 +1297,16 @@ app.all('/api/sync/prospektia', async (_req, res) => {
 
     leads.forEach((l: any) => aplicarKpiFlags(l, 'leads'));
     leadsNoCalificados.forEach((l: any) => aplicarKpiFlags(l, 'leads_no_calificados'));
+
+    // Actualizar leads in-place en cacheDatosCompletos si está vivo (preserva caché de WhatsApp/Teams sin reconsultar Supabase)
+    if (cacheDatosCompletos?.data?.datos) {
+      cacheDatosCompletos.data.datos.leads = leads;
+      cacheDatosCompletos.data.datos.leadsNoCalificados = leadsNoCalificados;
+      if (cacheDatosCompletos.data.estadisticas) {
+        cacheDatosCompletos.data.estadisticas.total_leads = leads.length;
+        cacheDatosCompletos.data.estadisticas.total_leads_no_calificados = leadsNoCalificados.length;
+      }
+    }
 
     res.setHeader('Cache-Control', 'no-store');
     return res.json({
@@ -1264,15 +1357,15 @@ app.patch('/api/leads/:id', async (req, res) => {
     const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${tabla}?${colFiltro}=eq.${encodeURIComponent(id)}`;
     const response = await fetch(url, {
       method: 'PATCH',
-      headers: supabaseHeaders,
+      headers: supabaseMinimalHeaders,
       body: JSON.stringify(Object.keys(payloadKpi).length > 0 ? payloadKpi : camposActualizables),
     });
 
+    cacheKpiFlags = null;
     cacheDatosCompletos = null;
 
     if (response.ok) {
-      const data = await response.json().catch(() => []);
-      return res.json({ exito: true, persisted: 'supabase+local', data });
+      return res.json({ exito: true, persisted: 'supabase+local', data: [{ id, ...payloadKpi }] });
     }
 
     // Si Supabase aún no tiene las columnas kpi_* en leads_no_calificados, mantener éxito con persistencia local
@@ -1284,6 +1377,7 @@ app.patch('/api/leads/:id', async (req, res) => {
       data: [{ id, ...payloadKpi }],
     });
   } catch (err: any) {
+    cacheKpiFlags = null;
     cacheDatosCompletos = null;
     return res.json({
       exito: true,
@@ -1331,6 +1425,7 @@ app.post('/api/teams', async (req, res) => {
         }),
       });
       const data = await patchRes.json();
+      cacheTeams = null;
       cacheDatosCompletos = null;
       if (!patchRes.ok) {
         return res.status(patchRes.status).json({ exito: false, mensaje: data?.message || 'Error al actualizar Teams', data });
@@ -1352,6 +1447,7 @@ app.post('/api/teams', async (req, res) => {
         }),
       });
       const data = await postRes.json();
+      cacheTeams = null;
       cacheDatosCompletos = null;
       if (!postRes.ok) {
         return res.status(postRes.status).json({ exito: false, mensaje: data?.message || 'Error al guardar Teams', data });
@@ -1528,6 +1624,7 @@ app.post('/api/catalogo', async (req, res) => {
         data,
       });
     }
+    cacheCatalogo = null;
     cacheDatosCompletos = null;
     return res.json({ exito: true, data: Array.isArray(data) ? data[0] : data });
   } catch (err: any) {
@@ -1561,6 +1658,7 @@ app.patch('/api/catalogo/:id', async (req, res) => {
         data,
       });
     }
+    cacheCatalogo = null;
     cacheDatosCompletos = null;
     return res.json({ exito: true, data: Array.isArray(data) ? data[0] : data });
   } catch (err: any) {
@@ -1573,20 +1671,21 @@ app.delete('/api/catalogo/:id', async (req, res) => {
     const url = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo?id=eq.${encodeURIComponent(req.params.id)}`;
     const response = await fetch(url, {
       method: 'DELETE',
-      headers: supabaseHeaders,
+      headers: supabaseMinimalHeaders,
     });
-    const text = await response.text();
-    let data: any = null;
-    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
     if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      let data: any = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
       return res.status(response.status).json({
         exito: false,
         mensaje: data?.message || data?.hint || `Error Supabase HTTP ${response.status}`,
         data,
       });
     }
+    cacheCatalogo = null;
     cacheDatosCompletos = null;
-    return res.json({ exito: true, data });
+    return res.json({ exito: true, data: { id: req.params.id } });
   } catch (err: any) {
     return res.status(500).json({ exito: false, mensaje: err?.message });
   }

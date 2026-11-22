@@ -40,13 +40,16 @@ async function fetchPrimerTablaDisponible(
   baseUrl: string,
   headers: Record<string, string>,
   posiblesTablas: string[],
-  selectQuery: string = '*',
-  orderQuery: string = ''
+  selectQuery: string,
+  orderQuery: string = '',
+  limit: number = 250,
+  extraFilter: string = ''
 ): Promise<{ tablaEncontrada: string | null; data: any[] }> {
   for (const nombreTabla of posiblesTablas) {
     try {
       const orderParam = orderQuery ? `&order=${orderQuery}` : '';
-      const url = `${baseUrl}/rest/v1/${nombreTabla}?select=${selectQuery}${orderParam}&limit=1000`;
+      const filterParam = extraFilter ? `&${extraFilter}` : '';
+      const url = `${baseUrl}/rest/v1/${nombreTabla}?select=${selectQuery}${filterParam}${orderParam}&limit=${limit}`;
       const res = await fetch(url, { headers });
       if (res.ok) {
         const data = await res.json();
@@ -61,14 +64,33 @@ async function fetchPrimerTablaDisponible(
   return { tablaEncontrada: null, data: [] };
 }
 
+async function verificarTablaMinima(
+  baseUrl: string,
+  headers: Record<string, string>,
+  posiblesTablas: string[]
+): Promise<{ tablaEncontrada: string | null; totalEstimado: number }> {
+  for (const nombreTabla of posiblesTablas) {
+    try {
+      const url = `${baseUrl}/rest/v1/${nombreTabla}?select=id&limit=1`;
+      const res = await fetch(url, {
+        headers: { ...headers, Prefer: 'count=estimated' },
+      });
+      if (res.ok) {
+        const cr = res.headers.get('content-range') || '';
+        const totalMatch = cr.match(/\/(\d+)$/);
+        const totalEstimado = totalMatch ? parseInt(totalMatch[1], 10) : 0;
+        return { tablaEncontrada: nombreTabla, totalEstimado };
+      }
+    } catch (_) {
+      // Intentar siguiente candidato
+    }
+  }
+  return { tablaEncontrada: null, totalEstimado: 0 };
+}
+
 /**
- * Consulta dinámica y multicanal de todas las tablas de Supabase:
- * - Citas / Leads: `leads`, `leads_calificados`, `leads_no_calificados`
- * - PBX / Telefonía Fija: `llamadas_pbx`, `calls_pbx`, `pbx_calls`
- * - Celular: `llamadas_celular`, `historial_celular`, `celular_llamadas`
- * - WhatsApp: `llamadas_whatsapp`, `mensajes_whatsapp`, `whatsapp_calls`
- * - Teams: `reuniones_teams`, `llamadas_teams`, `teams_meetings`
- * - Catálogo: `catalogo_asesores`, `catalogo_vendedores`, `catalogo_usuarios`, `extensiones_asesores`
+ * Consulta dinámica y multicanal de todas las tablas de Supabase con selección estricta de columnas
+ * y ventana de fechas para minimizar consumo de ancho de banda (egress).
  */
 export async function consultarTablasSupabase(
   url: string,
@@ -88,7 +110,9 @@ export async function consultarTablasSupabase(
     Accept: 'application/json',
   };
 
-  // 1. Cargar catálogo de asesores si existe para mapear extensiones/números a nombres reales
+  const hace60Dias = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+  // 1. Cargar solo columnas necesarias y ventanas de tiempo acotadas (sin SELECT *)
   const [
     catalogoRes,
     leadsCalificadosRes,
@@ -101,44 +125,63 @@ export async function consultarTablasSupabase(
     fetchPrimerTablaDisponible(
       baseUrl,
       headers,
-      ['catalogo_asesores', 'catalogo_vendedores', 'catalogo_usuarios', 'extensiones_asesores'],
-      '*'
+      ['catalogo', 'catalogo_asesores', 'catalogo_vendedores', 'catalogo_usuarios', 'extensiones_asesores'],
+      'id,pais,nombre_ejecutivo,usuario,extension,celular',
+      'id.asc',
+      200
     ),
     fetchPrimerTablaDisponible(
       baseUrl,
       headers,
       ['leads', 'leads_calificados', 'citas_agendadas', 'prospektia_leads'],
-      '*'
+      'id,codigo_prospecto,nombre_prospecto,telefono,fecha_agendada,hora_agendada,tipo_reunion,pais,asesor_nombre,created_at',
+      'created_at.desc.nullslast',
+      250,
+      `created_at=gte.${hace60Dias}T00:00:00Z`
     ),
     fetchPrimerTablaDisponible(
       baseUrl,
       headers,
       ['leads_no_calificados', 'prospektia_no_calificados', 'leads_descartados'],
-      '*'
+      'id,client_id,client_name,advisor_name,telefono,created_at,created_at_sv',
+      'created_at.desc.nullslast',
+      250,
+      `created_at=gte.${hace60Dias}T00:00:00Z`
     ),
     fetchPrimerTablaDisponible(
       baseUrl,
       headers,
       ['llamadas_pbx', 'calls_pbx', 'historial_pbx', 'pbx_calls'],
-      '*'
+      'id,uniqueid,nombre,extension,destino,duracion_segundos,duracion_minutos,duracion_hh_mm_ss,estado,fecha_hora,fecha,audio_url,grabacion_url',
+      'fecha_hora.desc.nullslast',
+      250,
+      `fecha=gte.${hace60Dias}`
     ),
     fetchPrimerTablaDisponible(
       baseUrl,
       headers,
       ['llamadas_celular', 'historial_celular', 'celular_llamadas', 'llamadas_movil'],
-      '*'
+      'id,fecha,hora,destino,duracion,tipo,linea,usuario,operador',
+      'fecha.desc.nullslast',
+      250,
+      `fecha=gte.${hace60Dias}`
     ),
     fetchPrimerTablaDisponible(
       baseUrl,
       headers,
       ['llamadas_whatsapp', 'whatsapp_calls', 'mensajes_whatsapp', 'whatsapp_logs'],
-      '*'
+      'id,ejecutivo_id,numero_ejecutivo,numero_cliente,fecha_llamada,duracion_segundos,estado,direccion',
+      'fecha_llamada.desc.nullslast',
+      250,
+      `fecha_llamada=gte.${hace60Dias}T00:00:00Z`
     ),
     fetchPrimerTablaDisponible(
       baseUrl,
       headers,
-      ['reuniones_teams', 'llamadas_teams', 'teams_meetings', 'teams_calls'],
-      '*'
+      ['llamadas_teams', 'reuniones_teams', 'teams_meetings', 'teams_calls'],
+      'id,codigo_prospecto,pais,ejecutivo,cliente,fecha_reunion,hora_reunion,evidencia_url,estado_teams',
+      'fecha_reunion.desc.nullslast',
+      200
     ),
   ]);
 
@@ -354,18 +397,48 @@ export async function probarConexionSupabase(
   }
 
   const baseUrl = url.replace(/\/$/, '');
+  const headers = {
+    apikey: anonKey,
+    Authorization: `Bearer ${anonKey}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
 
   try {
-    const resTablas = await consultarTablasSupabase(url, anonKey);
-    const encontradas = Object.entries(resTablas.tablasDetectadas)
-      .filter(([_, t]) => t !== null)
-      .map(([tipo, t]) => `${tipo}: ${t}`);
+    // Prueba ligera sin descargar miles de filas (solo select=id&limit=1 + count=estimated)
+    const [cat, leads, nc, pbx, cel, wa, teams] = await Promise.all([
+      verificarTablaMinima(baseUrl, headers, ['catalogo', 'catalogo_asesores']),
+      verificarTablaMinima(baseUrl, headers, ['leads', 'leads_calificados']),
+      verificarTablaMinima(baseUrl, headers, ['leads_no_calificados']),
+      verificarTablaMinima(baseUrl, headers, ['llamadas_pbx', 'calls_pbx']),
+      verificarTablaMinima(baseUrl, headers, ['llamadas_celular']),
+      verificarTablaMinima(baseUrl, headers, ['llamadas_whatsapp']),
+      verificarTablaMinima(baseUrl, headers, ['llamadas_teams', 'reuniones_teams']),
+    ]);
+
+    const tablas = {
+      catalogo: cat,
+      leads,
+      leads_no_calificados: nc,
+      llamadas_pbx: pbx,
+      llamadas_celular: cel,
+      llamadas_whatsapp: wa,
+      llamadas_teams: teams,
+    };
+
+    const encontradas = Object.entries(tablas)
+      .filter(([_, t]) => t.tablaEncontrada !== null)
+      .map(([tipo, t]) => `${tipo}: ${t.tablaEncontrada} (~${t.totalEstimado})`);
+
+    const conteos = Object.fromEntries(
+      Object.entries(tablas).map(([k, v]) => [k, v.totalEstimado])
+    );
 
     if (encontradas.length > 0) {
       return {
         exito: true,
         mensaje: `¡Conexión exitosa a Supabase! Se detectaron tablas activas: ${encontradas.join(', ')}.`,
-        detalles: resTablas.conteos,
+        detalles: conteos,
       };
     } else {
       return {

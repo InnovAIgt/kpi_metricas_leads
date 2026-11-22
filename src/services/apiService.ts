@@ -103,6 +103,10 @@ const PROSPEKTIA_HEADERS = {
   Accept: 'application/json',
 };
 
+const COLS_CATALOGO_CLIENT = 'id,pais,nombre_ejecutivo,usuario,extension,celular';
+const COLS_TEAMS_CLIENT = 'id,codigo_prospecto,pais,ejecutivo,cliente,fecha_reunion,hora_reunion,evidencia_url,estado_teams';
+const COLS_WHATSAPP_CLIENT = 'id,ejecutivo_id,numero_ejecutivo,numero_cliente,fecha_llamada,duracion_segundos,estado,direccion,nota';
+
 function crearResolverAsesor(catalogo: any[] = []) {
   const mapaExt: Record<string, string> = {};
   const mapaUser: Record<string, string> = {};
@@ -566,7 +570,7 @@ export async function sincronizarSoloProspektia(
     const [catRes, prospektiaRes, prospektiaNcRes] = await Promise.all([
       catalogoFallback.length > 0
         ? Promise.resolve(catalogoFallback)
-        : fetch(`${url}/rest/v1/catalogo?select=*&order=id.asc`, { headers })
+        : fetch(`${url}/rest/v1/catalogo?select=${COLS_CATALOGO_CLIENT}&order=id.asc&limit=500`, { headers })
             .then((r) => (r.ok ? r.json() : []))
             .catch(() => []),
       fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
@@ -948,7 +952,26 @@ async function fetchPbxDirectoCliente(): Promise<any[]> {
 async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBackend> {
   const { url, headers } = getSupabaseConfig();
   try {
-    const waOffsets = [0, 1000];
+    const fetchWhatsappClienteOptimizado = async () => {
+      const dCorte = new Date(Date.now() - 120 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+      const out: any[] = [];
+      let offset = 0;
+      const pageSize = 1000;
+      while (offset < 2000) {
+        const r = await fetch(
+          `${url}/rest/v1/llamadas_whatsapp?select=${COLS_WHATSAPP_CLIENT}&fecha_llamada=gte.${dCorte}T00:00:00Z&order=fecha_llamada.desc.nullslast&offset=${offset}&limit=${pageSize}`,
+          { headers }
+        );
+        if (!r.ok) break;
+        const rows = await r.json();
+        if (!Array.isArray(rows) || rows.length === 0) break;
+        out.push(...rows);
+        if (rows.length < pageSize) break;
+        offset += pageSize;
+      }
+      return out;
+    };
+
     const [
       catalogoRes,
       teamsRes,
@@ -958,13 +981,9 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       celRes,
       pbxDirectoRes,
     ] = await Promise.all([
-      fetch(`${url}/rest/v1/catalogo?select=*&order=id.asc`, { headers }).then((r) => r.ok ? r.json() : []),
-      fetch(`${url}/rest/v1/llamadas_teams?select=*&order=fecha_reunion.desc.nullslast,id.desc`, { headers }).then((r) => r.ok ? r.json() : []),
-      Promise.all(
-        waOffsets.map((offset) =>
-          fetch(`${url}/rest/v1/llamadas_whatsapp?select=*&order=fecha_llamada.desc.nullslast&offset=${offset}&limit=1000`, { headers }).then((r) => r.ok ? r.json() : [])
-        )
-      ).then((p) => p.flat()),
+      fetch(`${url}/rest/v1/catalogo?select=${COLS_CATALOGO_CLIENT}&order=id.asc&limit=500`, { headers }).then((r) => r.ok ? r.json() : []),
+      fetch(`${url}/rest/v1/llamadas_teams?select=${COLS_TEAMS_CLIENT}&order=fecha_reunion.desc.nullslast&limit=500`, { headers }).then((r) => r.ok ? r.json() : []),
+      fetchWhatsappClienteOptimizado(),
       fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
         headers: PROSPEKTIA_HEADERS,
         cache: 'no-store',
@@ -1300,7 +1319,7 @@ export async function actualizarLeadKpiBackend(
       : 'codigo_prospecto';
     const r = await fetch(`${url}/rest/v1/${tabla}?${colFiltro}=eq.${encodeURIComponent(leadId)}`, {
       method: 'PATCH',
-      headers,
+      headers: { ...headers, Prefer: 'return=minimal' },
       body: JSON.stringify(cambios),
     });
     if (r.ok) return true;

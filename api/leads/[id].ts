@@ -13,7 +13,7 @@ const supabaseHeaders = {
   Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
   'Content-Type': 'application/json',
   Accept: 'application/json',
-  Prefer: 'return=representation',
+  Prefer: 'return=minimal',
 };
 
 export default async function handler(req: any, res: any) {
@@ -54,8 +54,7 @@ export default async function handler(req: any, res: any) {
     });
 
     if (response.ok) {
-      const data = await response.json().catch(() => []);
-      return res.status(200).json({ exito: true, persisted: 'supabase', data });
+      return res.status(200).json({ exito: true, persisted: 'supabase', data: [{ id, ...campos }] });
     }
 
     const errTxt = await response.text().catch(() => '');

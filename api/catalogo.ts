@@ -16,6 +16,10 @@ const supabaseHeaders = {
   Prefer: 'return=representation',
 };
 
+const COLS_CATALOGO = 'id,pais,nombre_ejecutivo,usuario,extension,celular';
+let cacheCatalogoApi: { data: any[]; timestamp: number } | null = null;
+const CACHE_CAT_TTL_MS = 5 * 60 * 1000;
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -29,15 +33,20 @@ export default async function handler(req: any, res: any) {
     const baseUrl = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo`;
 
     if (req.method === 'GET') {
-      const r = await fetch(`${baseUrl}?select=*&order=id.asc`, { headers: supabaseHeaders });
+      if (cacheCatalogoApi && Date.now() - cacheCatalogoApi.timestamp < CACHE_CAT_TTL_MS) {
+        return res.status(200).json({ exito: true, data: cacheCatalogoApi.data });
+      }
+      const r = await fetch(`${baseUrl}?select=${COLS_CATALOGO}&order=id.asc&limit=500`, { headers: supabaseHeaders });
       const data = await r.json().catch(() => []);
       if (!r.ok) {
         return res.status(r.status).json({ exito: false, mensaje: 'Error al consultar catálogo', data });
       }
-      return res.status(200).json({ exito: true, data });
+      cacheCatalogoApi = { data: Array.isArray(data) ? data : [], timestamp: Date.now() };
+      return res.status(200).json({ exito: true, data: cacheCatalogoApi.data });
     }
 
     if (req.method === 'POST') {
+      cacheCatalogoApi = null;
       const { nombre_ejecutivo, usuario, extension, celular, pais } = req.body || {};
       if (!nombre_ejecutivo || !String(nombre_ejecutivo).trim()) {
         return res.status(400).json({ exito: false, mensaje: 'El nombre del ejecutivo es obligatorio.' });

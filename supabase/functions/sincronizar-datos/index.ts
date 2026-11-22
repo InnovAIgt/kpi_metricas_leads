@@ -424,7 +424,7 @@ async function upsertEnLotes(
     const lote = validos.slice(i, i + BATCH_SIZE);
     const respuesta = await supabase
       .from(tabla)
-      .upsert(lote, { onConflict: onConflictCol, ignoreDuplicates: false, count: "exact" });
+      .upsert(lote, { onConflict: onConflictCol, ignoreDuplicates: false });
 
     const error = respuesta?.error || null;
     if (error) {
@@ -652,11 +652,10 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // 2. Cálculo dinámico de fechas
-    // Por defecto toma desde el 1 de septiembre de 2026 para asegurar toda la data histórica del mes
+    // 2. Cálculo dinámico de fechas (ventana incremental de 7 días por defecto para evitar re-sincronización masiva)
     const fechaHoyIso = new Date().toISOString().slice(0, 10);
-    const primerDiaMes = `${fechaHoyIso.slice(0, 7)}-01`;
-    const defaultDesde = fechaHoyIso.startsWith("2026-09") ? "2026-09-01" : primerDiaMes;
+    const hace7Dias = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+    const defaultDesde = hace7Dias.toISOString().slice(0, 10);
 
     const fechaHasta = /^\d{4}-\d{2}-\d{2}$/.test(bodyRecibido?.pbx_hasta)
       ? bodyRecibido.pbx_hasta

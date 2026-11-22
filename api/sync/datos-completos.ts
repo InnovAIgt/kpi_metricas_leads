@@ -9,6 +9,50 @@ const supabaseHeaders = {
   Accept: 'application/json',
 };
 
+const COLS_CATALOGO = 'id,pais,nombre_ejecutivo,usuario,extension,celular';
+const COLS_TEAMS = 'id,codigo_prospecto,pais,ejecutivo,cliente,fecha_reunion,hora_reunion,evidencia_url,estado_teams';
+const COLS_WHATSAPP = 'id,ejecutivo_id,numero_ejecutivo,numero_cliente,fecha_llamada,duracion_segundos,estado,direccion,nota';
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+let cacheDatosVercel: CacheEntry<any> | null = null;
+let cacheCatalogoVercel: CacheEntry<any[]> | null = null;
+let cacheTeamsVercel: CacheEntry<any[]> | null = null;
+let cacheWhatsappVercel: CacheEntry<any[]> | null = null;
+let promiseDatosVercel: Promise<any> | null = null;
+const CACHE_DATOS_TTL_MS = 3 * 60 * 1000;
+const CACHE_SUPABASE_TTL_MS = 5 * 60 * 1000;
+
+async function fetchWhatsappVercel(forzar = false, incluirHistorico = false): Promise<any[]> {
+  if (!forzar && !incluirHistorico && cacheWhatsappVercel && Date.now() - cacheWhatsappVercel.timestamp < CACHE_SUPABASE_TTL_MS) {
+    return cacheWhatsappVercel.data;
+  }
+  const dCorte = new Date(Date.now() - 120 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const filtro = incluirHistorico ? '' : `&fecha_llamada=gte.${dCorte}T00:00:00Z`;
+  const all: any[] = [];
+  let offset = 0;
+  const pageSize = 1000;
+  const maxTotal = incluirHistorico ? 3000 : 2000;
+  while (offset < maxTotal) {
+    const r = await fetch(
+      `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/llamadas_whatsapp?select=${COLS_WHATSAPP}${filtro}&order=fecha_llamada.desc.nullslast&offset=${offset}&limit=${pageSize}`,
+      { headers: supabaseHeaders }
+    );
+    if (!r.ok) break;
+    const rows = await r.json();
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  if (!incluirHistorico) {
+    cacheWhatsappVercel = { data: all, timestamp: Date.now() };
+  }
+  return all;
+}
+
 const PBX_HOST = 'https://api.red.com.sv';
 const PBX_USER = 'DBOLAINES';
 const PBX_PASS = 'Intelfon1234';
@@ -317,8 +361,46 @@ export default async function handler(req: any, res: any) {
     return res.status(200).end();
   }
 
-  try {
-    const waOffsets = [0, 1000];
+  const forzar = req.query?.forzar === 'true';
+  const incluirHistorico = req.query?.historico === 'true';
+
+  if (!forzar && !incluirHistorico && cacheDatosVercel && Date.now() - cacheDatosVercel.timestamp < CACHE_DATOS_TTL_MS) {
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    return res.status(200).json(cacheDatosVercel.data);
+  }
+
+  if (!incluirHistorico && promiseDatosVercel) {
+    try {
+      const cached = await promiseDatosVercel;
+      return res.status(200).json(cached);
+    } catch (_) {}
+  }
+
+  const ejecutar = (async () => {
+    const fetchCatalogo = async () => {
+      if (!forzar && cacheCatalogoVercel && Date.now() - cacheCatalogoVercel.timestamp < CACHE_SUPABASE_TTL_MS) {
+        return cacheCatalogoVercel.data;
+      }
+      const r = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo?select=${COLS_CATALOGO}&order=id.asc&limit=500`, {
+        headers: supabaseHeaders,
+      });
+      const data = r.ok ? await r.json() : [];
+      cacheCatalogoVercel = { data: Array.isArray(data) ? data : [], timestamp: Date.now() };
+      return cacheCatalogoVercel.data;
+    };
+
+    const fetchTeams = async () => {
+      if (!forzar && cacheTeamsVercel && Date.now() - cacheTeamsVercel.timestamp < CACHE_SUPABASE_TTL_MS) {
+        return cacheTeamsVercel.data;
+      }
+      const r = await fetch(
+        `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/llamadas_teams?select=${COLS_TEAMS}&order=fecha_reunion.desc.nullslast&limit=500`,
+        { headers: supabaseHeaders }
+      );
+      const data = r.ok ? await r.json() : [];
+      cacheTeamsVercel = { data: Array.isArray(data) ? data : [], timestamp: Date.now() };
+      return cacheTeamsVercel.data;
+    };
 
     const [
       catalogoRes,
@@ -329,15 +411,11 @@ export default async function handler(req: any, res: any) {
       prospektiaRes,
       prospektiaNcRes,
     ] = await Promise.all([
-      fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo?select=*&order=id.asc`, { headers: supabaseHeaders }).then(r => r.ok ? r.json() : []),
+      fetchCatalogo(),
       fetchPbxEnCaliente(),
       fetchCelularEnCaliente(),
-      fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/llamadas_teams?select=*&order=fecha_reunion.desc.nullslast`, { headers: supabaseHeaders }).then(r => r.ok ? r.json() : []),
-      Promise.all(
-        waOffsets.map((offset) =>
-          fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/llamadas_whatsapp?select=*&order=fecha_llamada.desc.nullslast&offset=${offset}&limit=1000`, { headers: supabaseHeaders }).then(r => r.ok ? r.json() : [])
-        )
-      ).then(pages => pages.flat()),
+      fetchTeams(),
+      fetchWhatsappVercel(forzar, incluirHistorico),
       fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
         headers: PROSPEKTIA_HEADERS,
         cache: 'no-store',
@@ -778,7 +856,7 @@ export default async function handler(req: any, res: any) {
         'SV';
     });
 
-    return res.status(200).json({
+    const payloadFinal = {
       exito: true,
       timestamp: Date.now(),
       estadisticas: {
@@ -799,9 +877,29 @@ export default async function handler(req: any, res: any) {
         llamadasTeams,
         llamadasWhatsapp,
       },
-    });
+    };
+    if (!incluirHistorico) {
+      cacheDatosVercel = { data: payloadFinal, timestamp: Date.now() };
+    }
+    return payloadFinal;
+  })();
+
+  if (!incluirHistorico) {
+    promiseDatosVercel = ejecutar;
+  }
+
+  try {
+    const payload = await ejecutar;
+    return res.status(200).json(payload);
   } catch (error: any) {
     console.error('Error en /api/sync/datos-completos (Vercel):', error);
+    if (cacheDatosVercel) {
+      return res.status(200).json(cacheDatosVercel.data);
+    }
     return res.status(500).json({ exito: false, error: error.message });
+  } finally {
+    if (!incluirHistorico) {
+      promiseDatosVercel = null;
+    }
   }
 }

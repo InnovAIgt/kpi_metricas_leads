@@ -162,6 +162,25 @@ async function fetchProspektiaNoCalificadosPaginado(maxTotal = 10000): Promise<a
   return todos;
 }
 
+const COLS_CATALOGO = 'id,pais,nombre_ejecutivo,usuario,extension,celular';
+let cacheCatalogoProspektia: { data: any[]; timestamp: number } | null = null;
+const CACHE_CATALOGO_TTL_MS = 5 * 60 * 1000;
+
+async function fetchCatalogoWarm(): Promise<any[]> {
+  if (cacheCatalogoProspektia && Date.now() - cacheCatalogoProspektia.timestamp < CACHE_CATALOGO_TTL_MS) {
+    return cacheCatalogoProspektia.data;
+  }
+  const rows = await fetch(
+    `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo?select=${COLS_CATALOGO}&order=id.asc&limit=500`,
+    { headers: supabaseHeaders }
+  )
+    .then((r) => (r.ok ? r.json() : []))
+    .catch(() => []);
+  const arr = Array.isArray(rows) ? rows : [];
+  cacheCatalogoProspektia = { data: arr, timestamp: Date.now() };
+  return arr;
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -175,11 +194,7 @@ export default async function handler(req: any, res: any) {
   const tInicio = Date.now();
   try {
     const [catalogoRes, prospektiaRes, prospektiaNcItems] = await Promise.all([
-      fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/catalogo?select=*&order=id.asc`, {
-        headers: supabaseHeaders,
-      })
-        .then((r) => (r.ok ? r.json() : []))
-        .catch(() => []),
+      fetchCatalogoWarm(),
       fetch('https://prospektia.red.com.sv/api/external/leads-calificados', {
         headers: PROSPEKTIA_HEADERS,
         cache: 'no-store',

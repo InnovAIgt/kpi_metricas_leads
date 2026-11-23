@@ -18,6 +18,7 @@ import {
   Volume2,
   Headphones,
   Download,
+  FileText,
 } from 'lucide-react';
 import { CruceAuditoria, ModoLeads, ParametrosAuditoria } from '../types';
 import { PARAMETROS_DEFAULT } from '../data/mockData';
@@ -30,6 +31,7 @@ import {
   formatLocalDate,
 } from '../utils/dateHelpers';
 import { exportarLibroExcel } from '../utils/excelExport';
+import { exportarLibroPdf } from '../utils/pdfExport';
 import { construirHojasKpiExcel } from '../utils/kpiExcelBuilder';
 import { SemaforoCumplimiento } from './SemaforoCumplimiento';
 
@@ -312,27 +314,43 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
   const totalAuditables = total - pendientes;
   const pctCumplimiento = totalAuditables > 0 ? Math.round((aTiempo / totalAuditables) * 100) : (total > 0 ? 100 : 0);
 
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+
+  const construirHojasKpi = () => {
+    const crucesExport = vendedorSeleccionado ? leadsParaDetalle : crucesConFecha;
+    return construirHojasKpiExcel({
+      cruces: crucesExport,
+      parametros,
+      esNoCalificado,
+      fechaInicio,
+      fechaFin,
+      paisFiltro,
+      asesorFiltro: vendedorSeleccionado,
+      extraInfo: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
+    });
+  };
+
   const handleExportarExcel = async () => {
     setExportando(true);
     try {
-      const crucesExport = vendedorSeleccionado ? leadsParaDetalle : crucesConFecha;
-      const hojas = construirHojasKpiExcel({
-        cruces: crucesExport,
-        parametros,
-        esNoCalificado,
-        fechaInicio,
-        fechaFin,
-        paisFiltro,
-        asesorFiltro: vendedorSeleccionado,
-        extraInfo: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
-      });
-
       await exportarLibroExcel(
-        `KPI_Cumplimiento_${esNoCalificado ? 'NoCalificados' : 'Calificados'}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
-        hojas
+        `KPI_Cumplimiento_${esNoCalificado ? 'NoCalificados' : 'Calificados'}_${paisFiltro}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        construirHojasKpi()
       );
     } finally {
       setExportando(false);
+    }
+  };
+
+  const handleExportarPdf = async () => {
+    setExportandoPdf(true);
+    try {
+      await exportarLibroPdf(
+        `KPI_Cumplimiento_${esNoCalificado ? 'NoCalificados' : 'Calificados'}_${paisFiltro}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        construirHojasKpi()
+      );
+    } finally {
+      setExportandoPdf(false);
     }
   };
 
@@ -386,6 +404,16 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
             >
               <Download className="h-4 w-4" />
               <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportarPdf}
+              disabled={exportandoPdf || leadsParaDetalle.length === 0}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              title="Descargar resumen por asesor, detalle y criterios en PDF"
+            >
+              <FileText className="h-4 w-4" />
+              <span>{exportandoPdf ? 'PDF...' : 'Descargar PDF'}</span>
             </button>
             <div className="px-4 py-2 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 rounded-xl text-right tabular-nums">
               <div className="text-[10px] uppercase font-bold text-rose-700 dark:text-rose-300">Tasa Global a Tiempo</div>
@@ -444,6 +472,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
       <SemaforoCumplimiento
         cruces={crucesConFecha}
         esNoCalificado={esNoCalificado}
+        paisFiltro={paisFiltro}
         parametros={parametros}
         onVerTranscripcion={onVerTranscripcion}
         titulo={`Semáforo KPI 1 · ${esNoCalificado ? 'Leads No Calificados' : 'Leads Calificados'}`}

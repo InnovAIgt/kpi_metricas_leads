@@ -41,6 +41,7 @@ import {
   triggerEdgeFunction,
 } from './services/apiService';
 import { exportarLibroExcel } from './utils/excelExport';
+import { exportarLibroPdf } from './utils/pdfExport';
 import { construirHojasKpiExcel } from './utils/kpiExcelBuilder';
 import { Sidebar } from './components/Sidebar';
 import { VistaDashboard } from './components/VistaDashboard';
@@ -67,6 +68,7 @@ import {
   Building2,
   Headphones,
   Download,
+  FileText,
 } from 'lucide-react';
 
 export default function App() {
@@ -235,6 +237,7 @@ export default function App() {
   );
   const [paisResumen, setPaisResumen] = useState<'TODOS' | 'SV' | 'GT'>('TODOS');
   const [exportandoResumen, setExportandoResumen] = useState(false);
+  const [exportandoResumenPdf, setExportandoResumenPdf] = useState(false);
   const [sincronizando, setSincronizando] = useState(false);
   const [sincronizandoProspektia, setSincronizandoProspektia] = useState(false);
   const sincronizandoProspektiaRef = useRef(false);
@@ -801,23 +804,38 @@ export default function App() {
     return calcularMetricasPorVendedor(crucesResumenFiltrados);
   }, [crucesResumenFiltrados]);
 
+  const construirHojasResumen = () => {
+    return construirHojasKpiExcel({
+      cruces: crucesResumenFiltrados,
+      parametros,
+      esNoCalificado: modoLeads === 'no_calificados',
+      fechaInicio: fechaInicioResumen,
+      fechaFin: fechaFinResumen,
+      paisFiltro: paisResumen,
+    });
+  };
+
   const handleExportarResumenExcel = async () => {
     setExportandoResumen(true);
     try {
-      const hojas = construirHojasKpiExcel({
-        cruces: crucesResumenFiltrados,
-        parametros,
-        esNoCalificado: modoLeads === 'no_calificados',
-        fechaInicio: fechaInicioResumen,
-        fechaFin: fechaFinResumen,
-        paisFiltro: paisResumen,
-      });
       await exportarLibroExcel(
-        `Resumen_KPIs_${modoLeads}_${fechaInicioResumen || 'inicio'}_${fechaFinResumen || formatLocalDate()}`,
-        hojas
+        `Resumen_KPIs_${modoLeads}_${paisResumen}_${fechaInicioResumen || 'inicio'}_${fechaFinResumen || formatLocalDate()}`,
+        construirHojasResumen()
       );
     } finally {
       setExportandoResumen(false);
+    }
+  };
+
+  const handleExportarResumenPdf = async () => {
+    setExportandoResumenPdf(true);
+    try {
+      await exportarLibroPdf(
+        `Resumen_KPIs_${modoLeads}_${paisResumen}_${fechaInicioResumen || 'inicio'}_${fechaFinResumen || formatLocalDate()}`,
+        construirHojasResumen()
+      );
+    } finally {
+      setExportandoResumenPdf(false);
     }
   };
 
@@ -1968,6 +1986,15 @@ export default function App() {
                     <Download className="h-3.5 w-3.5" />
                     <span>{exportandoResumen ? 'Generando...' : 'Descargar Excel'}</span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={handleExportarResumenPdf}
+                    disabled={exportandoResumenPdf}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-sm transition-all disabled:opacity-50 cursor-pointer shrink-0"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    <span>{exportandoResumenPdf ? 'PDF...' : 'Descargar PDF'}</span>
+                  </button>
                 </div>
               </div>
 
@@ -1989,6 +2016,7 @@ export default function App() {
                 cruces={crucesResumenFiltrados}
                 parametros={parametros}
                 esNoCalificado={modoLeads === 'no_calificados'}
+                paisFiltro={paisResumen}
                 onVerTranscripcion={(cruce) => setLlamadaParaTranscripcion(cruce)}
                 onVerDetalleCruce={() => setVistaActiva('kpi_cumplimiento')}
                 onCambiarTab={() => {}}
@@ -1997,6 +2025,8 @@ export default function App() {
                 vendedores={metricasVendedores}
                 fechaInicio={fechaInicioResumen}
                 fechaFin={fechaFinResumen}
+                esNoCalificado={modoLeads === 'no_calificados'}
+                paisFiltro={paisResumen}
               />
             </div>
           )}
@@ -2017,6 +2047,7 @@ export default function App() {
           {vistaActiva === 'kpi_sla' && (
             <VistaKpiSla
               citas={citasActivas}
+              cruces={crucesAuditoriaTodos}
               onActualizarLeadKpi={(id, cambios) => {
                 const match = citasActivas.find((c) => c.id === id);
                 return handleActualizarLeadKpi(id, cambios, match?.codigo_prospecto);
@@ -2029,6 +2060,7 @@ export default function App() {
           {vistaActiva === 'kpi_retroalimentacion' && (
             <VistaKpiRetroalimentacion
               citas={citasActivas}
+              cruces={crucesAuditoriaTodos}
               onActualizarLeadKpi={(id, cambios) => {
                 const match = citasActivas.find((c) => c.id === id);
                 return handleActualizarLeadKpi(id, cambios, match?.codigo_prospecto);

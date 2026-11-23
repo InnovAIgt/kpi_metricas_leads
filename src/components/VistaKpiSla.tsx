@@ -1,24 +1,32 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Shield, Search, Download } from 'lucide-react';
-import { Cita, ModoLeads } from '../types';
+import { Shield, Search, Download, FileText } from 'lucide-react';
+import { Cita, CruceAuditoria, ModoLeads } from '../types';
 import { ColumnFilterDropdown } from './ColumnFilterDropdown';
 import { DateRangeFilter } from './DateRangeFilter';
 import { getRangoDefaultLeads, formatLocalDate } from '../utils/dateHelpers';
 import { exportarLibroExcel, formatearSubtituloExportacion } from '../utils/excelExport';
+import { exportarLibroPdf } from '../utils/pdfExport';
+import {
+  formatearAlcanceLeads,
+  obtenerCanalLlamadaLabel,
+} from '../utils/kpiExcelBuilder';
 
 interface VistaKpiSlaProps {
   citas: Cita[];
+  cruces?: CruceAuditoria[];
   onActualizarLeadKpi: (leadId: string, cambios: Partial<Cita>) => Promise<boolean>;
   tipoLeadActual?: ModoLeads;
 }
 
 export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
   citas,
+  cruces = [],
   onActualizarLeadKpi,
   tipoLeadActual = 'calificados',
 }) => {
   const [busqueda, setBusqueda] = useState('');
   const [exportando, setExportando] = useState(false);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
   const rangoInicial = getRangoDefaultLeads();
   const [fechaInicio, setFechaInicio] = useState(rangoInicial.inicio);
   const [fechaFin, setFechaFin] = useState(rangoInicial.fin);
@@ -148,77 +156,115 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
   const e2Ok = citasConFecha.filter((c) => c.kpi_sla_etapa_2).length;
   const e3Ok = citasConFecha.filter((c) => c.kpi_sla_etapa_3).length;
 
+  const canalPorLeadId = useMemo(() => {
+    const mapa = new Map<string, string>();
+    cruces.forEach((cr) => {
+      const canal = obtenerCanalLlamadaLabel(cr);
+      if (cr.cita?.id) mapa.set(String(cr.cita.id), canal);
+      if (cr.cita?.codigo_prospecto) mapa.set(String(cr.cita.codigo_prospecto), canal);
+      if (cr.id) mapa.set(String(cr.id), canal);
+    });
+    return mapa;
+  }, [cruces]);
+
+  const construirHojasSla = () => {
+    const fTotal = filtrados.length;
+    const fe1 = filtrados.filter((c) => c.kpi_sla_etapa_1).length;
+    const fe2 = filtrados.filter((c) => c.kpi_sla_etapa_2).length;
+    const fe3 = filtrados.filter((c) => c.kpi_sla_etapa_3).length;
+    const alcance = formatearAlcanceLeads(tipoLeadActual === 'no_calificados', paisFiltro);
+
+    return [
+      {
+        name: 'Resumen SLA Etapas',
+        title: `KPI 2: Resumen SLA de Etapas — ${alcance}`,
+        subtitle: formatearSubtituloExportacion({
+          fechaInicio,
+          fechaFin,
+          totalFilas: fTotal,
+          modo: alcance,
+        }),
+        accentHex: 'D97706',
+        columns: [
+          { header: 'Etapa', key: 'etapa', width: 32 },
+          { header: 'Cumplen', key: 'cumplen', align: 'right' as const },
+          { header: 'Total Filtrados', key: 'total', align: 'right' as const },
+          { header: '% Cumplimiento', key: 'pct', numFmt: '0%', align: 'right' as const },
+        ],
+        rows: [
+          { etapa: 'SLA Etapa 1 (Primer Contacto)', cumplen: fe1, total: fTotal, pct: fTotal > 0 ? fe1 / fTotal : 0 },
+          { etapa: 'SLA Etapa 2 (Seguimiento Inicial)', cumplen: fe2, total: fTotal, pct: fTotal > 0 ? fe2 / fTotal : 0 },
+          { etapa: 'SLA Etapa 3 (Cierre / Oferta)', cumplen: fe3, total: fTotal, pct: fTotal > 0 ? fe3 / fTotal : 0 },
+        ],
+      },
+      {
+        name: 'Detalle Leads SLA',
+        title: `Detalle de SLA por Lead — ${alcance}`,
+        subtitle: formatearSubtituloExportacion({
+          fechaInicio,
+          fechaFin,
+          totalFilas: fTotal,
+          modo: alcance,
+          extra: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
+        }),
+        accentHex: '1E293B',
+        columns: [
+          { header: 'Código', key: 'codigo_prospecto', value: (c: Cita) => c.codigo_prospecto || c.id },
+          { header: 'Prospecto / Lead', key: 'prospecto_nombre', width: 28 },
+          { header: 'Teléfono', key: 'prospecto_telefono', width: 16 },
+          { header: 'Asesor', key: 'vendedor_nombre', width: 24 },
+          {
+            header: 'Fecha / Hora',
+            key: 'fecha_hora_programada',
+            value: (c: Cita) =>
+              c.fecha_agendada && c.hora_agendada
+                ? `${c.fecha_agendada} ${c.hora_agendada}`
+                : c.fecha_hora_programada
+                ? c.fecha_hora_programada.replace('T', ' ').slice(0, 16)
+                : 'N/D',
+            align: 'center' as const,
+          },
+          { header: 'País', key: 'pais', value: (c: Cita) => c.pais || 'SV', align: 'center' as const },
+          {
+            header: 'Canal de Llamada',
+            key: 'canal_llamada',
+            width: 16,
+            value: (c: Cita) =>
+              canalPorLeadId.get(String(c.id)) ||
+              (c.codigo_prospecto ? canalPorLeadId.get(String(c.codigo_prospecto)) : undefined) ||
+              'Sin llamada',
+            align: 'center' as const,
+          },
+          { header: 'SLA Etapa 1', key: 'kpi_sla_etapa_1', value: (c: Cita) => (c.kpi_sla_etapa_1 ? 'Sí' : 'No'), semantic: 'boolean' as const, align: 'center' as const },
+          { header: 'SLA Etapa 2', key: 'kpi_sla_etapa_2', value: (c: Cita) => (c.kpi_sla_etapa_2 ? 'Sí' : 'No'), semantic: 'boolean' as const, align: 'center' as const },
+          { header: 'SLA Etapa 3', key: 'kpi_sla_etapa_3', value: (c: Cita) => (c.kpi_sla_etapa_3 ? 'Sí' : 'No'), semantic: 'boolean' as const, align: 'center' as const },
+        ],
+        rows: filtrados,
+      },
+    ];
+  };
+
   const handleExportarExcel = async () => {
     setExportando(true);
     try {
-      const fTotal = filtrados.length;
-      const fe1 = filtrados.filter((c) => c.kpi_sla_etapa_1).length;
-      const fe2 = filtrados.filter((c) => c.kpi_sla_etapa_2).length;
-      const fe3 = filtrados.filter((c) => c.kpi_sla_etapa_3).length;
-
       await exportarLibroExcel(
-        `KPI_2_SLA_Etapas_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
-        [
-          {
-            name: 'Resumen SLA Etapas',
-            title: 'KPI 2: Resumen SLA de Etapas',
-            subtitle: formatearSubtituloExportacion({
-              fechaInicio,
-              fechaFin,
-              totalFilas: fTotal,
-              modo: tipoLeadActual === 'no_calificados' ? 'Leads No Calificados' : 'Leads Calificados',
-            }),
-            accentHex: 'D97706',
-            columns: [
-              { header: 'Etapa', key: 'etapa', width: 32 },
-              { header: 'Cumplen', key: 'cumplen', align: 'right' },
-              { header: 'Total Filtrados', key: 'total', align: 'right' },
-              { header: '% Cumplimiento', key: 'pct', numFmt: '0%', align: 'right' },
-            ],
-            rows: [
-              { etapa: 'SLA Etapa 1 (Primer Contacto)', cumplen: fe1, total: fTotal, pct: fTotal > 0 ? fe1 / fTotal : 0 },
-              { etapa: 'SLA Etapa 2 (Seguimiento Inicial)', cumplen: fe2, total: fTotal, pct: fTotal > 0 ? fe2 / fTotal : 0 },
-              { etapa: 'SLA Etapa 3 (Cierre / Oferta)', cumplen: fe3, total: fTotal, pct: fTotal > 0 ? fe3 / fTotal : 0 },
-            ],
-          },
-          {
-            name: 'Detalle Leads SLA',
-            title: 'Detalle de SLA por Lead',
-            subtitle: formatearSubtituloExportacion({
-              fechaInicio,
-              fechaFin,
-              totalFilas: fTotal,
-              modo: tipoLeadActual === 'no_calificados' ? 'Leads No Calificados' : 'Leads Calificados',
-              extra: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
-            }),
-            accentHex: '1E293B',
-            columns: [
-              { header: 'Código', key: 'codigo_prospecto', value: (c) => c.codigo_prospecto || c.id },
-              { header: 'Prospecto / Lead', key: 'prospecto_nombre', width: 28 },
-              { header: 'Teléfono', key: 'prospecto_telefono', width: 16 },
-              { header: 'Asesor', key: 'vendedor_nombre', width: 24 },
-              {
-                header: 'Fecha / Hora',
-                key: 'fecha_hora_programada',
-                value: (c) =>
-                  c.fecha_agendada && c.hora_agendada
-                    ? `${c.fecha_agendada} ${c.hora_agendada}`
-                    : c.fecha_hora_programada
-                    ? c.fecha_hora_programada.replace('T', ' ').slice(0, 16)
-                    : 'N/D',
-                align: 'center',
-              },
-              { header: 'País', key: 'pais', value: (c) => c.pais || 'SV', align: 'center' },
-              { header: 'SLA Etapa 1', key: 'kpi_sla_etapa_1', value: (c) => (c.kpi_sla_etapa_1 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
-              { header: 'SLA Etapa 2', key: 'kpi_sla_etapa_2', value: (c) => (c.kpi_sla_etapa_2 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
-              { header: 'SLA Etapa 3', key: 'kpi_sla_etapa_3', value: (c) => (c.kpi_sla_etapa_3 ? 'Sí' : 'No'), semantic: 'boolean', align: 'center' },
-            ],
-            rows: filtrados,
-          },
-        ]
+        `KPI_2_SLA_Etapas_${paisFiltro}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        construirHojasSla()
       );
     } finally {
       setExportando(false);
+    }
+  };
+
+  const handleExportarPdf = async () => {
+    setExportandoPdf(true);
+    try {
+      await exportarLibroPdf(
+        `KPI_2_SLA_Etapas_${paisFiltro}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        construirHojasSla()
+      );
+    } finally {
+      setExportandoPdf(false);
     }
   };
 
@@ -262,6 +308,16 @@ export const VistaKpiSla: React.FC<VistaKpiSlaProps> = ({
             >
               <Download className="h-3.5 w-3.5" />
               <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportarPdf}
+              disabled={exportandoPdf || filtrados.length === 0}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              title="Descargar resumen y detalle filtrado en PDF"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>{exportandoPdf ? 'PDF...' : 'Descargar PDF'}</span>
             </button>
             <div className="text-xs font-mono tabular-nums text-slate-700 dark:text-slate-400 bg-slate-100 dark:bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800">
               {filtrados.length} / {total} Leads

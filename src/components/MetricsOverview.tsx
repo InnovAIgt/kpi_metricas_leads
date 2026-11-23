@@ -13,6 +13,7 @@ interface MetricsOverviewProps {
   cruces: CruceAuditoria[];
   parametros: ParametrosAuditoria;
   esNoCalificado?: boolean;
+  paisFiltro?: string;
   onVerTranscripcion?: (cruce: CruceAuditoria) => void;
   onVerDetalleCruce: (cruceId: string) => void;
   onCambiarTab: (tab: 'cruces' | 'vendedores') => void;
@@ -23,6 +24,7 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
   cruces,
   parametros,
   esNoCalificado = false,
+  paisFiltro,
   onVerTranscripcion,
   onVerDetalleCruce,
   onCambiarTab,
@@ -44,6 +46,7 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
       <SemaforoCumplimiento
         cruces={cruces}
         esNoCalificado={esNoCalificado}
+        paisFiltro={paisFiltro}
         parametros={parametros}
         onVerTranscripcion={onVerTranscripcion}
         titulo="Semáforo de Cumplimiento · Resumen KPIs"

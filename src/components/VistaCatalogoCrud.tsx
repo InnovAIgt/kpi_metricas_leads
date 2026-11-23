@@ -6,11 +6,13 @@ import {
   Trash2,
   Search,
   Download,
+  FileText,
   AlertCircle,
   Check,
   X,
 } from 'lucide-react';
 import { exportarTablaAExcel, formatearSubtituloExportacion } from '../utils/excelExport';
+import { exportarTablaAPdf } from '../utils/pdfExport';
 import { formatLocalDate } from '../utils/dateHelpers';
 
 export interface CatalogoItem {
@@ -41,6 +43,7 @@ export const VistaCatalogoCrud: React.FC<VistaCatalogoCrudProps> = ({
   const [eliminandoId, setEliminandoId] = useState<string | null>(null);
   const [errorCrud, setErrorCrud] = useState<string | null>(null);
   const [exportando, setExportando] = useState(false);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
 
   const filtrados = catalogo.filter((c) => {
     const q = busqueda.toLowerCase().trim();
@@ -117,35 +120,46 @@ export const VistaCatalogoCrud: React.FC<VistaCatalogoCrudProps> = ({
     }
   };
 
+  const construirHojaCatalogo = () => ({
+    name: 'Catálogo Asesores',
+    title: 'Catálogo de Asesores / Ejecutivos — SV y GT',
+    subtitle: formatearSubtituloExportacion({
+      totalFilas: filtrados.length,
+      modo: 'Catálogo (CRUD)',
+      extra: busqueda.trim() ? `Filtro búsqueda: "${busqueda.trim()}"` : undefined,
+    }),
+    accentHex: '4F46E5',
+    columns: [
+      { header: 'Nombre Ejecutivo', key: 'nombre_ejecutivo', width: 28 },
+      {
+        header: 'País',
+        key: 'pais',
+        width: 18,
+        value: (r: CatalogoItem) => (r.pais === 'GT' ? 'Guatemala (GT)' : 'El Salvador (SV)'),
+        align: 'center' as const,
+      },
+      { header: 'Usuario PBX / Sistema', key: 'usuario', width: 22 },
+      { header: 'Extensión PBX', key: 'extension', width: 16, align: 'center' as const },
+      { header: 'Teléfono Celular', key: 'celular', width: 20, align: 'center' as const },
+    ],
+    rows: filtrados,
+  });
+
   const handleExportarExcel = async () => {
     setExportando(true);
     try {
-      await exportarTablaAExcel(`Catalogo_Asesores_${formatLocalDate()}`, {
-        name: 'Catálogo Asesores',
-        title: 'Catálogo de Asesores / Ejecutivos',
-        subtitle: formatearSubtituloExportacion({
-          totalFilas: filtrados.length,
-          modo: 'Catálogo (CRUD)',
-          extra: busqueda.trim() ? `Filtro búsqueda: "${busqueda.trim()}"` : undefined,
-        }),
-        accentHex: '4F46E5',
-        columns: [
-          { header: 'Nombre Ejecutivo', key: 'nombre_ejecutivo', width: 28 },
-          {
-            header: 'País',
-            key: 'pais',
-            width: 18,
-            value: (r) => (r.pais === 'GT' ? 'Guatemala (GT)' : 'El Salvador (SV)'),
-            align: 'center',
-          },
-          { header: 'Usuario PBX / Sistema', key: 'usuario', width: 22 },
-          { header: 'Extensión PBX', key: 'extension', width: 16, align: 'center' },
-          { header: 'Teléfono Celular', key: 'celular', width: 20, align: 'center' },
-        ],
-        rows: filtrados,
-      });
+      await exportarTablaAExcel(`Catalogo_Asesores_${formatLocalDate()}`, construirHojaCatalogo());
     } finally {
       setExportando(false);
+    }
+  };
+
+  const handleExportarPdf = async () => {
+    setExportandoPdf(true);
+    try {
+      await exportarTablaAPdf(`Catalogo_Asesores_${formatLocalDate()}`, construirHojaCatalogo());
+    } finally {
+      setExportandoPdf(false);
     }
   };
 
@@ -178,6 +192,17 @@ export const VistaCatalogoCrud: React.FC<VistaCatalogoCrudProps> = ({
             >
               <Download className="h-4 w-4" />
               <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExportarPdf}
+              disabled={exportandoPdf || filtrados.length === 0}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50"
+              title="Descargar catálogo filtrado en PDF"
+            >
+              <FileText className="h-4 w-4" />
+              <span>{exportandoPdf ? 'PDF...' : 'Descargar PDF'}</span>
             </button>
 
             <button

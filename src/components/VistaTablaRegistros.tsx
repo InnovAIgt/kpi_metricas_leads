@@ -32,6 +32,8 @@ import {
   formatearSubtituloExportacion,
   ExcelColumn,
 } from '../utils/excelExport';
+import { exportarTablaAPdf } from '../utils/pdfExport';
+import { formatearPaisAlcance } from '../utils/kpiExcelBuilder';
 
 export interface ColumnaDef {
   clave: string;
@@ -88,6 +90,7 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
 }) => {
   const [busqueda, setBusqueda] = useState('');
   const [exportando, setExportando] = useState(false);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
   const [fechaInicio, setFechaInicio] = useState(() => getRangoDefaultLeads().inicio);
   const [fechaFin, setFechaFin] = useState(() => getRangoDefaultLeads().fin);
 
@@ -557,66 +560,90 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
     setSoloConReunion(false);
   };
 
+  const construirHojaTabla = () => {
+    const excelCols: ExcelColumn<any>[] = columnas.map((col) => {
+      const esBool =
+        col.clave.startsWith('kpi_sla_') || col.clave.startsWith('kpi_retroalimentacion_');
+      const esStatus = col.clave === 'estado' || col.clave === 'estado_teams' || col.clave === 'status';
+      return {
+        header: col.grupo ? `${col.grupo} - ${col.etiqueta}` : col.etiqueta,
+        key: col.clave,
+        semantic: esBool ? 'boolean' : esStatus ? 'status' : undefined,
+        value: (fila) => {
+          if (col.exportValue) return col.exportValue(fila[col.clave], fila);
+          if (col.clave === 'consultar') {
+            const dur = Number(fila.duracion_segundos || fila.duracion || 0);
+            const est = String(fila.estado || '').toUpperCase();
+            const noCont = est.includes('NO CONTESTADA') || est.includes('OCUPADA') || est.includes('FALLIDA') || dur === 0;
+            return noCont ? 'Sin audio (0s)' : 'Disponible';
+          }
+          const raw = fila[col.clave];
+          if (typeof raw === 'boolean') return raw ? 'Sí' : 'No';
+          return raw;
+        },
+      };
+    });
+
+    const paisAlcance = tieneColumnaPais ? ` de ${formatearPaisAlcance(paisFiltroRapido)}` : '';
+    const tituloConAlcance = `${titulo}${paisAlcance}`;
+
+    const nombreLimpio = tituloConAlcance
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '_')
+      .replace(/^_|_$/g, '');
+
+    return {
+      nombreLimpio,
+      sheet: {
+        name: titulo.slice(0, 31),
+        title: tituloConAlcance,
+        subtitle: formatearSubtituloExportacion({
+          fechaInicio,
+          fechaFin,
+          totalFilas: filtrados.length,
+          modo: `${subtitulo}${paisAlcance}`,
+          extra: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
+        }),
+        accentHex:
+          icono === 'pbx'
+            ? 'DC2626'
+            : icono === 'celular'
+            ? '2563EB'
+            : icono === 'whatsapp'
+            ? '059669'
+            : icono === 'teams'
+            ? '7C3AED'
+            : 'D97706',
+        columns: excelCols,
+        rows: filtrados,
+      },
+    };
+  };
+
   const handleExportarExcel = async () => {
     setExportando(true);
     try {
-      const excelCols: ExcelColumn<any>[] = columnas.map((col) => {
-        const esBool =
-          col.clave.startsWith('kpi_sla_') || col.clave.startsWith('kpi_retroalimentacion_');
-        const esStatus = col.clave === 'estado' || col.clave === 'estado_teams' || col.clave === 'status';
-        return {
-          header: col.grupo ? `${col.grupo} - ${col.etiqueta}` : col.etiqueta,
-          key: col.clave,
-          semantic: esBool ? 'boolean' : esStatus ? 'status' : undefined,
-          value: (fila) => {
-            if (col.exportValue) return col.exportValue(fila[col.clave], fila);
-            if (col.clave === 'consultar') {
-              const dur = Number(fila.duracion_segundos || fila.duracion || 0);
-              const est = String(fila.estado || '').toUpperCase();
-              const noCont = est.includes('NO CONTESTADA') || est.includes('OCUPADA') || est.includes('FALLIDA') || dur === 0;
-              return noCont ? 'Sin audio (0s)' : 'Disponible';
-            }
-            const raw = fila[col.clave];
-            if (typeof raw === 'boolean') return raw ? 'Sí' : 'No';
-            return raw;
-          },
-        };
-      });
-
-      const nombreLimpio = titulo
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-zA-Z0-9]+/g, '_')
-        .replace(/^_|_$/g, '');
-
+      const { nombreLimpio, sheet } = construirHojaTabla();
       await exportarTablaAExcel(
         `${nombreLimpio}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
-        {
-          name: titulo.slice(0, 31),
-          title: titulo,
-          subtitle: formatearSubtituloExportacion({
-            fechaInicio,
-            fechaFin,
-            totalFilas: filtrados.length,
-            modo: subtitulo,
-            extra: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
-          }),
-          accentHex:
-            icono === 'pbx'
-              ? 'DC2626'
-              : icono === 'celular'
-              ? '2563EB'
-              : icono === 'whatsapp'
-              ? '059669'
-              : icono === 'teams'
-              ? '7C3AED'
-              : 'D97706',
-          columns: excelCols,
-          rows: filtrados,
-        }
+        sheet
       );
     } finally {
       setExportando(false);
+    }
+  };
+
+  const handleExportarPdf = async () => {
+    setExportandoPdf(true);
+    try {
+      const { nombreLimpio, sheet } = construirHojaTabla();
+      await exportarTablaAPdf(
+        `${nombreLimpio}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        sheet
+      );
+    } finally {
+      setExportandoPdf(false);
     }
   };
 
@@ -710,6 +737,16 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
             >
               <Download className="h-3.5 w-3.5" />
               <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportarPdf}
+              disabled={exportandoPdf || filtrados.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              title="Descargar los registros filtrados en PDF"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>{exportandoPdf ? 'PDF...' : 'Descargar PDF'}</span>
             </button>
             <div className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono tabular-nums text-slate-700 dark:text-slate-300">
               {filtrados.length} / {datos.length} registros

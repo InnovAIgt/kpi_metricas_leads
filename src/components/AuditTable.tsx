@@ -17,9 +17,15 @@ import {
   PhoneForwarded,
   Headphones,
   Download,
+  FileText,
 } from 'lucide-react';
 import { CruceAuditoria, EstadoCumplimiento } from '../types';
 import { exportarTablaAExcel, formatearSubtituloExportacion } from '../utils/excelExport';
+import { exportarTablaAPdf } from '../utils/pdfExport';
+import {
+  etiquetaSemaforoCruce,
+  obtenerCanalLlamadaLabel,
+} from '../utils/kpiExcelBuilder';
 import { formatLocalDate } from '../utils/dateHelpers';
 
 interface AuditTableProps {
@@ -40,6 +46,37 @@ export const AuditTable: React.FC<AuditTableProps> = ({
   const [notasSupervisor, setNotasSupervisor] = useState<{ [id: string]: string }>({});
   const [reproduciendoAudio, setReproduciendoAudio] = useState<string | null>(null);
   const [exportando, setExportando] = useState(false);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+
+  const construirHojaCruces = () => ({
+    name: 'Cruces Auditoría',
+    title: 'Detalle de Cruces de Auditoría KPI',
+    subtitle: formatearSubtituloExportacion({
+      totalFilas: crucesFiltrados.length,
+      modo: 'Cruces Filtrados',
+    }),
+    accentHex: '1E293B',
+    columns: [
+      {
+        header: 'Semáforo',
+        key: 'estado_cumplimiento',
+        width: 22,
+        value: (c: CruceAuditoria) => etiquetaSemaforoCruce(c.estado_cumplimiento).etiquetaSemaforo,
+        semantic: 'semaforo' as const,
+        align: 'center' as const,
+      },
+      { header: 'Prospecto', key: 'prospecto_nombre', width: 26 },
+      { header: 'Teléfono', key: 'telefono', width: 16 },
+      { header: 'Vendedor', key: 'vendedor_nombre', width: 24 },
+      { header: 'Cita Programada', key: 'fecha_cita', value: (c: CruceAuditoria) => (c.fecha_cita ? c.fecha_cita.replace('T', ' ').slice(0, 16) : '-'), align: 'center' as const },
+      { header: 'Llamada Real', key: 'fecha_llamada', value: (c: CruceAuditoria) => (c.fecha_llamada ? c.fecha_llamada.replace('T', ' ').slice(0, 16) : 'Sin registro'), align: 'center' as const },
+      { header: 'Canal de Llamada', key: 'canal_utilizado', width: 16, value: (c: CruceAuditoria) => obtenerCanalLlamadaLabel(c), align: 'center' as const },
+      { header: 'Duración', key: 'duracion_llamada_segundos', value: (c: CruceAuditoria) => formatearSegundos(c.duracion_llamada_segundos), align: 'center' as const },
+      { header: 'Desfase (min)', key: 'desfase_minutos', value: (c: CruceAuditoria) => c.desfase_minutos ?? '-', align: 'right' as const },
+      { header: 'Diagnóstico', key: 'explicacion', width: 42, wrapText: true },
+    ],
+    rows: crucesFiltrados,
+  });
 
   // Lista única de vendedores para el selector
   const listaVendedores = Array.from(new Set(cruces.map((c) => c.vendedor_nombre))).filter(Boolean);
@@ -210,27 +247,7 @@ export const AuditTable: React.FC<AuditTableProps> = ({
               onClick={async () => {
                 setExportando(true);
                 try {
-                  await exportarTablaAExcel(`Detalle_Cruces_${formatLocalDate()}`, {
-                    name: 'Cruces Auditoría',
-                    title: 'Detalle de Cruces de Auditoría',
-                    subtitle: formatearSubtituloExportacion({
-                      totalFilas: crucesFiltrados.length,
-                      modo: 'Cruces Filtrados',
-                    }),
-                    accentHex: '1E293B',
-                    columns: [
-                      { header: 'Prospecto', key: 'prospecto_nombre', width: 26 },
-                      { header: 'Teléfono', key: 'telefono', width: 16 },
-                      { header: 'Vendedor', key: 'vendedor_nombre', width: 24 },
-                      { header: 'Cita Programada', key: 'fecha_cita', value: (c) => (c.fecha_cita ? c.fecha_cita.replace('T', ' ').slice(0, 16) : '-'), align: 'center' },
-                      { header: 'Llamada Real', key: 'fecha_llamada', value: (c) => (c.fecha_llamada ? c.fecha_llamada.replace('T', ' ').slice(0, 16) : 'Sin registro'), align: 'center' },
-                      { header: 'Duración', key: 'duracion_llamada_segundos', value: (c) => formatearSegundos(c.duracion_llamada_segundos), align: 'center' },
-                      { header: 'Desfase (min)', key: 'desfase_minutos', value: (c) => c.desfase_minutos ?? '-', align: 'right' },
-                      { header: 'Cumplimiento', key: 'estado_cumplimiento', semantic: 'status', align: 'center' },
-                      { header: 'Diagnóstico', key: 'explicacion', width: 42 },
-                    ],
-                    rows: crucesFiltrados,
-                  });
+                  await exportarTablaAExcel(`Detalle_Cruces_${formatLocalDate()}`, construirHojaCruces());
                 } finally {
                   setExportando(false);
                 }
@@ -240,6 +257,23 @@ export const AuditTable: React.FC<AuditTableProps> = ({
             >
               <Download className="h-3.5 w-3.5" />
               <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                setExportandoPdf(true);
+                try {
+                  await exportarTablaAPdf(`Detalle_Cruces_${formatLocalDate()}`, construirHojaCruces());
+                } finally {
+                  setExportandoPdf(false);
+                }
+              }}
+              disabled={exportandoPdf || crucesFiltrados.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>{exportandoPdf ? 'PDF...' : 'Descargar PDF'}</span>
             </button>
           </div>
         </div>

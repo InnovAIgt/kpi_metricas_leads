@@ -6,6 +6,7 @@ import {
   CalendarCheck,
   CheckCircle2,
   Download,
+  FileText,
   Globe2,
   Headphones,
   MessageSquare,
@@ -43,7 +44,11 @@ import {
 import {
   exportarLibroExcel,
 } from '../utils/excelExport';
-import { construirHojasKpiExcel } from '../utils/kpiExcelBuilder';
+import { exportarLibroPdf } from '../utils/pdfExport';
+import {
+  construirHojasKpiExcel,
+  formatearAlcanceLeads,
+} from '../utils/kpiExcelBuilder';
 import { SemaforoCumplimiento } from './SemaforoCumplimiento';
 import {
   DashboardGraficas,
@@ -125,6 +130,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
   );
   const [paisFiltro, setPaisFiltro] = useState<'TODOS' | 'SV' | 'GT'>('TODOS');
   const [exportando, setExportando] = useState(false);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
 
   const tolAntes = parametros.tolerancia_anticipacion_minutos ?? 15;
   const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 15;
@@ -474,44 +480,58 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
       .slice(0, 8);
   }, [crucesFiltrados]);
 
+  const construirHojasDashboard = () => {
+    const alcanceLabel = formatearAlcanceLeads(!esCalificado, paisFiltro);
+    return construirHojasKpiExcel({
+      cruces: crucesFiltrados,
+      parametros,
+      esNoCalificado: !esCalificado,
+      fechaInicio,
+      fechaFin,
+      paisFiltro,
+      extraInfo: `Llamadas período: ${llamadasEnPeriodo.length} (PBX ${canalesPeriodo.PBX} · Cel ${canalesPeriodo.Celular} · WA ${canalesPeriodo.WhatsApp} · Teams ${canalesPeriodo.Teams})`,
+      hojasExtra: [
+        {
+          name: 'Comparativa Mensual',
+          title: `Comparativa Mensual — ${alcanceLabel}`,
+          subtitle: `Histórico mensual (${alcanceLabel})`,
+          accentHex: '059669',
+          columns: [
+            { header: 'Mes', key: 'labelLargo', width: 22 },
+            { header: 'Total Leads', key: 'total', align: 'right' },
+            { header: 'Auditables', key: 'auditables', align: 'right' },
+            { header: 'A Tiempo (Verde)', key: 'aTiempo', align: 'right', columnTint: 'verde' },
+            { header: 'Tarde / Otro Día (Amarillo)', key: 'tarde', align: 'right', columnTint: 'amarillo' },
+            { header: 'No Llamó (Rojo)', key: 'noLlamo', align: 'right', columnTint: 'rojo' },
+            { header: '% Cumplimiento', key: 'pctCumplimiento', value: (r) => r.pctCumplimiento / 100, numFmt: '0%', align: 'right' },
+          ],
+          rows: comparativaMensual,
+        },
+      ],
+    });
+  };
+
   const handleExportarDashboard = async () => {
     setExportando(true);
     try {
-      const modoLabel = esCalificado ? 'Leads Calificados' : 'Leads No Calificados';
-      const hojasKpi = construirHojasKpiExcel({
-        cruces: crucesFiltrados,
-        parametros,
-        esNoCalificado: !esCalificado,
-        fechaInicio,
-        fechaFin,
-        paisFiltro,
-        extraInfo: `Llamadas período: ${llamadasEnPeriodo.length} (PBX ${canalesPeriodo.PBX} · Cel ${canalesPeriodo.Celular} · WA ${canalesPeriodo.WhatsApp} · Teams ${canalesPeriodo.Teams})`,
-        hojasExtra: [
-          {
-            name: 'Comparativa Mensual',
-            title: `Comparativa Mensual — ${modoLabel}`,
-            subtitle: `Histórico mensual (${paisFiltro === 'TODOS' ? 'SV + GT' : paisFiltro})`,
-            accentHex: '059669',
-            columns: [
-              { header: 'Mes', key: 'labelLargo', width: 22 },
-              { header: 'Total Leads', key: 'total', align: 'right' },
-              { header: 'Auditables', key: 'auditables', align: 'right' },
-              { header: 'A Tiempo (Verde)', key: 'aTiempo', align: 'right', columnTint: 'verde' },
-              { header: 'Tarde / Otro Día (Amarillo)', key: 'tarde', align: 'right', columnTint: 'amarillo' },
-              { header: 'No Llamó (Rojo)', key: 'noLlamo', align: 'right', columnTint: 'rojo' },
-              { header: '% Cumplimiento', key: 'pctCumplimiento', value: (r) => r.pctCumplimiento / 100, numFmt: '0%', align: 'right' },
-            ],
-            rows: comparativaMensual,
-          },
-        ],
-      });
-
       await exportarLibroExcel(
-        `Dashboard_KPI_${esCalificado ? 'Calificados' : 'NoCalificados'}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
-        hojasKpi
+        `Dashboard_KPI_${esCalificado ? 'Calificados' : 'NoCalificados'}_${paisFiltro}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        construirHojasDashboard()
       );
     } finally {
       setExportando(false);
+    }
+  };
+
+  const handleExportarDashboardPdf = async () => {
+    setExportandoPdf(true);
+    try {
+      await exportarLibroPdf(
+        `Dashboard_KPI_${esCalificado ? 'Calificados' : 'NoCalificados'}_${paisFiltro}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        construirHojasDashboard()
+      );
+    } finally {
+      setExportandoPdf(false);
     }
   };
 
@@ -619,6 +639,16 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
             <Download className="h-3.5 w-3.5" />
             <span>{exportando ? 'Generando...' : 'Descargar Excel'}</span>
           </button>
+
+          <button
+            type="button"
+            onClick={handleExportarDashboardPdf}
+            disabled={exportandoPdf}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-sm shadow-rose-600/20 transition-all disabled:opacity-50 cursor-pointer"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            <span>{exportandoPdf ? 'Generando PDF...' : 'Descargar PDF'}</span>
+          </button>
         </div>
       </div>
 
@@ -640,6 +670,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
       <SemaforoCumplimiento
         cruces={crucesFiltrados}
         esNoCalificado={!esCalificado}
+        paisFiltro={paisFiltro}
         parametros={parametros}
         onVerTranscripcion={onVerTranscripcion}
         titulo={`Semáforo de Cumplimiento · ${esCalificado ? 'Leads Calificados' : 'Leads No Calificados'}`}

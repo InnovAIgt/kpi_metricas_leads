@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
+  FileText,
   Headphones,
   Search,
   X,
@@ -11,14 +12,20 @@ import { CruceAuditoria, ParametrosAuditoria } from '../types';
 import { PARAMETROS_DEFAULT } from '../data/mockData';
 import { normalizarTipoReunion } from '../utils/leadValidation';
 import { exportarTablaAExcel, formatearSubtituloExportacion } from '../utils/excelExport';
+import { exportarTablaAPdf } from '../utils/pdfExport';
 import { formatLocalDate } from '../utils/dateHelpers';
-import { etiquetaSemaforoCruce } from '../utils/kpiExcelBuilder';
+import {
+  etiquetaSemaforoCruce,
+  formatearAlcanceLeads,
+  obtenerCanalLlamadaLabel,
+} from '../utils/kpiExcelBuilder';
 
 export type SemaforoGrupoKey = 'ROJO' | 'AMARILLO' | 'VERDE';
 
 interface SemaforoCumplimientoProps {
   cruces: CruceAuditoria[];
   esNoCalificado?: boolean;
+  paisFiltro?: string;
   parametros?: ParametrosAuditoria;
   onVerTranscripcion?: (cruce: CruceAuditoria) => void;
   titulo?: string;
@@ -54,6 +61,7 @@ function obtenerHoraObjetivoStr(c: CruceAuditoria): string {
 export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
   cruces,
   esNoCalificado = false,
+  paisFiltro,
   parametros = PARAMETROS_DEFAULT,
   onVerTranscripcion,
   titulo = 'Semáforo de Cumplimiento',
@@ -63,6 +71,7 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
   const [busquedaDetalle, setBusquedaDetalle] = useState('');
   const [filtroAsesorDetalle, setFiltroAsesorDetalle] = useState('TODOS');
   const [exportandoGrupo, setExportandoGrupo] = useState(false);
+  const [exportandoGrupoPdf, setExportandoGrupoPdf] = useState(false);
 
   const tolAntes = parametros.tolerancia_anticipacion_minutos ?? 15;
   const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 15;
@@ -194,46 +203,60 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
             'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800/60',
         };
 
+  const construirHojaGrupo = () => {
+    const alcanceLabel = formatearAlcanceLeads(esNoCalificado, paisFiltro);
+    return {
+      name: `Semáforo ${colorActivo}`,
+      title: `${infoColorActivo.titulo} — ${alcanceLabel}`,
+      subtitle: formatearSubtituloExportacion({
+        totalFilas: listaActiva.length,
+        modo: alcanceLabel,
+        extra: filtroAsesorDetalle !== 'TODOS' ? `Ejecutivo: ${filtroAsesorDetalle}` : undefined,
+      }),
+      accentHex: infoColorActivo.accentHex,
+      columns: [
+        {
+          header: 'Semáforo',
+          key: 'semaforo',
+          width: 22,
+          value: (c: CruceAuditoria) => etiquetaSemaforoCruce(c.estado_cumplimiento).etiquetaSemaforo,
+          semantic: 'semaforo' as const,
+          align: 'center' as const,
+        },
+        { header: 'Código', key: 'codigo', width: 15, value: (c: CruceAuditoria) => c.cita?.codigo_prospecto || c.id },
+        { header: 'Prospecto', key: 'prospecto_nombre', width: 28 },
+        { header: 'Teléfono', key: 'telefono', width: 16 },
+        { header: 'País', key: 'pais', width: 10, value: (c: CruceAuditoria) => String(c.pais || c.cita?.pais || 'SV').toUpperCase(), align: 'center' as const },
+        { header: 'Ejecutivo', key: 'vendedor_nombre', width: 26 },
+        { header: 'Tipo Reunión', key: 'tipo_reunion', width: 20, value: (c: CruceAuditoria) => normalizarTipoReunion(c.cita?.tipo_reunion) },
+        { header: 'Fecha Objetivo', key: 'fecha_obj', width: 15, value: (c: CruceAuditoria) => obtenerFechaObjetivoStr(c), align: 'center' as const },
+        { header: 'Hora Objetivo', key: 'hora_obj', width: 13, value: (c: CruceAuditoria) => obtenerHoraObjetivoStr(c), align: 'center' as const },
+        { header: 'Llamada Real', key: 'fecha_llamada', width: 20, value: (c: CruceAuditoria) => (c.fecha_llamada ? c.fecha_llamada.replace('T', ' ').slice(0, 19) : 'Sin registro'), align: 'center' as const },
+        { header: 'Canal de Llamada', key: 'canal_utilizado', width: 16, value: (c: CruceAuditoria) => obtenerCanalLlamadaLabel(c), align: 'center' as const },
+        { header: 'Desfase (min)', key: 'desfase_minutos', width: 15, value: (c: CruceAuditoria) => c.desfase_minutos ?? '-', align: 'right' as const },
+        { header: 'Diagnóstico', key: 'explicacion', width: 46, wrapText: true },
+      ],
+      rows: listaActiva,
+    };
+  };
+
   const handleExportarGrupo = async () => {
     if (!colorActivo || listaActiva.length === 0) return;
     setExportandoGrupo(true);
     try {
-      await exportarTablaAExcel(`Semaforo_${colorActivo}_${formatLocalDate()}`, {
-        name: `Semáforo ${colorActivo}`,
-        title: infoColorActivo.titulo,
-        subtitle: formatearSubtituloExportacion({
-          totalFilas: listaActiva.length,
-          modo: esNoCalificado ? 'Leads No Calificados' : 'Leads Calificados',
-          extra: filtroAsesorDetalle !== 'TODOS' ? `Ejecutivo: ${filtroAsesorDetalle}` : undefined,
-        }),
-        accentHex: infoColorActivo.accentHex,
-        columns: [
-          {
-            header: 'Semáforo',
-            key: 'semaforo',
-            width: 22,
-            value: (c) => etiquetaSemaforoCruce(c.estado_cumplimiento).etiquetaSemaforo,
-            semantic: 'semaforo',
-            align: 'center',
-          },
-          { header: 'Código', key: 'codigo', width: 15, value: (c) => c.cita?.codigo_prospecto || c.id },
-          { header: 'Prospecto', key: 'prospecto_nombre', width: 28 },
-          { header: 'Teléfono', key: 'telefono', width: 16 },
-          { header: 'País', key: 'pais', width: 10, value: (c) => String(c.pais || c.cita?.pais || 'SV').toUpperCase(), align: 'center' },
-          { header: 'Ejecutivo', key: 'vendedor_nombre', width: 26 },
-          { header: 'Tipo Reunión', key: 'tipo_reunion', width: 20, value: (c) => normalizarTipoReunion(c.cita?.tipo_reunion) },
-          { header: 'Fecha Objetivo', key: 'fecha_obj', width: 15, value: (c) => obtenerFechaObjetivoStr(c), align: 'center' },
-          { header: 'Hora Objetivo', key: 'hora_obj', width: 13, value: (c) => obtenerHoraObjetivoStr(c), align: 'center' },
-          { header: 'Llamada Real', key: 'fecha_llamada', width: 20, value: (c) => (c.fecha_llamada ? c.fecha_llamada.replace('T', ' ').slice(0, 19) : 'Sin registro'), align: 'center' },
-          { header: 'Canal', key: 'canal_utilizado', width: 14, value: (c) => c.canal_utilizado || 'Sin llamada', align: 'center' },
-          { header: 'Desfase (min)', key: 'desfase_minutos', width: 15, value: (c) => c.desfase_minutos ?? '-', align: 'right' },
-          { header: 'Tipificación', key: 'tip', width: 20, value: (c) => ETIQUETA_TIPIFICACION[c.estado_cumplimiento] || c.estado_cumplimiento, semantic: 'status', align: 'center' },
-          { header: 'Diagnóstico', key: 'explicacion', width: 46, wrapText: true },
-        ],
-        rows: listaActiva,
-      });
+      await exportarTablaAExcel(`Semaforo_${colorActivo}_${formatLocalDate()}`, construirHojaGrupo());
     } finally {
       setExportandoGrupo(false);
+    }
+  };
+
+  const handleExportarGrupoPdf = async () => {
+    if (!colorActivo || listaActiva.length === 0) return;
+    setExportandoGrupoPdf(true);
+    try {
+      await exportarTablaAPdf(`Semaforo_${colorActivo}_${formatLocalDate()}`, construirHojaGrupo());
+    } finally {
+      setExportandoGrupoPdf(false);
     }
   };
 
@@ -512,6 +535,16 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
               >
                 <Download className="h-3.5 w-3.5" />
                 <span>{exportandoGrupo ? 'Exportando...' : 'Excel grupo'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportarGrupoPdf}
+                disabled={exportandoGrupoPdf || listaActiva.length === 0}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span>{exportandoGrupoPdf ? 'PDF...' : 'PDF grupo'}</span>
               </button>
 
               <button

@@ -38,7 +38,7 @@ function sanitizarNombreHoja(nombre: string, fallback: string, usados: Set<strin
   return final;
 }
 
-function resolverColorSemantico(
+export function resolverColorSemantico(
   valorStr: string,
   tipo: 'status' | 'boolean' | 'semaforo'
 ): { fillHex: string; textHex: string } | null {
@@ -81,7 +81,7 @@ function resolverColorSemantico(
     }
   }
 
-  // Semántico de estados (A Tiempo = Verde, Tarde Leve/Retraso Grave = Amarillo, No Llamó = Rojo)
+  // Semántico de estados (A Tiempo = Verde, Tarde = Amarillo, No Llamó = Rojo)
   if (
     v.includes('a tiempo') ||
     v.includes('excelente') ||
@@ -143,7 +143,7 @@ function resolverColorSemantico(
   return null;
 }
 
-const TINT_COLORS: Record<'verde' | 'amarillo' | 'rojo', { headerBg: string; cellBg: string; textHex: string }> = {
+export const TINT_COLORS: Record<'verde' | 'amarillo' | 'rojo', { headerBg: string; cellBg: string; textHex: string }> = {
   verde: { headerBg: 'FF15803D', cellBg: 'FFF0FDF4', textHex: 'FF166534' },
   amarillo: { headerBg: 'FFCA8A04', cellBg: 'FFFEFCE8', textHex: 'FF854D0E' },
   rojo: { headerBg: 'FFB91C1C', cellBg: 'FFFEF2F2', textHex: 'FF991B1B' },

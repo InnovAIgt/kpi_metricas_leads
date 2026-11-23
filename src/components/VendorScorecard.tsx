@@ -1,13 +1,17 @@
 import React, { useState } from 'react';
-import { Trophy, Award, AlertTriangle, Download } from 'lucide-react';
+import { Trophy, Award, AlertTriangle, Download, FileText } from 'lucide-react';
 import { VendedorMetricas } from '../types';
 import { exportarTablaAExcel, formatearSubtituloExportacion } from '../utils/excelExport';
+import { exportarTablaAPdf } from '../utils/pdfExport';
+import { formatearAlcanceLeads } from '../utils/kpiExcelBuilder';
 import { formatLocalDate } from '../utils/dateHelpers';
 
 interface VendorScorecardProps {
   vendedores: VendedorMetricas[];
   fechaInicio?: string;
   fechaFin?: string;
+  esNoCalificado?: boolean;
+  paisFiltro?: string;
   onSeleccionarVendedor?: (vendedorId: string) => void;
 }
 
@@ -15,41 +19,61 @@ export const VendorScorecard: React.FC<VendorScorecardProps> = ({
   vendedores,
   fechaInicio,
   fechaFin,
+  esNoCalificado = false,
+  paisFiltro,
 }) => {
   const [exportando, setExportando] = useState(false);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+
+  const construirHoja = () => {
+    const alcance = formatearAlcanceLeads(esNoCalificado, paisFiltro);
+    return {
+      name: 'Ranking Vendedores',
+      title: `Ranking y Scorecard de Cumplimiento — ${alcance}`,
+      subtitle: formatearSubtituloExportacion({
+        fechaInicio,
+        fechaFin,
+        totalFilas: vendedores.length,
+        modo: `Scorecard (${alcance})`,
+      }),
+      accentHex: 'D97706',
+      columns: [
+        { header: 'Asesor / Ejecutivo', key: 'vendedor_nombre', width: 28 },
+        { header: 'Rol', key: 'rol', width: 20 },
+        { header: 'Total Citas', key: 'total_citas', align: 'right' as const },
+        { header: 'A Tiempo', key: 'citas_a_tiempo', align: 'right' as const, columnTint: 'verde' as const },
+        { header: 'Tarde', key: 'citas_tarde', align: 'right' as const, columnTint: 'amarillo' as const },
+        { header: 'No Llamó', key: 'citas_no_llamo', align: 'right' as const, columnTint: 'rojo' as const },
+        { header: '% Cumplimiento', key: 'tasa_cumplimiento_pct', value: (v: VendedorMetricas) => v.tasa_cumplimiento_pct / 100, numFmt: '0%', align: 'right' as const },
+        { header: 'Desfase Medio (min)', key: 'promedio_desfase_minutos', align: 'right' as const },
+        { header: 'Duración Media (min)', key: 'duracion_promedio_minutos', align: 'right' as const },
+        { header: 'Score', key: 'score_rendimiento', semantic: 'status' as const, align: 'center' as const },
+      ],
+      rows: vendedores,
+    };
+  };
 
   const handleExportarExcel = async () => {
     setExportando(true);
     try {
       await exportarTablaAExcel(
         `Ranking_Vendedores_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
-        {
-          name: 'Ranking Vendedores',
-          title: 'Ranking y Scorecard de Cumplimiento por Asesor',
-          subtitle: formatearSubtituloExportacion({
-            fechaInicio,
-            fechaFin,
-            totalFilas: vendedores.length,
-            modo: 'Scorecard de Vendedores',
-          }),
-          accentHex: 'D97706',
-          columns: [
-            { header: 'Asesor / Ejecutivo', key: 'vendedor_nombre', width: 28 },
-            { header: 'Rol', key: 'rol', width: 20 },
-            { header: 'Total Citas', key: 'total_citas', align: 'right' },
-            { header: 'A Tiempo', key: 'citas_a_tiempo', align: 'right' },
-            { header: 'Tarde', key: 'citas_tarde', align: 'right' },
-            { header: 'No Llamó', key: 'citas_no_llamo', align: 'right' },
-            { header: '% Cumplimiento', key: 'tasa_cumplimiento_pct', value: (v) => v.tasa_cumplimiento_pct / 100, numFmt: '0%', align: 'right' },
-            { header: 'Desfase Medio (min)', key: 'promedio_desfase_minutos', align: 'right' },
-            { header: 'Duración Media (min)', key: 'duracion_promedio_minutos', align: 'right' },
-            { header: 'Score', key: 'score_rendimiento', semantic: 'status', align: 'center' },
-          ],
-          rows: vendedores,
-        }
+        construirHoja()
       );
     } finally {
       setExportando(false);
+    }
+  };
+
+  const handleExportarPdf = async () => {
+    setExportandoPdf(true);
+    try {
+      await exportarTablaAPdf(
+        `Ranking_Vendedores_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        construirHoja()
+      );
+    } finally {
+      setExportandoPdf(false);
     }
   };
 
@@ -91,6 +115,15 @@ export const VendorScorecard: React.FC<VendorScorecardProps> = ({
           >
             <Download className="h-3.5 w-3.5" />
             <span>{exportando ? 'Exportando...' : 'Descargar Excel'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleExportarPdf}
+            disabled={exportandoPdf || vendedores.length === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            <span>{exportandoPdf ? 'PDF...' : 'Descargar PDF'}</span>
           </button>
         </div>
       </div>

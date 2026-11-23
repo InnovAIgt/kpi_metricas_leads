@@ -33,7 +33,9 @@ import {
 import { exportarLibroExcel } from '../utils/excelExport';
 import { exportarLibroPdf } from '../utils/pdfExport';
 import { construirHojasKpiExcel } from '../utils/kpiExcelBuilder';
-import { SemaforoCumplimiento } from './SemaforoCumplimiento';
+import { SemaforoCumplimiento, claseBadgeHorarioIngreso } from './SemaforoCumplimiento';
+import { obtenerEjecutivosPorPais, coincideAsesorFiltro } from '../utils/paisHelpers';
+import { clasificarHorarioIngreso, obtenerTimestampCreacionLead } from '../utils/matchingEngine';
 
 interface VistaKpiCumplimientoProps {
   cruces: CruceAuditoria[];
@@ -54,9 +56,20 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
 }) => {
   const esNoCalificado = tipoLeadActual === 'no_calificados';
   const tolAntes = parametros?.tolerancia_anticipacion_minutos ?? 15;
-  const tolDespues = parametros?.tolerancia_retraso_a_tiempo_minutos ?? 15;
-  const etiquetaTol = tolAntes === tolDespues ? `±${tolDespues} min` : `-${tolAntes}/+${tolDespues} min`;
-  const etiquetaTolCorta = tolAntes === tolDespues ? `±${tolDespues}m` : `-${tolAntes}/+${tolDespues}m`;
+  const tolDespues = parametros?.tolerancia_retraso_a_tiempo_minutos ?? 20;
+  const umbralGrave = parametros?.umbral_retraso_grave_minutos ?? 120;
+  const hIni = parametros?.horario_laboral_inicio || '08:00';
+  const hFin = parametros?.horario_laboral_fin || '18:00';
+  const etiquetaTol = esNoCalificado
+    ? `≤${tolDespues} min`
+    : tolAntes === tolDespues
+    ? `±${tolDespues} min`
+    : `-${tolAntes}/+${tolDespues} min`;
+  const etiquetaTolCorta = esNoCalificado
+    ? `≤${tolDespues}m`
+    : tolAntes === tolDespues
+    ? `±${tolDespues}m`
+    : `-${tolAntes}/+${tolDespues}m`;
   const etiquetaATiempoEstado = `A Tiempo (${etiquetaTol})`;
   const etiquetaAdelantadaEstado = `Adelantada (>${tolAntes}m)`;
 
@@ -66,7 +79,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
   const [fechaInicio, setFechaInicio] = useState(() => getRangoDefaultLeads().inicio);
   const [fechaFin, setFechaFin] = useState(() => getRangoDefaultLeads().fin);
 
-  // Vendedor seleccionado para ver sus leads detallados
+  // Vendedor/ejecutivo seleccionado para filtrar todo el módulo
   const [vendedorSeleccionado, setVendedorSeleccionado] = useState<string | null>(null);
 
   // Fila enfocada / resaltada al hacer clic para inspeccionar por qué no cumplió
@@ -99,8 +112,8 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
 
   const tieneFiltroFechas = Boolean(fechaInicio || fechaFin);
 
-  // Aplicar rango de fechas y país considerando cualquiera de las fechas del lead (agendada o creado)
-  const crucesConFecha = useMemo(() => {
+  // Aplicar rango de fechas y país (antes de filtrar ejecutivo para poblar selector dinámico)
+  const crucesSoloFechaPais = useMemo(() => {
     return crucesCitas.filter((c) => {
       if (paisFiltro !== 'TODOS') {
         const paisLead = String(c.pais || c.cita?.pais || 'SV').toUpperCase();
@@ -123,7 +136,30 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
     });
   }, [crucesCitas, fechaInicio, fechaFin, paisFiltro]);
 
-  // Agrupar por vendedor para la lista inicial solicitada
+  // Ejecutivos disponibles según país seleccionado
+  const asesoresDisponibles = useMemo(() => {
+    return obtenerEjecutivosPorPais(catalogo, crucesSoloFechaPais, paisFiltro);
+  }, [catalogo, crucesSoloFechaPais, paisFiltro]);
+
+  // Si cambia el país y el ejecutivo seleccionado no pertenece al nuevo país, resetear
+  useEffect(() => {
+    if (
+      vendedorSeleccionado &&
+      !asesoresDisponibles.some((a) => coincideAsesorFiltro(a, vendedorSeleccionado, catalogo))
+    ) {
+      setVendedorSeleccionado(null);
+    }
+  }, [paisFiltro, asesoresDisponibles, vendedorSeleccionado, catalogo]);
+
+  // Cruces finales filtrados por fechas + país + ejecutivo
+  const crucesConFecha = useMemo(() => {
+    if (!vendedorSeleccionado) return crucesSoloFechaPais;
+    return crucesSoloFechaPais.filter((c) =>
+      coincideAsesorFiltro(vendedorSeleccionado, c.vendedor_nombre || 'Sin Asignar', catalogo)
+    );
+  }, [crucesSoloFechaPais, vendedorSeleccionado, catalogo]);
+
+  // Agrupar por vendedor para las tarjetas comparativas (también respetando el filtro de ejecutivo)
   const vendedoresAgrupados = useMemo(() => {
     const mapa = new Map<
       string,
@@ -132,11 +168,11 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
         cruces: CruceAuditoria[];
         total: number;
         aTiempo: number;
-        conRetraso: number;
+        tardeLeve: number;
+        tardeGrave: number;
         llamoOtroDia: number;
         noLlamo: number;
         pendientes: number;
-        corta: number;
         adelantada: number;
         pctCumplimiento: number;
       }
@@ -150,11 +186,11 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
           cruces: [],
           total: 0,
           aTiempo: 0,
-          conRetraso: 0,
+          tardeLeve: 0,
+          tardeGrave: 0,
           llamoOtroDia: 0,
           noLlamo: 0,
           pendientes: 0,
-          corta: 0,
           adelantada: 0,
           pctCumplimiento: 0,
         });
@@ -164,13 +200,17 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
       item.cruces.push(c);
       item.total++;
 
-      if (c.estado_cumplimiento === 'A_TIEMPO' || c.estado_cumplimiento === 'ADELANTADA') {
+      if (c.estado_cumplimiento === 'A_TIEMPO') {
         item.aTiempo++;
+      } else if (c.estado_cumplimiento === 'ADELANTADA') {
+        item.adelantada++;
       } else if (
         c.estado_cumplimiento === 'TARDE_LEVE' ||
-        c.estado_cumplimiento === 'TARDE_GRAVE'
+        c.estado_cumplimiento === 'LLAMADA_CORTA'
       ) {
-        item.conRetraso++;
+        item.tardeLeve++;
+      } else if (c.estado_cumplimiento === 'TARDE_GRAVE') {
+        item.tardeGrave++;
       } else if (c.estado_cumplimiento === 'LLAMO_OTRO_DIA') {
         item.llamoOtroDia++;
       } else if (c.estado_cumplimiento === 'NO_LLAMO') {
@@ -181,8 +221,9 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
     });
 
     mapa.forEach((item) => {
-      const auditables = item.total - item.pendientes;
-      item.pctCumplimiento = auditables > 0 ? Math.round((item.aTiempo / auditables) * 100) : (item.total > 0 ? 100 : 0);
+      const enSemaforo = item.aTiempo + item.tardeLeve + item.tardeGrave;
+      item.pctCumplimiento =
+        enSemaforo > 0 ? Math.round((item.aTiempo / enSemaforo) * 100) : item.total > 0 ? 0 : 0;
     });
 
     return Array.from(mapa.values()).sort((a, b) => b.total - a.total);
@@ -191,9 +232,6 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
   // Leads a mostrar en la tabla de detalle
   const leadsParaDetalle = useMemo(() => {
     let lista = crucesConFecha;
-    if (vendedorSeleccionado) {
-      lista = lista.filter((c) => (c.vendedor_nombre || 'Sin Asignar') === vendedorSeleccionado);
-    }
 
     // Filtro global de búsqueda
     if (busqueda.trim()) {
@@ -204,6 +242,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
           c.telefono.includes(q) ||
           (c.vendedor_nombre && c.vendedor_nombre.toLowerCase().includes(q)) ||
           (c.canal_utilizado && c.canal_utilizado.toLowerCase().includes(q)) ||
+          (c.horario_ingreso_tipo && c.horario_ingreso_tipo.toLowerCase().includes(q)) ||
           c.explicacion.toLowerCase().includes(q)
       );
     }
@@ -226,15 +265,21 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
           const p = fila.pais || fila.cita?.pais || 'SV';
           valorFila = p === 'GT' ? 'Guatemala (GT)' : 'El Salvador (SV)';
         }
+        else if (clave === 'horario_ingreso') {
+          valorFila =
+            fila.horario_ingreso_tipo ||
+            clasificarHorarioIngreso(obtenerTimestampCreacionLead(fila.cita), hIni, hFin);
+        }
         else if (clave === 'canal') valorFila = String(fila.canal_utilizado || 'Sin llamada').trim();
         else if (clave === 'estado') {
           if (fila.estado_cumplimiento === 'A_TIEMPO') valorFila = etiquetaATiempoEstado;
           else if (
             fila.estado_cumplimiento === 'TARDE_LEVE' ||
-            fila.estado_cumplimiento === 'TARDE_GRAVE' ||
             fila.estado_cumplimiento === 'LLAMADA_CORTA'
           ) {
-            valorFila = 'Tarde';
+            valorFila = 'Tarde Leve (Amarillo)';
+          } else if (fila.estado_cumplimiento === 'TARDE_GRAVE') {
+            valorFila = 'Tarde Grave (Rojo)';
           } else if (fila.estado_cumplimiento === 'LLAMO_OTRO_DIA') valorFila = 'Llamó Otro Día';
           else if (fila.estado_cumplimiento === 'NO_LLAMO') valorFila = 'No Llamó';
           else if (fila.estado_cumplimiento === 'PENDIENTE') valorFila = 'Pendiente (Próxima)';
@@ -255,19 +300,18 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
       const strB = `${fB}T${hB}`;
       return strB.localeCompare(strA);
     });
-  }, [crucesConFecha, vendedorSeleccionado, busqueda, filtrosColumnas, etiquetaATiempoEstado, etiquetaAdelantadaEstado]);
+  }, [crucesConFecha, busqueda, filtrosColumnas, etiquetaATiempoEstado, etiquetaAdelantadaEstado, hIni, hFin]);
 
   // Valores únicos para cada filtro checklist
   const valoresUnicosPorColumna = useMemo(() => {
-    const orig = vendedorSeleccionado
-      ? crucesConFecha.filter((c) => (c.vendedor_nombre || 'Sin Asignar') === vendedorSeleccionado)
-      : crucesConFecha;
+    const orig = crucesConFecha;
 
     const estados = new Set<string>();
     const canales = new Set<string>();
     const vendedores = new Set<string>();
     const prospectos = new Set<string>();
     const paises = new Set<string>();
+    const horarios = new Set<string>();
 
     orig.forEach((c) => {
       if (c.prospecto_nombre) prospectos.add(String(c.prospecto_nombre).trim());
@@ -275,14 +319,19 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
       canales.add(String(c.canal_utilizado || 'Sin llamada').trim());
       const p = c.pais || c.cita?.pais || 'SV';
       paises.add(p === 'GT' ? 'Guatemala (GT)' : 'El Salvador (SV)');
+      horarios.add(
+        c.horario_ingreso_tipo ||
+          clasificarHorarioIngreso(obtenerTimestampCreacionLead(c.cita), hIni, hFin)
+      );
 
       if (c.estado_cumplimiento === 'A_TIEMPO') estados.add(etiquetaATiempoEstado);
       else if (
         c.estado_cumplimiento === 'TARDE_LEVE' ||
-        c.estado_cumplimiento === 'TARDE_GRAVE' ||
         c.estado_cumplimiento === 'LLAMADA_CORTA'
       ) {
-        estados.add('Tarde');
+        estados.add('Tarde Leve (Amarillo)');
+      } else if (c.estado_cumplimiento === 'TARDE_GRAVE') {
+        estados.add('Tarde Grave (Rojo)');
       } else if (c.estado_cumplimiento === 'LLAMO_OTRO_DIA') estados.add('Llamó Otro Día');
       else if (c.estado_cumplimiento === 'NO_LLAMO') estados.add('No Llamó');
       else if (c.estado_cumplimiento === 'PENDIENTE') estados.add('Pendiente (Próxima)');
@@ -293,33 +342,36 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
       prospectos: Array.from(prospectos).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' })),
       vendedores: Array.from(vendedores).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' })),
       paises: Array.from(paises).sort(),
+      horarios: Array.from(horarios).sort(),
       canales: Array.from(canales).sort(),
       estados: Array.from(estados).sort(),
     };
-  }, [crucesConFecha, vendedorSeleccionado, etiquetaATiempoEstado, etiquetaAdelantadaEstado]);
+  }, [crucesConFecha, etiquetaATiempoEstado, etiquetaAdelantadaEstado, hIni, hFin]);
 
   // KPIs del conjunto actual
   const total = crucesConFecha.length;
-  const aTiempo = crucesConFecha.filter(
-    (c) => c.estado_cumplimiento === 'A_TIEMPO' || c.estado_cumplimiento === 'ADELANTADA'
+  const aTiempo = crucesConFecha.filter((c) => c.estado_cumplimiento === 'A_TIEMPO').length;
+  const tardeLeve = crucesConFecha.filter(
+    (c) => c.estado_cumplimiento === 'TARDE_LEVE' || c.estado_cumplimiento === 'LLAMADA_CORTA'
   ).length;
-  const tarde = crucesConFecha.filter(
-    (c) => c.estado_cumplimiento === 'TARDE_LEVE' || c.estado_cumplimiento === 'TARDE_GRAVE'
+  const tardeGrave = crucesConFecha.filter(
+    (c) => c.estado_cumplimiento === 'TARDE_GRAVE'
   ).length;
+  const adelantada = crucesConFecha.filter((c) => c.estado_cumplimiento === 'ADELANTADA').length;
   const llamoOtroDia = crucesConFecha.filter(
     (c) => c.estado_cumplimiento === 'LLAMO_OTRO_DIA'
   ).length;
   const noLlamo = crucesConFecha.filter((c) => c.estado_cumplimiento === 'NO_LLAMO').length;
   const pendientes = crucesConFecha.filter((c) => c.estado_cumplimiento === 'PENDIENTE').length;
-  const totalAuditables = total - pendientes;
-  const pctCumplimiento = totalAuditables > 0 ? Math.round((aTiempo / totalAuditables) * 100) : (total > 0 ? 100 : 0);
+  const totalSemaforo = aTiempo + tardeLeve + tardeGrave;
+  const pctCumplimiento =
+    totalSemaforo > 0 ? Math.round((aTiempo / totalSemaforo) * 100) : 0;
 
   const [exportandoPdf, setExportandoPdf] = useState(false);
 
   const construirHojasKpi = () => {
-    const crucesExport = vendedorSeleccionado ? leadsParaDetalle : crucesConFecha;
     return construirHojasKpiExcel({
-      cruces: crucesExport,
+      cruces: leadsParaDetalle.length > 0 && busqueda.trim() ? leadsParaDetalle : crucesConFecha,
       parametros,
       esNoCalificado,
       fechaInicio,
@@ -369,11 +421,15 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
             <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 max-w-3xl">
               {esNoCalificado ? (
                 <>
-                  Regla de asignación: Al ingresar un lead, los ejecutivos tienen <strong>1 hora</strong> para llamarle dentro de horario laboral (8:00 AM a 6:00 PM). Si ingresó fuera de horario o en fin de semana, tienen chance de llamarle hasta las <strong>9:00 AM del siguiente día hábil</strong> (lunes si entró en fin de semana).
+                  Validador: <strong>Verde (A Tiempo)</strong> hasta <strong>{tolDespues} min</strong> (minuto {tolDespues} incluido);{' '}
+                  <strong>Amarillo (Tarde Leve)</strong> del minuto {tolDespues + 1} al {umbralGrave - 1};{' '}
+                  <strong>Rojo (Tarde Grave)</strong> desde <strong>{umbralGrave} min</strong> (2 horas exactas incluidas). Sáb/Dom y viernes ≥16:30 inician conteo lunes {hIni}.
                 </>
               ) : (
                 <>
-                  Auditoría en tiempo real: Compara la hora agendada en Leads contra los registros de llamadas (PBX, Celular, WhatsApp y Teams) con ventana de <strong>{etiquetaTol}</strong> ({tolAntes} min antes a {tolDespues} min después) dentro del horario laboral de {parametros.horario_laboral_inicio} a {parametros.horario_laboral_fin} (Lunes a Viernes).
+                  Auditoría en tiempo real: <strong>Verde</strong> ventana -{tolAntes}/+{tolDespues} min (minuto {tolDespues} incluido);{' '}
+                  <strong>Amarillo (Tarde Leve)</strong> {tolDespues + 1}–{umbralGrave - 1} min;{' '}
+                  <strong>Rojo (Tarde Grave)</strong> ≥{umbralGrave} min (2h exactas). Sáb/Dom y viernes ≥16:30 inician lunes {hIni}.
                 </>
               )}
             </p>
@@ -398,7 +454,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
             <button
               type="button"
               onClick={handleExportarExcel}
-              disabled={exportando || leadsParaDetalle.length === 0}
+              disabled={exportando || crucesConFecha.length === 0}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
               title="Descargar resumen por asesor y detalle filtrado en Excel (.xlsx)"
             >
@@ -408,7 +464,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
             <button
               type="button"
               onClick={handleExportarPdf}
-              disabled={exportandoPdf || leadsParaDetalle.length === 0}
+              disabled={exportandoPdf || crucesConFecha.length === 0}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50"
               title="Descargar resumen por asesor, detalle y criterios en PDF"
             >
@@ -416,46 +472,56 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
               <span>{exportandoPdf ? 'PDF...' : 'Descargar PDF'}</span>
             </button>
             <div className="px-4 py-2 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 rounded-xl text-right tabular-nums">
-              <div className="text-[10px] uppercase font-bold text-rose-700 dark:text-rose-300">Tasa Global a Tiempo</div>
+              <div className="text-[10px] uppercase font-bold text-rose-700 dark:text-rose-300">Tasa A Tiempo (Semáforo)</div>
               <div className="text-2xl font-black text-rose-600 dark:text-rose-400">{pctCumplimiento}%</div>
             </div>
           </div>
         </div>
 
-        {/* Métricas Resumen - Las 5 clasificaciones exactas suman el Total Leads Auditados */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-4 tabular-nums">
+        {/* Métricas Resumen */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 pt-4 tabular-nums">
           <div className="bg-slate-50 dark:bg-slate-950/60 p-3 rounded-lg border border-slate-200 dark:border-slate-800/80">
-            <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">Total Leads Auditados</span>
+            <span className="text-[11px] text-slate-600 dark:text-slate-400 font-medium">Total Período</span>
             <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">{total}</p>
           </div>
           <div className="bg-emerald-50 dark:bg-emerald-950/25 p-3 rounded-lg border border-emerald-200 dark:border-emerald-900/40">
-            <span className="text-xs text-emerald-700 dark:text-emerald-300 font-medium">
-              {esNoCalificado ? 'A Tiempo (1h / 9am)' : `A Tiempo (${etiquetaTol})`}
+            <span className="text-[11px] text-emerald-700 dark:text-emerald-300 font-medium">
+              A Tiempo (≤{tolDespues}m)
             </span>
             <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">{aTiempo}</p>
           </div>
           <div className="bg-amber-50 dark:bg-amber-950/25 p-3 rounded-lg border border-amber-200 dark:border-amber-900/40">
-            <span className="text-xs text-amber-800 dark:text-amber-300 font-medium">Llamó Tarde</span>
-            <p className="text-lg font-bold text-amber-600 dark:text-amber-400 mt-0.5">{tarde}</p>
-          </div>
-          <div className="bg-indigo-50 dark:bg-indigo-950/25 p-3 rounded-lg border border-indigo-200 dark:border-indigo-900/40">
-            <span className="text-xs text-indigo-700 dark:text-indigo-300 font-medium">Llamó Otro Día</span>
-            <p className="text-lg font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">{llamoOtroDia}</p>
+            <span className="text-[11px] text-amber-800 dark:text-amber-300 font-medium">
+              Tarde Leve ({tolDespues + 1}-{umbralGrave - 1}m)
+            </span>
+            <p className="text-lg font-bold text-amber-600 dark:text-amber-400 mt-0.5">{tardeLeve}</p>
           </div>
           <div className="bg-rose-50 dark:bg-rose-950/25 p-3 rounded-lg border border-rose-200 dark:border-rose-900/40">
-            <span className="text-xs text-rose-700 dark:text-rose-300 font-medium">No Llamó</span>
-            <p className="text-lg font-bold text-rose-600 dark:text-rose-400 mt-0.5">{noLlamo}</p>
+            <span className="text-[11px] text-rose-700 dark:text-rose-300 font-medium">
+              Tarde Grave (≥{umbralGrave}m)
+            </span>
+            <p className="text-lg font-bold text-rose-600 dark:text-rose-400 mt-0.5">{tardeGrave}</p>
+          </div>
+          <div className="bg-purple-50 dark:bg-purple-950/25 p-3 rounded-lg border border-purple-200 dark:border-purple-900/40">
+            <span className="text-[11px] text-purple-700 dark:text-purple-300 font-medium">No Llamó</span>
+            <p className="text-lg font-bold text-purple-600 dark:text-purple-400 mt-0.5">{noLlamo}</p>
+          </div>
+          <div className="bg-indigo-50 dark:bg-indigo-950/25 p-3 rounded-lg border border-indigo-200 dark:border-indigo-900/40">
+            <span className="text-[11px] text-indigo-700 dark:text-indigo-300 font-medium">Otro Día</span>
+            <p className="text-lg font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">{llamoOtroDia}</p>
           </div>
           <div className="bg-sky-50 dark:bg-sky-950/30 p-3 rounded-lg border border-sky-200 dark:border-sky-800/50">
-            <span className="text-xs text-sky-700 dark:text-sky-300 font-medium" title="Leads con fecha próxima (no hoy o en el pasado)">
-              Pendientes
-            </span>
-            <p className="text-lg font-bold text-sky-600 dark:text-sky-400 mt-0.5">{pendientes}</p>
+            <span className="text-[11px] text-sky-700 dark:text-sky-300 font-medium">Adelantadas</span>
+            <p className="text-lg font-bold text-sky-600 dark:text-sky-400 mt-0.5">{adelantada}</p>
+          </div>
+          <div className="bg-slate-100 dark:bg-slate-800/40 p-3 rounded-lg border border-slate-300 dark:border-slate-700">
+            <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">Pendientes</span>
+            <p className="text-lg font-bold text-slate-700 dark:text-slate-200 mt-0.5">{pendientes}</p>
           </div>
         </div>
       </div>
 
-      {/* 2. Filtro de Fechas para esta tabla */}
+      {/* 2. Filtro de Fechas + Ejecutivo para esta tabla */}
       <DateRangeFilter
         fechaInicio={fechaInicio}
         fechaFin={fechaFin}
@@ -464,8 +530,12 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
         onLimpiar={() => {
           setFechaInicio('');
           setFechaFin('');
+          setVendedorSeleccionado(null);
         }}
         label="Filtrar Auditoría por Fechas"
+        asesoresDisponibles={asesoresDisponibles}
+        asesorSeleccionado={vendedorSeleccionado || 'TODOS'}
+        onChangeAsesor={(v) => setVendedorSeleccionado(v === 'TODOS' ? null : v)}
       />
 
       {/* Semáforo Interactivo Superior */}
@@ -473,6 +543,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
         cruces={crucesConFecha}
         esNoCalificado={esNoCalificado}
         paisFiltro={paisFiltro}
+        asesorFiltro={vendedorSeleccionado || 'TODOS'}
         parametros={parametros}
         onVerTranscripcion={onVerTranscripcion}
         titulo={`Semáforo KPI 1 · ${esNoCalificado ? 'Leads No Calificados' : 'Leads Calificados'}`}
@@ -616,7 +687,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-6 gap-1 text-[10px] text-center pt-1 border-t border-slate-200 dark:border-slate-800/60 font-mono">
+                <div className="grid grid-cols-7 gap-1 text-[10px] text-center pt-1 border-t border-slate-200 dark:border-slate-800/60 font-mono">
                   <div>
                     <span className="text-slate-500 dark:text-slate-400 block">Total</span>
                     <span className="text-slate-900 dark:text-white font-bold">{v.total}</span>
@@ -626,16 +697,20 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                     <span className="text-emerald-700 dark:text-emerald-300 font-bold">{v.aTiempo}</span>
                   </div>
                   <div>
-                    <span className="text-amber-600 dark:text-amber-400 block">Tarde</span>
-                    <span className="text-amber-700 dark:text-amber-300 font-bold">{v.conRetraso}</span>
+                    <span className="text-amber-600 dark:text-amber-400 block">Leve</span>
+                    <span className="text-amber-700 dark:text-amber-300 font-bold">{v.tardeLeve}</span>
+                  </div>
+                  <div>
+                    <span className="text-rose-600 dark:text-rose-400 block">Grave</span>
+                    <span className="text-rose-700 dark:text-rose-300 font-bold">{v.tardeGrave}</span>
                   </div>
                   <div>
                     <span className="text-indigo-600 dark:text-indigo-400 block">Otro D</span>
                     <span className="text-indigo-700 dark:text-indigo-300 font-bold">{v.llamoOtroDia}</span>
                   </div>
                   <div>
-                    <span className="text-rose-600 dark:text-rose-400 block">No Llamó</span>
-                    <span className="text-rose-700 dark:text-rose-300 font-bold">{v.noLlamo}</span>
+                    <span className="text-purple-600 dark:text-purple-400 block">No Llamó</span>
+                    <span className="text-purple-700 dark:text-purple-300 font-bold">{v.noLlamo}</span>
                   </div>
                   <div>
                     <span className="text-sky-600 dark:text-sky-400 block">Pend</span>
@@ -743,6 +818,17 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                   {esNoCalificado ? 'Tiempo Respuesta' : 'Desfase'}
                 </th>
 
+                {/* Horario de Ingreso */}
+                <th className="py-3 px-3 whitespace-nowrap">
+                  <ColumnFilterDropdown
+                    titulo="Horario Ingreso"
+                    clave="horario_ingreso"
+                    valoresUnicos={valoresUnicosPorColumna.horarios}
+                    seleccionados={filtrosColumnas.horario_ingreso || []}
+                    onCambiarSeleccion={handleCambiarFiltroColumna}
+                  />
+                </th>
+
                 {/* Canal */}
                 <th className="py-3 px-4 whitespace-nowrap">
                   <ColumnFilterDropdown
@@ -757,7 +843,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                 {/* Estado con Filtro Checklist */}
                 <th className="py-3 px-4 whitespace-nowrap">
                   <ColumnFilterDropdown
-                    titulo={esNoCalificado ? 'Cumplimiento (1h/9am)' : `Cumplimiento (${etiquetaTolCorta})`}
+                    titulo={`Cumplimiento (${etiquetaTolCorta})`}
                     clave="estado"
                     valoresUnicos={valoresUnicosPorColumna.estados}
                     seleccionados={filtrosColumnas.estado || []}
@@ -773,7 +859,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800/80">
               {leadsParaDetalle.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-10 text-center text-slate-500 dark:text-slate-400 font-medium">
+                  <td colSpan={11} className="py-10 text-center text-slate-500 dark:text-slate-400 font-medium">
                     No se encontraron registros que coincidan con los filtros aplicados.
                   </td>
                 </tr>
@@ -888,6 +974,26 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                           )}
                         </td>
 
+                        {/* Horario Ingreso */}
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          {(() => {
+                            const hTipo =
+                              cruce.horario_ingreso_tipo ||
+                              clasificarHorarioIngreso(
+                                obtenerTimestampCreacionLead(cruce.cita),
+                                hIni,
+                                hFin
+                              );
+                            return (
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${claseBadgeHorarioIngreso(hTipo)}`}
+                              >
+                                {hTipo}
+                              </span>
+                            );
+                          })()}
+                        </td>
+
                         {/* Canal */}
                         <td className="py-3 px-4">
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
@@ -902,10 +1008,14 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                               <CheckCircle2 className="h-3 w-3" /> A Tiempo
                             </span>
                           )}
-                          {(cruce.estado_cumplimiento === 'TARDE_LEVE' ||
-                            cruce.estado_cumplimiento === 'TARDE_GRAVE') && (
+                          {cruce.estado_cumplimiento === 'TARDE_LEVE' && (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-500/40">
-                              <AlertTriangle className="h-3 w-3" /> Tarde
+                              <AlertTriangle className="h-3 w-3" /> Tarde Leve
+                            </span>
+                          )}
+                          {cruce.estado_cumplimiento === 'TARDE_GRAVE' && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-300 dark:bg-rose-950/80 dark:text-rose-300 dark:border-rose-500/40">
+                              <AlertTriangle className="h-3 w-3" /> Tarde Grave
                             </span>
                           )}
                           {cruce.estado_cumplimiento === 'LLAMO_OTRO_DIA' && (
@@ -914,7 +1024,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                             </span>
                           )}
                           {cruce.estado_cumplimiento === 'NO_LLAMO' && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-300 dark:bg-rose-950/90 dark:text-rose-200 dark:border-rose-600/50">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-300 dark:bg-purple-950/90 dark:text-purple-200 dark:border-purple-600/50">
                               <XCircle className="h-3 w-3" /> No Llamó
                             </span>
                           )}
@@ -924,13 +1034,13 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                             </span>
                           )}
                           {cruce.estado_cumplimiento === 'LLAMADA_CORTA' && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
-                              Llamada Corta
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-500/40">
+                              Tarde Leve (Corta)
                             </span>
                           )}
                           {cruce.estado_cumplimiento === 'ADELANTADA' && (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-300 dark:bg-blue-950/80 dark:text-blue-300 dark:border-blue-500/40">
-                              Llamó Antes
+                              Adelantada
                             </span>
                           )}
                         </td>
@@ -949,7 +1059,7 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                       {/* FILA EXPANDIBLE: Auditoría del Incumplimiento o Éxito */}
                       {estaEnfocado && (
                         <tr className="bg-slate-50 dark:bg-slate-950/90 border-b border-rose-200 dark:border-rose-900/40">
-                          <td colSpan={10} className="p-4">
+                          <td colSpan={11} className="p-4">
                             <div className="bg-white dark:bg-slate-900/90 border border-rose-200 dark:border-rose-500/30 rounded-xl p-4 space-y-3 shadow-xs">
                               <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
                                 <div className="flex items-center gap-2">

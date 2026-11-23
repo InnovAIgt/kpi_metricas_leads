@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, X } from 'lucide-react';
+import { Calendar, UserCheck, X } from 'lucide-react';
 import { getMesActualInfo, getMesAnteriorInfo } from '../utils/dateHelpers';
 
 interface DateRangeFilterProps {
@@ -9,6 +9,10 @@ interface DateRangeFilterProps {
   onChangeFin: (val: string) => void;
   onLimpiar?: () => void;
   label?: string;
+  asesoresDisponibles?: string[];
+  asesorSeleccionado?: string;
+  onChangeAsesor?: (val: string) => void;
+  asesorLabel?: string;
 }
 
 export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
@@ -18,8 +22,13 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
   onChangeFin,
   onLimpiar,
   label = 'Filtrar por Rango de Fechas',
+  asesoresDisponibles,
+  asesorSeleccionado = 'TODOS',
+  onChangeAsesor,
+  asesorLabel = 'Ejecutivo',
 }) => {
-  const tieneFiltro = Boolean(fechaInicio || fechaFin);
+  const tieneAsesorActivo = Boolean(onChangeAsesor && asesorSeleccionado && asesorSeleccionado !== 'TODOS');
+  const tieneFiltro = Boolean(fechaInicio || fechaFin || tieneAsesorActivo);
   const infoActual = getMesActualInfo();
   const infoAnterior = getMesAnteriorInfo();
 
@@ -93,6 +102,31 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
         />
       </div>
 
+      {/* Filtro opcional por Ejecutivo junto a fechas */}
+      {onChangeAsesor && Array.isArray(asesoresDisponibles) && (
+        <div className="flex items-center gap-1.5 ml-1 border-l border-slate-200 dark:border-slate-800 pl-2">
+          <UserCheck className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+          <span className="text-[10px] text-slate-500 uppercase font-semibold">{asesorLabel}</span>
+          <select
+            aria-label={`Filtrar por ${asesorLabel}`}
+            value={asesorSeleccionado}
+            onChange={(e) => onChangeAsesor(e.target.value)}
+            className={`border rounded-lg px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer max-w-[210px] ${
+              tieneAsesorActivo
+                ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-400 dark:border-indigo-700 text-indigo-800 dark:text-indigo-200 font-semibold'
+                : 'bg-slate-50 dark:bg-slate-950 border-slate-300 dark:border-slate-700/80 text-slate-900 dark:text-white focus:border-rose-500'
+            }`}
+          >
+            <option value="TODOS">Todos los ejecutivos ({asesoresDisponibles.length})</option>
+            {asesoresDisponibles.map((nombre) => (
+              <option key={nombre} value={nombre}>
+                {nombre}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* Botones de presets rápidos */}
       <div className="flex flex-wrap items-center gap-1 ml-1 border-l border-slate-200 dark:border-slate-800 pl-2">
         {presets.map((p) => (
@@ -114,7 +148,10 @@ export const DateRangeFilter: React.FC<DateRangeFilterProps> = ({
       {tieneFiltro && onLimpiar && (
         <button
           type="button"
-          onClick={onLimpiar}
+          onClick={() => {
+            if (onChangeAsesor) onChangeAsesor('TODOS');
+            onLimpiar();
+          }}
           className="flex items-center gap-1 text-[11px] text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 ml-auto cursor-pointer font-medium"
         >
           <X className="h-3 w-3" />

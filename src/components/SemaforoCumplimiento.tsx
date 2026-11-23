@@ -19,6 +19,7 @@ import {
   formatearAlcanceLeads,
   obtenerCanalLlamadaLabel,
 } from '../utils/kpiExcelBuilder';
+import { clasificarHorarioIngreso, obtenerTimestampCreacionLead } from '../utils/matchingEngine';
 
 export type SemaforoGrupoKey = 'ROJO' | 'AMARILLO' | 'VERDE';
 
@@ -26,6 +27,7 @@ interface SemaforoCumplimientoProps {
   cruces: CruceAuditoria[];
   esNoCalificado?: boolean;
   paisFiltro?: string;
+  asesorFiltro?: string;
   parametros?: ParametrosAuditoria;
   onVerTranscripcion?: (cruce: CruceAuditoria) => void;
   titulo?: string;
@@ -35,13 +37,26 @@ interface SemaforoCumplimientoProps {
 const ETIQUETA_TIPIFICACION: Record<string, string> = {
   A_TIEMPO: 'A Tiempo',
   ADELANTADA: 'Adelantada',
-  TARDE_LEVE: 'Tarde',
-  TARDE_GRAVE: 'Tarde',
-  LLAMADA_CORTA: 'Tarde (Corta / Buzón)',
+  TARDE_LEVE: 'Tarde Leve',
+  TARDE_GRAVE: 'Tarde Grave',
+  LLAMADA_CORTA: 'Tarde Leve (Corta)',
   NO_LLAMO: 'No Llamó',
-  LLAMO_OTRO_DIA: 'Llamó Otro Día',
+  LLAMO_OTRO_DIA: 'Otro Día',
   PENDIENTE: 'Pendiente',
 };
+
+export function claseBadgeHorarioIngreso(horarioTipo: string): string {
+  if (horarioTipo.includes('Fin de Semana')) {
+    return 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-800/50';
+  }
+  if (horarioTipo.includes('Viernes Tarde')) {
+    return 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/50';
+  }
+  if (horarioTipo.includes('Fuera de Horario') || horarioTipo.includes('Noche')) {
+    return 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800/50';
+  }
+  return 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/50';
+}
 
 function obtenerFechaObjetivoStr(c: CruceAuditoria): string {
   return (
@@ -62,6 +77,7 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
   cruces,
   esNoCalificado = false,
   paisFiltro,
+  asesorFiltro,
   parametros = PARAMETROS_DEFAULT,
   onVerTranscripcion,
   titulo = 'Semáforo de Cumplimiento',
@@ -74,28 +90,36 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
   const [exportandoGrupoPdf, setExportandoGrupoPdf] = useState(false);
 
   const tolAntes = parametros.tolerancia_anticipacion_minutos ?? 15;
-  const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 15;
+  const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 20;
+  const umbralGrave = parametros.umbral_retraso_grave_minutos ?? 120;
+  const hIni = parametros.horario_laboral_inicio || '08:00';
+  const hFin = parametros.horario_laboral_fin || '18:00';
 
   const grupos = useMemo(() => {
     const verde: CruceAuditoria[] = [];
     const amarillo: CruceAuditoria[] = [];
     const rojo: CruceAuditoria[] = [];
+    let adelantadas = 0;
     let otroDia = 0;
+    let noLlamo = 0;
     let pendientes = 0;
 
     cruces.forEach((c) => {
-      if (c.estado_cumplimiento === 'A_TIEMPO' || c.estado_cumplimiento === 'ADELANTADA') {
+      if (c.estado_cumplimiento === 'A_TIEMPO') {
         verde.push(c);
       } else if (
         c.estado_cumplimiento === 'TARDE_LEVE' ||
-        c.estado_cumplimiento === 'TARDE_GRAVE' ||
         c.estado_cumplimiento === 'LLAMADA_CORTA'
       ) {
         amarillo.push(c);
-      } else if (c.estado_cumplimiento === 'NO_LLAMO') {
+      } else if (c.estado_cumplimiento === 'TARDE_GRAVE') {
         rojo.push(c);
+      } else if (c.estado_cumplimiento === 'ADELANTADA') {
+        adelantadas++;
       } else if (c.estado_cumplimiento === 'LLAMO_OTRO_DIA') {
         otroDia++;
+      } else if (c.estado_cumplimiento === 'NO_LLAMO') {
+        noLlamo++;
       } else if (c.estado_cumplimiento === 'PENDIENTE') {
         pendientes++;
       }
@@ -111,19 +135,21 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
     amarillo.sort(sortReciente);
     rojo.sort(sortReciente);
 
-    const totalAuditables = Math.max(0, cruces.length - pendientes);
-    const denom = Math.max(1, totalAuditables);
+    const totalSemaforo = verde.length + amarillo.length + rojo.length;
+    const denom = Math.max(1, totalSemaforo);
 
     return {
       verde,
       amarillo,
       rojo,
+      adelantadas,
       otroDia,
+      noLlamo,
       pendientes,
-      totalAuditables,
-      pctVerde: totalAuditables > 0 ? Math.round((verde.length / denom) * 100) : 0,
-      pctAmarillo: totalAuditables > 0 ? Math.round((amarillo.length / denom) * 100) : 0,
-      pctRojo: totalAuditables > 0 ? Math.round((rojo.length / denom) * 100) : 0,
+      totalSemaforo,
+      pctVerde: totalSemaforo > 0 ? Math.round((verde.length / denom) * 100) : 0,
+      pctAmarillo: totalSemaforo > 0 ? Math.round((amarillo.length / denom) * 100) : 0,
+      pctRojo: totalSemaforo > 0 ? Math.round((rojo.length / denom) * 100) : 0,
     };
   }, [cruces]);
 
@@ -156,6 +182,7 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
           (c.telefono || '').toLowerCase().includes(q) ||
           (c.vendedor_nombre || '').toLowerCase().includes(q) ||
           (c.cita?.codigo_prospecto || '').toLowerCase().includes(q) ||
+          (c.horario_ingreso_tipo || '').toLowerCase().includes(q) ||
           (c.explicacion || '').toLowerCase().includes(q)
         );
       }
@@ -181,23 +208,23 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
       ? {
           titulo: 'A Tiempo (Luz Verde)',
           subtitulo: esNoCalificado
-            ? 'Contactados dentro de 1 hora hábil o hasta 9:00 AM del siguiente día hábil'
-            : `Llamadas dentro de tolerancia (-${tolAntes} / +${tolDespues} min)`,
+            ? `Hasta ${tolDespues} minutos hábiles de retraso (incluye el minuto ${tolDespues})`
+            : `Llamadas dentro de tolerancia (-${tolAntes} / +${tolDespues} min incl.)`,
           accentHex: '15803D',
           badgeClass:
             'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/60',
         }
       : colorActivo === 'AMARILLO'
       ? {
-          titulo: 'Tarde (Luz Amarilla)',
-          subtitulo: 'Llamadas realizadas fuera de la ventana de tolerancia el mismo día',
+          titulo: 'Tarde Leve (Luz Amarilla)',
+          subtitulo: `Desde el minuto ${tolDespues + 1} hasta antes de cumplir ${umbralGrave} min (${tolDespues + 1}–${umbralGrave - 1} min)`,
           accentHex: 'CA8A04',
           badgeClass:
             'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/60',
         }
       : {
-          titulo: 'No Llamó (Luz Roja)',
-          subtitulo: 'Leads vencidos sin llamada registrada en PBX, Celular, WhatsApp ni Teams',
+          titulo: 'Tarde Grave (Luz Roja)',
+          subtitulo: `A partir de ${umbralGrave} minutos de retraso (2 horas exactas incluidas: ≥ ${umbralGrave} min)`,
           accentHex: 'B91C1C',
           badgeClass:
             'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800/60',
@@ -205,20 +232,26 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
 
   const construirHojaGrupo = () => {
     const alcanceLabel = formatearAlcanceLeads(esNoCalificado, paisFiltro);
+    const asesorActivoTxt =
+      filtroAsesorDetalle !== 'TODOS'
+        ? `Ejecutivo: ${filtroAsesorDetalle}`
+        : asesorFiltro && asesorFiltro !== 'TODOS'
+        ? `Ejecutivo: ${asesorFiltro}`
+        : undefined;
     return {
       name: `Semáforo ${colorActivo}`,
       title: `${infoColorActivo.titulo} — ${alcanceLabel}`,
       subtitle: formatearSubtituloExportacion({
         totalFilas: listaActiva.length,
         modo: alcanceLabel,
-        extra: filtroAsesorDetalle !== 'TODOS' ? `Ejecutivo: ${filtroAsesorDetalle}` : undefined,
+        extra: asesorActivoTxt,
       }),
       accentHex: infoColorActivo.accentHex,
       columns: [
         {
           header: 'Semáforo',
           key: 'semaforo',
-          width: 22,
+          width: 24,
           value: (c: CruceAuditoria) => etiquetaSemaforoCruce(c.estado_cumplimiento).etiquetaSemaforo,
           semantic: 'semaforo' as const,
           align: 'center' as const,
@@ -228,6 +261,16 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
         { header: 'Teléfono', key: 'telefono', width: 16 },
         { header: 'País', key: 'pais', width: 10, value: (c: CruceAuditoria) => String(c.pais || c.cita?.pais || 'SV').toUpperCase(), align: 'center' as const },
         { header: 'Ejecutivo', key: 'vendedor_nombre', width: 26 },
+        {
+          header: 'Horario Ingreso',
+          key: 'horario_ingreso_tipo',
+          width: 23,
+          value: (c: CruceAuditoria) =>
+            c.horario_ingreso_tipo ||
+            clasificarHorarioIngreso(obtenerTimestampCreacionLead(c.cita), hIni, hFin),
+          semantic: 'status' as const,
+          align: 'center' as const,
+        },
         { header: 'Tipo Reunión', key: 'tipo_reunion', width: 20, value: (c: CruceAuditoria) => normalizarTipoReunion(c.cita?.tipo_reunion) },
         { header: 'Fecha Objetivo', key: 'fecha_obj', width: 15, value: (c: CruceAuditoria) => obtenerFechaObjetivoStr(c), align: 'center' as const },
         { header: 'Hora Objetivo', key: 'hora_obj', width: 13, value: (c: CruceAuditoria) => obtenerHoraObjetivoStr(c), align: 'center' as const },
@@ -260,7 +303,7 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
     }
   };
 
-  // Definición de las 3 luces en orden real de semáforo de tránsito: Rojo (arriba), Amarillo (centro), Verde (abajo)
+  // Definición de las 3 luces en orden real de semáforo de tránsito: Rojo (Tarde Grave), Amarillo (Tarde Leve), Verde (A Tiempo)
   const luces: Array<{
     key: SemaforoGrupoKey;
     titulo: string;
@@ -276,8 +319,8 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
   }> = [
     {
       key: 'ROJO',
-      titulo: 'No Llamó',
-      subtitulo: 'Sin llamada registrada en ningún canal',
+      titulo: 'Tarde Grave',
+      subtitulo: `A partir de ${umbralGrave} min de retraso (≥ 2h incl.)`,
       count: grupos.rojo.length,
       pct: grupos.pctRojo,
       lensActive:
@@ -293,8 +336,8 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
     },
     {
       key: 'AMARILLO',
-      titulo: 'Tarde',
-      subtitulo: 'Fuera de ventana de tolerancia',
+      titulo: 'Tarde Leve',
+      subtitulo: `Del min ${tolDespues + 1} antes de ${umbralGrave} min (${tolDespues + 1}–${umbralGrave - 1} min)`,
       count: grupos.amarillo.length,
       pct: grupos.pctAmarillo,
       lensActive:
@@ -312,8 +355,8 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
       key: 'VERDE',
       titulo: 'A Tiempo',
       subtitulo: esNoCalificado
-        ? 'Meta: ≤ 1h hábil o 9:00 AM'
-        : `En ventana (-${tolAntes} / +${tolDespues} min)`,
+        ? `Hasta ${tolDespues} min de retraso (min ${tolDespues} incl.)`
+        : `En ventana (-${tolAntes} / +${tolDespues} min incl.)`,
       count: grupos.verde.length,
       pct: grupos.pctVerde,
       lensActive:
@@ -334,7 +377,7 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
       aria-label={titulo}
       className="space-y-4 tabular-nums"
     >
-      {/* Fila Superior: Opcional Tarjeta Grande (Citas del Período) + Semáforo Real de Tránsito */}
+      {/* Fila Superior: Opcional Tarjeta Grande (Citas del Período + 4 cajas fuera del semáforo) + Semáforo Real de Tránsito */}
       <div className={`grid grid-cols-1 ${heroAside ? 'xl:grid-cols-12' : ''} gap-5 items-stretch`}>
         {heroAside && (
           <div className="xl:col-span-4 flex flex-col">{heroAside}</div>
@@ -356,13 +399,21 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
                 Toca cualquier luz del semáforo para ver el detalle de leads clasificados.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-500 dark:text-slate-400">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span>
-                Auditables: <strong className="text-slate-900 dark:text-white">{grupos.totalAuditables}</strong>
+                En semáforo: <strong className="text-slate-900 dark:text-white">{grupos.totalSemaforo}</strong>
               </span>
               <span aria-hidden="true">·</span>
               <span>
-                Otro día: <strong className="text-slate-700 dark:text-slate-300">{grupos.otroDia}</strong>
+                Adelantadas: <strong className="text-sky-600 dark:text-sky-400">{grupos.adelantadas}</strong>
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>
+                Otro día: <strong className="text-indigo-600 dark:text-indigo-400">{grupos.otroDia}</strong>
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>
+                No llamó: <strong className="text-purple-600 dark:text-purple-400">{grupos.noLlamo}</strong>
               </span>
               <span aria-hidden="true">·</span>
               <span>
@@ -509,7 +560,7 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
                   type="text"
                   value={busquedaDetalle}
                   onChange={(e) => setBusquedaDetalle(e.target.value)}
-                  placeholder="Buscar prospecto, tel..."
+                  placeholder="Buscar prospecto, horario..."
                   className="pl-8 pr-3 py-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500 w-48"
                 />
               </div>
@@ -567,6 +618,7 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
                   <th className="py-2.5 px-3 whitespace-nowrap">Teléfono</th>
                   <th className="py-2.5 px-2 whitespace-nowrap text-center">País</th>
                   <th className="py-2.5 px-3 whitespace-nowrap">Ejecutivo</th>
+                  <th className="py-2.5 px-3 whitespace-nowrap">Horario Ingreso</th>
                   <th className="py-2.5 px-3 whitespace-nowrap">Tipo Reunión</th>
                   <th className="py-2.5 px-3 whitespace-nowrap">Objetivo</th>
                   <th className="py-2.5 px-3 whitespace-nowrap">Llamada Real / Canal</th>
@@ -579,7 +631,7 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
                 {listaActiva.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={10}
+                      colSpan={11}
                       className="py-8 text-center text-slate-500 dark:text-slate-400"
                     >
                       No hay leads clasificados con los filtros seleccionados en esta categoría.
@@ -589,6 +641,9 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
                   listaActiva.map((item) => {
                     const paisStr = String(item.pais || item.cita?.pais || 'SV').toUpperCase();
                     const tipoStr = normalizarTipoReunion(item.cita?.tipo_reunion);
+                    const horarioIng =
+                      item.horario_ingreso_tipo ||
+                      clasificarHorarioIngreso(obtenerTimestampCreacionLead(item.cita), hIni, hFin);
                     const tipif =
                       ETIQUETA_TIPIFICACION[item.estado_cumplimiento] || item.estado_cumplimiento;
 
@@ -615,6 +670,13 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
                         </td>
                         <td className="py-2.5 px-3 font-medium whitespace-nowrap">
                           {item.vendedor_nombre || 'Sin Asignar'}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${claseBadgeHorarioIngreso(horarioIng)}`}
+                          >
+                            {horarioIng}
+                          </span>
                         </td>
                         <td className="py-2.5 px-3 whitespace-nowrap text-slate-600 dark:text-slate-300">
                           {tipoStr}
@@ -685,3 +747,4 @@ export const SemaforoCumplimiento: React.FC<SemaforoCumplimientoProps> = ({
     </section>
   );
 };
+

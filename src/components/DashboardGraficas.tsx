@@ -17,7 +17,8 @@ export interface DatoMensualDashboard {
   total: number;
   auditables: number;
   aTiempo: number;
-  tarde: number;
+  tardeLeve: number;
+  tardeGrave: number;
   noLlamo: number;
   pendientes: number;
   pctCumplimiento: number;
@@ -99,11 +100,17 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
       ];
     }
     return [
-      { key: 'A_TIEMPO', label: 'A Tiempo', count: conteosEstado.A_TIEMPO, color: '#10b981' },
+      { key: 'A_TIEMPO', label: 'A Tiempo (Verde)', count: conteosEstado.A_TIEMPO, color: '#10b981' },
+      {
+        key: 'TARDE_LEVE',
+        label: 'Tarde Leve (Amarillo)',
+        count: conteosEstado.TARDE_LEVE + conteosEstado.LLAMADA_CORTA,
+        color: '#f59e0b',
+      },
+      { key: 'TARDE_GRAVE', label: 'Tarde Grave (Rojo)', count: conteosEstado.TARDE_GRAVE, color: '#ef4444' },
       { key: 'ADELANTADA', label: 'Adelantada', count: conteosEstado.ADELANTADA, color: '#0ea5e9' },
-      { key: 'TARDE', label: 'Tarde', count: conteosEstado.TARDE_LEVE + conteosEstado.TARDE_GRAVE + conteosEstado.LLAMADA_CORTA, color: '#f59e0b' },
       { key: 'LLAMO_OTRO_DIA', label: 'Otro Día', count: conteosEstado.LLAMO_OTRO_DIA, color: '#6366f1' },
-      { key: 'NO_LLAMO', label: 'No Llamó', count: conteosEstado.NO_LLAMO, color: '#ef4444' },
+      { key: 'NO_LLAMO', label: 'No Llamó', count: conteosEstado.NO_LLAMO, color: '#9333ea' },
       { key: 'PENDIENTE', label: 'Pendiente', count: conteosEstado.PENDIENTE, color: '#94a3b8' },
     ];
   }, [modoPastel, conteosEstado, canalesPeriodo]);
@@ -383,7 +390,9 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                 Comparativa por Ejecutivo ({esCalificado ? 'Calificados' : 'No Calificados'})
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Top {ejecutivosTop.length} asesores comparados por{' '}
+                {ejecutivosTop.length === 1
+                  ? 'Detalle individual del ejecutivo filtrado por '
+                  : `Top ${ejecutivosTop.length} asesores comparados por `}
                 {modoBarrasEjec === 'volumen' ? 'volumen y resultado' : '% de cumplimiento (meta 80%)'}
               </p>
             </div>
@@ -420,11 +429,16 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
           ) : (
             <div className="space-y-2.5">
               {ejecutivosTop.map((ej) => {
-                const tarde = ej.citas_tarde_leve + ej.citas_tarde_grave;
-                const otros = Math.max(0, ej.total_citas - ej.citas_a_tiempo - tarde - ej.citas_no_llamo);
+                const tardeLeve = ej.citas_tarde_leve + ej.citas_llamada_corta;
+                const tardeGrave = ej.citas_tarde_grave;
+                const otros = Math.max(
+                  0,
+                  ej.total_citas - ej.citas_a_tiempo - tardeLeve - tardeGrave - ej.citas_no_llamo
+                );
                 const pctWidth = Math.min(100, Math.max(2, ej.tasa_cumplimiento_pct));
                 const wATiempo = (ej.citas_a_tiempo / maxLeadsEjec) * 100;
-                const wTarde = (tarde / maxLeadsEjec) * 100;
+                const wTardeLeve = (tardeLeve / maxLeadsEjec) * 100;
+                const wTardeGrave = (tardeGrave / maxLeadsEjec) * 100;
                 const wNoLlamo = (ej.citas_no_llamo / maxLeadsEjec) * 100;
                 const wOtros = (otros / maxLeadsEjec) * 100;
                 const barColorPct =
@@ -441,7 +455,7 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                     onMouseEnter={() => setEjecHover(ej.vendedor_id)}
                     onClick={onIrAKpi1}
                     className="w-full text-left group cursor-pointer"
-                    title={`${ej.vendedor_nombre}: ${ej.citas_a_tiempo} a tiempo, ${tarde} tarde, ${ej.citas_no_llamo} no llamó (${ej.tasa_cumplimiento_pct}%)`}
+                    title={`${ej.vendedor_nombre}: ${ej.citas_a_tiempo} a tiempo, ${tardeLeve} tarde leve, ${tardeGrave} tarde grave, ${ej.citas_no_llamo} no llamó (${ej.tasa_cumplimiento_pct}%)`}
                   >
                     <div className="flex items-center justify-between text-xs mb-1 gap-2">
                       <span className="font-semibold text-slate-800 dark:text-slate-200 truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400">
@@ -475,16 +489,22 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                               className="h-full bg-emerald-500 transition-all"
                             />
                           )}
-                          {wTarde > 0 && (
+                          {wTardeLeve > 0 && (
                             <div
-                              style={{ width: `${wTarde}%` }}
-                              className="h-full bg-amber-500 transition-all"
+                              style={{ width: `${wTardeLeve}%` }}
+                              className="h-full bg-amber-400 transition-all"
+                            />
+                          )}
+                          {wTardeGrave > 0 && (
+                            <div
+                              style={{ width: `${wTardeGrave}%` }}
+                              className="h-full bg-rose-500 transition-all"
                             />
                           )}
                           {wNoLlamo > 0 && (
                             <div
                               style={{ width: `${wNoLlamo}%` }}
-                              className="h-full bg-rose-500 transition-all"
+                              className="h-full bg-purple-500 transition-all"
                             />
                           )}
                           {wOtros > 0 && (
@@ -520,16 +540,20 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                     <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500" /> A Tiempo
                   </span>
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-xs bg-amber-500" /> Tarde
+                    <span className="w-2.5 h-2.5 rounded-xs bg-amber-400" /> Tarde Leve
                   </span>
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-xs bg-rose-500" /> No Llamó
+                    <span className="w-2.5 h-2.5 rounded-xs bg-rose-500" /> Tarde Grave
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-purple-500" /> No Llamó
                   </span>
                 </div>
                 {ejecSeleccionado && (
                   <span className="font-mono text-slate-600 dark:text-slate-300">
                     {ejecSeleccionado.vendedor_nombre}: {ejecSeleccionado.citas_a_tiempo} OK ·{' '}
-                    {ejecSeleccionado.citas_tarde_leve + ejecSeleccionado.citas_tarde_grave} tarde ·{' '}
+                    {ejecSeleccionado.citas_tarde_leve + ejecSeleccionado.citas_llamada_corta} leve ·{' '}
+                    {ejecSeleccionado.citas_tarde_grave} grave ·{' '}
                     {ejecSeleccionado.citas_no_llamo} sin llamada
                   </span>
                 )}
@@ -548,7 +572,7 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
               Comparativa Mensual · Mes Actual vs Meses Anteriores
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Evolución histórica mensual de leads, llamadas a tiempo, brechas y % de cumplimiento (todos los meses con registros)
+              Evolución histórica mensual de leads, llamadas a tiempo, tarde leve/grave y % de cumplimiento
             </p>
           </div>
 
@@ -584,7 +608,7 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
 
         {comparativaMensual.length === 0 ? (
           <div className="py-10 text-center text-xs text-slate-500 dark:text-slate-400">
-            Sin datos históricos mensuales disponibles.
+            Sin datos históricos mensuales disponibles para los filtros aplicados.
           </div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
@@ -598,7 +622,7 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                     {comparativaMensual.map((m) => {
                       const hTotal = Math.max(4, Math.round((m.total / maxTotalMensual) * 145));
                       const hOk = Math.max(m.aTiempo > 0 ? 4 : 0, Math.round((m.aTiempo / maxTotalMensual) * 145));
-                      const hNoLlamo = Math.max(m.noLlamo > 0 ? 4 : 0, Math.round((m.noLlamo / maxTotalMensual) * 145));
+                      const hGrave = Math.max(m.tardeGrave > 0 ? 4 : 0, Math.round((m.tardeGrave / maxTotalMensual) * 145));
                       const activo = mesHover === m.mesKey;
                       return (
                         <div
@@ -612,7 +636,7 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                               ? 'bg-indigo-50/40 dark:bg-indigo-950/20'
                               : ''
                           }`}
-                          title={`${m.labelLargo}: ${m.total} leads · ${m.aTiempo} a tiempo · ${m.noLlamo} no llamó (${m.pctCumplimiento}%)`}
+                          title={`${m.labelLargo}: ${m.total} leads · ${m.aTiempo} a tiempo · ${m.tardeLeve} tarde leve · ${m.tardeGrave} tarde grave (${m.pctCumplimiento}%)`}
                         >
                           <div className="text-[11px] font-extrabold text-slate-800 dark:text-slate-200 mb-1.5 font-mono">
                             {m.pctCumplimiento}%
@@ -629,9 +653,9 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                               title={`A Tiempo: ${m.aTiempo}`}
                             />
                             <div
-                              style={{ height: `${hNoLlamo}px` }}
+                              style={{ height: `${hGrave}px` }}
                               className="w-3 sm:w-4 rounded-t bg-rose-500 transition-all"
-                              title={`No Llamó: ${m.noLlamo}`}
+                              title={`Tarde Grave: ${m.tardeGrave}`}
                             />
                           </div>
                         </div>
@@ -671,10 +695,10 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                     <span className="w-2.5 h-2.5 rounded-xs bg-slate-400 dark:bg-slate-600" /> Total Leads
                   </span>
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500" /> A Tiempo (OK)
+                    <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500" /> A Tiempo (Verde)
                   </span>
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-xs bg-rose-500" /> No Llamó
+                    <span className="w-2.5 h-2.5 rounded-xs bg-rose-500" /> Tarde Grave (Rojo)
                   </span>
                 </div>
                 {mesTooltipObj && (
@@ -714,16 +738,23 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                       invert: false,
                     },
                     {
-                      label: 'Llamadas A Tiempo',
+                      label: 'A Tiempo (Verde)',
                       base: mesBaseObj.aTiempo,
                       comp: mesCompObj.aTiempo,
                       suffix: '',
                       invert: false,
                     },
                     {
-                      label: 'Tarde',
-                      base: mesBaseObj.tarde,
-                      comp: mesCompObj.tarde,
+                      label: 'Tarde Leve (Amarillo)',
+                      base: mesBaseObj.tardeLeve,
+                      comp: mesCompObj.tardeLeve,
+                      suffix: '',
+                      invert: true,
+                    },
+                    {
+                      label: 'Tarde Grave (Rojo)',
+                      base: mesBaseObj.tardeGrave,
+                      comp: mesCompObj.tardeGrave,
                       suffix: '',
                       invert: true,
                     },
@@ -737,7 +768,7 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                   ].map((fila) => {
                     const maxRow = Math.max(1, fila.base, fila.comp);
                     return (
-                      <div key={fila.label} className="py-2.5 space-y-1.5">
+                      <div key={fila.label} className="py-2 space-y-1.5">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-medium text-slate-700 dark:text-slate-300">
                             {fila.label}
@@ -778,3 +809,4 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
     </div>
   );
 };
+

@@ -2,8 +2,16 @@ import { CruceAuditoria, EstadoCumplimiento, ParametrosAuditoria } from '../type
 import { PARAMETROS_DEFAULT } from '../data/mockData';
 import { ExcelSheetConfig, formatearSubtituloExportacion } from './excelExport';
 import { normalizarTipoReunion } from './leadValidation';
+import { clasificarHorarioIngreso, obtenerTimestampCreacionLead } from './matchingEngine';
 
-export type ColorSemaforo = 'VERDE' | 'AMARILLO' | 'ROJO' | 'OTRO_DIA' | 'PENDIENTE';
+export type ColorSemaforo =
+  | 'VERDE'
+  | 'AMARILLO'
+  | 'ROJO'
+  | 'NO_LLAMO'
+  | 'OTRO_DIA'
+  | 'ADELANTADA'
+  | 'PENDIENTE';
 
 export function formatearPaisAlcance(paisFiltro?: string): string {
   const p = String(paisFiltro || 'TODOS').toUpperCase().trim();
@@ -40,30 +48,35 @@ export function clasificarSemaforoCruce(estado: EstadoCumplimiento): {
         etiquetaSemaforo: '🟢 VERDE · A Tiempo',
         tipificacion: 'A Tiempo',
       };
-    case 'ADELANTADA':
-      return {
-        color: 'VERDE',
-        etiquetaSemaforo: '🟢 VERDE · Adelantada',
-        tipificacion: 'Adelantada',
-      };
     case 'TARDE_LEVE':
-    case 'TARDE_GRAVE':
       return {
         color: 'AMARILLO',
-        etiquetaSemaforo: '🟡 AMARILLO · Tarde',
-        tipificacion: 'Tarde',
+        etiquetaSemaforo: '🟡 AMARILLO · Tarde Leve',
+        tipificacion: 'Tarde Leve',
       };
     case 'LLAMADA_CORTA':
       return {
         color: 'AMARILLO',
         etiquetaSemaforo: '🟡 AMARILLO · Corta / Buzón',
-        tipificacion: 'Tarde (Corta / Buzón)',
+        tipificacion: 'Tarde Leve (Corta / Buzón)',
+      };
+    case 'TARDE_GRAVE':
+      return {
+        color: 'ROJO',
+        etiquetaSemaforo: '🔴 ROJO · Tarde Grave',
+        tipificacion: 'Tarde Grave',
       };
     case 'NO_LLAMO':
       return {
-        color: 'ROJO',
-        etiquetaSemaforo: '🔴 ROJO · No Llamó',
+        color: 'NO_LLAMO',
+        etiquetaSemaforo: '⚫ NO LLAMÓ',
         tipificacion: 'No Llamó',
+      };
+    case 'ADELANTADA':
+      return {
+        color: 'ADELANTADA',
+        etiquetaSemaforo: '🟦 ADELANTADA',
+        tipificacion: 'Adelantada',
       };
     case 'LLAMO_OTRO_DIA':
       return {
@@ -94,11 +107,13 @@ interface ResumenEjecutivoFila {
   vendedor: string;
   pais: string;
   total: number;
-  auditables: number;
+  enSemaforo: number;
   aTiempo: number;
-  tarde: number;
-  noLlamo: number;
+  tardeLeve: number;
+  tardeGrave: number;
+  adelantada: number;
   otroDia: number;
+  noLlamo: number;
   pendientes: number;
   canales: string;
   pctCumplimiento: number;
@@ -145,7 +160,8 @@ export function construirHojasKpiExcel(params: {
   } = params;
 
   const tolAntes = parametros.tolerancia_anticipacion_minutos ?? 15;
-  const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 15;
+  const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 20;
+  const umbralGrave = parametros.umbral_retraso_grave_minutos ?? 120;
   const durMin = parametros.duracion_minima_efectiva_segundos ?? 45;
   const hIni = parametros.horario_laboral_inicio || '08:00';
   const hFin = parametros.horario_laboral_fin || '18:00';
@@ -155,11 +171,11 @@ export function construirHojasKpiExcel(params: {
     fechaInicio,
     fechaFin,
     totalFilas: cruces.length,
-    modo: `${alcanceLabel}${asesorFiltro ? ` · Ejecutivo: ${asesorFiltro}` : ''}`,
+    modo: `${alcanceLabel}${asesorFiltro && asesorFiltro !== 'TODOS' ? ` · Ejecutivo: ${asesorFiltro}` : ''}`,
     extra: extraInfo,
   });
 
-  // 1. Resumen por Ejecutivo (con Canales de Llamada y Semáforo único sin duplicar nivel)
+  // 1. Resumen por Ejecutivo (Semáforo Verde/Amarillo/Rojo + categorías fuera del semáforo)
   const mapaEjecutivos = new Map<
     string,
     {
@@ -167,9 +183,11 @@ export function construirHojasKpiExcel(params: {
       paises: Set<string>;
       total: number;
       aTiempo: number;
-      tarde: number;
-      noLlamo: number;
+      tardeLeve: number;
+      tardeGrave: number;
+      adelantada: number;
       otroDia: number;
+      noLlamo: number;
       pendientes: number;
       sumaDesfase: number;
       contDesfase: number;
@@ -187,9 +205,11 @@ export function construirHojasKpiExcel(params: {
         paises: new Set<string>(),
         total: 0,
         aTiempo: 0,
-        tarde: 0,
-        noLlamo: 0,
+        tardeLeve: 0,
+        tardeGrave: 0,
+        adelantada: 0,
         otroDia: 0,
+        noLlamo: 0,
         pendientes: 0,
         sumaDesfase: 0,
         contDesfase: 0,
@@ -203,9 +223,11 @@ export function construirHojasKpiExcel(params: {
 
     const sem = etiquetaSemaforoCruce(c.estado_cumplimiento);
     if (sem.color === 'VERDE') item.aTiempo++;
-    else if (sem.color === 'AMARILLO') item.tarde++;
-    else if (sem.color === 'ROJO') item.noLlamo++;
+    else if (sem.color === 'AMARILLO') item.tardeLeve++;
+    else if (sem.color === 'ROJO') item.tardeGrave++;
+    else if (sem.color === 'ADELANTADA') item.adelantada++;
     else if (sem.color === 'OTRO_DIA') item.otroDia++;
+    else if (sem.color === 'NO_LLAMO') item.noLlamo++;
     else item.pendientes++;
 
     if (c.fecha_llamada || c.canal_utilizado || c.llamada) {
@@ -236,6 +258,7 @@ export function construirHojasKpiExcel(params: {
 
   const filasEjecutivos: ResumenEjecutivoFila[] = Array.from(mapaEjecutivos.values())
     .map((e) => {
+      const enSemaforo = e.aTiempo + e.tardeLeve + e.tardeGrave;
       const auditables = Math.max(0, e.total - e.pendientes);
       const pctNum =
         auditables > 0 ? Math.round((e.aTiempo / auditables) * 100) : e.total > 0 ? 100 : 0;
@@ -256,11 +279,13 @@ export function construirHojasKpiExcel(params: {
         vendedor: e.vendedor,
         pais: Array.from(e.paises).sort().join(' / ') || 'SV',
         total: e.total,
-        auditables,
+        enSemaforo,
         aTiempo: e.aTiempo,
-        tarde: e.tarde,
-        noLlamo: e.noLlamo,
+        tardeLeve: e.tardeLeve,
+        tardeGrave: e.tardeGrave,
+        adelantada: e.adelantada,
         otroDia: e.otroDia,
+        noLlamo: e.noLlamo,
         pendientes: e.pendientes,
         canales: formatearResumenCanales(e.canales),
         pctCumplimiento: pctNum / 100,
@@ -270,13 +295,16 @@ export function construirHojasKpiExcel(params: {
     .sort((a, b) => b.total - a.total);
 
   const sumTotal = filasEjecutivos.reduce((acc, r) => acc + r.total, 0);
-  const sumAudit = filasEjecutivos.reduce((acc, r) => acc + r.auditables, 0);
+  const sumEnSemaforo = filasEjecutivos.reduce((acc, r) => acc + r.enSemaforo, 0);
   const sumVerde = filasEjecutivos.reduce((acc, r) => acc + r.aTiempo, 0);
-  const sumAmarillo = filasEjecutivos.reduce((acc, r) => acc + r.tarde, 0);
-  const sumRojo = filasEjecutivos.reduce((acc, r) => acc + r.noLlamo, 0);
+  const sumAmarillo = filasEjecutivos.reduce((acc, r) => acc + r.tardeLeve, 0);
+  const sumRojo = filasEjecutivos.reduce((acc, r) => acc + r.tardeGrave, 0);
+  const sumAdelantada = filasEjecutivos.reduce((acc, r) => acc + r.adelantada, 0);
   const sumOtroDia = filasEjecutivos.reduce((acc, r) => acc + r.otroDia, 0);
+  const sumNoLlamo = filasEjecutivos.reduce((acc, r) => acc + r.noLlamo, 0);
   const sumPend = filasEjecutivos.reduce((acc, r) => acc + r.pendientes, 0);
-  const pctGlobal = sumAudit > 0 ? sumVerde / sumAudit : sumTotal > 0 ? 1 : 0;
+  const sumAuditables = Math.max(0, sumTotal - sumPend);
+  const pctGlobal = sumAuditables > 0 ? sumVerde / sumAuditables : sumTotal > 0 ? 1 : 0;
 
   const hojaResumenEjecutivo: ExcelSheetConfig<ResumenEjecutivoFila> = {
     name: 'Resumen por Ejecutivo',
@@ -288,11 +316,13 @@ export function construirHojasKpiExcel(params: {
       { header: 'Ejecutivo / Asesor', key: 'vendedor', width: 28 },
       { header: 'País', key: 'pais', width: 10, align: 'center' },
       { header: 'Total Leads', key: 'total', width: 12, align: 'right' },
-      { header: 'Auditables', key: 'auditables', width: 12, align: 'right' },
+      { header: 'En Semáforo', key: 'enSemaforo', width: 13, align: 'right' },
       { header: 'A Tiempo (Verde)', key: 'aTiempo', width: 17, align: 'right', columnTint: 'verde' },
-      { header: 'Tarde (Amarillo)', key: 'tarde', width: 17, align: 'right', columnTint: 'amarillo' },
-      { header: 'No Llamó (Rojo)', key: 'noLlamo', width: 16, align: 'right', columnTint: 'rojo' },
+      { header: 'Tarde Leve (Amarillo)', key: 'tardeLeve', width: 20, align: 'right', columnTint: 'amarillo' },
+      { header: 'Tarde Grave (Rojo)', key: 'tardeGrave', width: 19, align: 'right', columnTint: 'rojo' },
+      { header: 'Adelantadas', key: 'adelantada', width: 13, align: 'right' },
       { header: 'Otro Día', key: 'otroDia', width: 11, align: 'right' },
+      { header: 'No Llamó', key: 'noLlamo', width: 12, align: 'right' },
       { header: 'Pendientes', key: 'pendientes', width: 12, align: 'right' },
       { header: 'Canales (PBX / Cel / WA / Teams)', key: 'canales', width: 30, wrapText: true },
       { header: '% Cumplimiento', key: 'pctCumplimiento', width: 16, numFmt: '0%', align: 'right' },
@@ -309,11 +339,13 @@ export function construirHojasKpiExcel(params: {
       vendedor: 'TOTAL GENERAL',
       pais: formatearPaisAlcance(paisFiltro),
       total: sumTotal,
-      auditables: sumAudit,
+      enSemaforo: sumEnSemaforo,
       aTiempo: sumVerde,
-      tarde: sumAmarillo,
-      noLlamo: sumRojo,
+      tardeLeve: sumAmarillo,
+      tardeGrave: sumRojo,
+      adelantada: sumAdelantada,
       otroDia: sumOtroDia,
+      noLlamo: sumNoLlamo,
       pendientes: sumPend,
       canales: formatearResumenCanales(canalesGlobal),
       pctCumplimiento: pctGlobal,
@@ -321,7 +353,7 @@ export function construirHojasKpiExcel(params: {
     },
   };
 
-  // 2. Detalle de Leads (una sola columna de Semáforo sin repetir Tipificación, con Canal de Llamada)
+  // 2. Detalle de Leads (con Semáforo único, Horario de Ingreso y Canal de Llamada)
   const crucesOrdenados = [...cruces].sort((a, b) => {
     const fA = a.cita?.fecha_agendada || a.fecha_cita || a.cita?.created_at || '';
     const fB = b.cita?.fecha_agendada || b.fecha_cita || b.cita?.created_at || '';
@@ -358,6 +390,16 @@ export function construirHojasKpiExcel(params: {
         align: 'center',
       },
       { header: 'Ejecutivo Asignado', key: 'vendedor_nombre', width: 25 },
+      {
+        header: 'Horario Ingreso',
+        key: 'horario_ingreso_tipo',
+        width: 23,
+        value: (c) =>
+          c.horario_ingreso_tipo ||
+          clasificarHorarioIngreso(obtenerTimestampCreacionLead(c.cita), hIni, hFin),
+        semantic: 'status',
+        align: 'center',
+      },
       {
         header: 'Tipo de Reunión',
         key: 'tipo_reunion',
@@ -424,80 +466,94 @@ export function construirHojasKpiExcel(params: {
     rows: crucesOrdenados,
   };
 
-  // 3. Criterios y Tipificaciones (sin repetir etiqueta de color dos veces)
+  // 3. Criterios y Tipificaciones (alineado con reglas del Validador 20m / 120m / Fin de Semana / Viernes >= 16:30)
   const filasCriterios = [
     {
       semaforo: '🟢 VERDE · A Tiempo',
-      grupo: 'Meta Cumplida',
-      calificados: `Llamada realizada entre ${tolAntes} min antes y ${tolDespues} min después de la hora agendada (mismo día).`,
-      nocalificados: `Llamada dentro de 1 hora desde el ingreso (horario ${hIni}-${hFin} L-V) o hasta las 9:00 AM del siguiente día hábil si entró fuera de horario/fin de semana.`,
-      interpretacion: 'Cumplimiento óptimo de puntualidad. Cuenta positivo en el % Meta.',
+      grupo: 'Semáforo · Meta Cumplida',
+      calificados: `Llamada realizada entre -${tolAntes} min antes y hasta +${tolDespues} min después de la hora agendada (incluye minuto ${tolDespues}).`,
+      nocalificados: `Hasta ${tolDespues} minutos hábiles de retraso desde el ingreso del lead (incluye el minuto ${tolDespues}).`,
+      interpretacion: 'Cumplimiento óptimo (Verde en el semáforo). Cuenta positivo en el % Meta.',
     },
     {
-      semaforo: '🟢 VERDE · Adelantada',
-      grupo: 'Meta Cumplida (Proactiva)',
-      calificados: `Llamada realizada el mismo día de la cita más de ${tolAntes} min antes de la hora pactada.`,
-      nocalificados: 'Contacto inmediato antes del plazo límite.',
-      interpretacion: 'Gestión proactiva antes de la hora programada; se agrupa en Verde en el semáforo.',
+      semaforo: '🟡 AMARILLO · Tarde Leve',
+      grupo: 'Semáforo · Retraso Leve',
+      calificados: `Llamada el mismo día desde el minuto +${tolDespues + 1} hasta antes de cumplir ${umbralGrave} minutos (${tolDespues + 1}–${umbralGrave - 1} min) o llamada corta < ${durMin}s.`,
+      nocalificados: `Respuesta hábil desde el minuto ${tolDespues + 1} hasta antes de cumplir ${umbralGrave} minutos (${tolDespues + 1}–${umbralGrave - 1} min).`,
+      interpretacion: 'Alerta amarilla en el semáforo por demora moderada antes de las 2 horas.',
     },
     {
-      semaforo: '🟡 AMARILLO · Tarde',
-      grupo: 'Fuera de Tolerancia',
-      calificados: `Llamada realizada el mismo día después de +${tolDespues} min respecto a la hora agendada (fuera de tolerancia).`,
-      nocalificados: 'Llamada efectuada el mismo día después de vencido el plazo límite (1h hábil o 9:00 AM).',
-      interpretacion: 'Clasificación unificada en Amarillo (Tarde) dentro del semáforo de seguimiento.',
+      semaforo: '🔴 ROJO · Tarde Grave',
+      grupo: 'Semáforo · Retraso Grave',
+      calificados: `A partir de ${umbralGrave} minutos de retraso el mismo día (2 horas exactas incluidas: ≥ ${umbralGrave} min).`,
+      nocalificados: `A partir de ${umbralGrave} minutos hábiles de retraso respecto al ingreso o inicio de jornada (≥ ${umbralGrave} min).`,
+      interpretacion: 'Infracción grave (Rojo en el semáforo). Requiere revisión inmediata.',
     },
     {
-      semaforo: '🟡 AMARILLO · Corta / Buzón',
-      grupo: 'Seguimiento / Reintento',
-      calificados: `Llamada detectada pero con duración menor a ${durMin} segundos o caída en buzón.`,
-      nocalificados: `Contacto inferior a ${durMin} segundos efectivos.`,
-      interpretacion: 'Requiere reintento para asegurar conversación efectiva.',
+      semaforo: '🔵 FIN DE SEMANA',
+      grupo: 'Regla Horario Ingreso',
+      calificados: 'No se validan gestiones ni corren tiempos hábiles sábado ni domingo.',
+      nocalificados: `Leads ingresados sábado o domingo inician su conteo el lunes a las ${hIni} AM.`,
+      interpretacion: 'Se identifica en tabla con la etiqueta "Fin de Semana".',
     },
     {
-      semaforo: '🔴 ROJO · No Llamó',
-      grupo: 'Sin Gestión (Crítico)',
-      calificados: 'Cita vencida sin ningún registro de llamada en PBX, Celular, WhatsApp o reunión en Teams.',
-      nocalificados: 'Plazo límite (1h o 9:00 AM) vencido sin llamada posterior al ingreso del lead.',
-      interpretacion: 'Incumplimiento crítico en Rojo; requiere gestión inmediata.',
+      semaforo: '🟡 VIERNES TARDE (≥16:30)',
+      grupo: 'Regla Horario Ingreso',
+      calificados: 'Asignaciones del viernes desde las 16:30 se consideran fuera de cierre semanal.',
+      nocalificados: `Leads asignados el viernes desde las 16:30 en adelante pasan al lunes ${hIni} AM para el conteo de ${tolDespues} min.`,
+      interpretacion: 'Se identifica con la etiqueta "Viernes Tarde (≥16:30)".',
+    },
+    {
+      semaforo: '🌙 FUERA DE HORARIO (NOCHE)',
+      grupo: 'Regla Horario Ingreso',
+      calificados: `Jornada laboral de ${hIni} a ${hFin}, lunes a viernes.`,
+      nocalificados: `Leads ingresados L-V antes de las ${hIni} o después de las ${hFin} inician conteo a las ${hIni} AM del día hábil correspondiente.`,
+      interpretacion: 'Evita penalizaciones nocturnas en Speed-to-Lead.',
+    },
+    {
+      semaforo: '🟦 ADELANTADA',
+      grupo: 'Fuera del Semáforo',
+      calificados: `Llamada realizada el mismo día más de ${tolAntes} min antes de la hora agendada.`,
+      nocalificados: 'Contacto anticipado antes de la ventana límite.',
+      interpretacion: 'Se contabiliza en los 4 indicadores bajo Leads/Citas del Período.',
     },
     {
       semaforo: '🔵 OTRO DÍA',
-      grupo: 'Fuera de Fecha Pactada',
-      calificados: 'Existe llamada registrada al prospecto pero en una fecha distinta al día agendado de la cita.',
-      nocalificados: 'Contacto realizado en un día posterior al límite asignado.',
-      interpretacion: 'No coincide con el día de la cita agendada.',
+      grupo: 'Fuera del Semáforo',
+      calificados: 'Llamada registrada en una fecha distinta al día agendado de la cita.',
+      nocalificados: 'Contacto efectuado en un día distinto al de asignación/ventana.',
+      interpretacion: 'Se contabiliza en "Otro Día" fuera del semáforo.',
+    },
+    {
+      semaforo: '⚫ NO LLAMÓ',
+      grupo: 'Fuera del Semáforo',
+      calificados: 'Cita vencida sin llamada en PBX, Celular, WhatsApp ni reunión Teams.',
+      nocalificados: `Lead vencido más allá de ${tolDespues} min hábiles sin registro de llamada.`,
+      interpretacion: 'Se contabiliza en el indicador "No Llamó" fuera del semáforo.',
     },
     {
       semaforo: '⚪ PENDIENTE',
-      grupo: 'No Auditable Aún',
-      calificados: 'Cita programada para una fecha futura (aún no vence el horario de llamada).',
-      nocalificados: 'Lead con fecha futura programada.',
-      interpretacion: 'No penaliza el % de cumplimiento hasta que venza su fecha/hora.',
-    },
-    {
-      semaforo: '🟢 / 🟡 / 🔴 · Escala Ejecutivo',
-      grupo: 'Desempeño Mensual',
-      calificados: 'Verde: ≥ 70% A Tiempo  |  Amarillo: 40% - 69%  |  Rojo: < 40%.',
-      nocalificados: 'Misma escala sobre leads auditables (Total - Pendientes).',
-      interpretacion: 'Mide consistencia global de cada asesor en el período.',
+      grupo: 'Fuera del Semáforo',
+      calificados: 'Cita programada para una fecha futura (aún no vence).',
+      nocalificados: 'Lead reciente cuyo límite hábil aún no ha vencido.',
+      interpretacion: 'No penaliza el % de cumplimiento hasta vencer su ventana.',
     },
     {
       semaforo: '📋 REGLA · Canales y Teams',
       grupo: 'ProspektIA y Multicanal',
-      calificados: `Si ProspektIA envía tipo de llamada null/vacío se asigna "Llamada Telefonica". Si es "Virtual" o "Teams" se aparta automáticamente en Reuniones Teams. Canales: PBX, Celular, WhatsApp y Teams (horario ${hIni}-${hFin} L-V).`,
+      calificados: `Si ProspektIA envía tipo de llamada null/vacío se asigna "Llamada Telefonica". Si es "Virtual" o "Teams" se aparta automáticamente en Reuniones Teams.`,
       nocalificados: 'Cruza contra PBX (SV/GT), Celular, WhatsApp y Teams filtrados por el Catálogo oficial.',
-      interpretacion: 'Garantiza cobertura multicanal sin perder reuniones virtuales ni registros sin tipo.',
+      interpretacion: 'Cobertura multicanal completa y clasificación por horario laboral.',
     },
   ];
 
   const hojaCriterios: ExcelSheetConfig<any> = {
     name: 'Criterios y Tipificaciones',
-    title: `Catálogo de Semáforo y Criterios de Auditoría — ${alcanceLabel}`,
-    subtitle: `Parámetros activos: Anticipación -${tolAntes}m | Tolerancia +${tolDespues}m | Duración mín. ${durMin}s | Jornada ${hIni}-${hFin} L-V`,
+    title: `Catálogo de Semáforo y Criterios del Validador — ${alcanceLabel}`,
+    subtitle: `Parámetros activos: Anticipación -${tolAntes}m | A Tiempo ≤${tolDespues}m | Tarde Leve ${tolDespues + 1}-${umbralGrave - 1}m | Tarde Grave ≥${umbralGrave}m | Jornada ${hIni}-${hFin} L-V (Vie ≥16:30 → Lun ${hIni})`,
     accentHex: '334155',
     columns: [
-      { header: 'Semáforo / Regla', key: 'semaforo', width: 26, semantic: 'semaforo', align: 'center' },
+      { header: 'Semáforo / Regla', key: 'semaforo', width: 28, semantic: 'semaforo', align: 'center' },
       { header: 'Clasificación', key: 'grupo', width: 26 },
       { header: 'Criterio — Leads Calificados (Citas)', key: 'calificados', width: 48, wrapText: true },
       { header: 'Criterio — Leads No Calificados', key: 'nocalificados', width: 48, wrapText: true },
@@ -508,3 +564,4 @@ export function construirHojasKpiExcel(params: {
 
   return [hojaResumenEjecutivo, hojaDetalle, hojaCriterios, ...hojasExtra];
 }
+

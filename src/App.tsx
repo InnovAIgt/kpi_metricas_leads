@@ -16,6 +16,8 @@ import {
   ejecutarCruceAuditoria,
   calcularResumenKPIs,
   calcularMetricasPorVendedor,
+  clasificarHorarioIngreso,
+  obtenerTimestampCreacionLead,
 } from './utils/matchingEngine';
 import {
   esDelMesActual,
@@ -29,7 +31,11 @@ import {
   esTipoReunionVirtual,
 } from './utils/leadValidation';
 import { filtrarPbxPorCatalogo, filtrarCelularPorCatalogo } from './utils/catalogoFilter';
-import { detectarPaisLead } from './utils/paisHelpers';
+import {
+  detectarPaisLead,
+  obtenerEjecutivosPorPais,
+  coincideAsesorFiltro,
+} from './utils/paisHelpers';
 import {
   sincronizarDatosDesdeBackend,
   sincronizarSoloProspektia,
@@ -58,6 +64,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { SupabaseConfigModal } from './components/SupabaseConfigModal';
 import { ReproductorAudioFlotante } from './components/ReproductorAudioFlotante';
 import { ModalTranscripcionLlamada } from './components/ModalTranscripcionLlamada';
+import { claseBadgeHorarioIngreso } from './components/SemaforoCumplimiento';
 import {
   CheckCircle2,
   AlertCircle,
@@ -202,23 +209,40 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
 
-  // Parámetros de auditoría (±15 min antes/después, >30 min retraso grave, 8am-6pm lun-vie)
+  // Parámetros de auditoría (-15/+20 min A Tiempo, >=120 min Tarde Grave, 8am-6pm lun-vie, vie>=16:30)
   const [parametros, setParametros] = useState<ParametrosAuditoria>(() => {
+    const savedV3 = localStorage.getItem('kpi_parametros_auditoria_v3');
+    if (savedV3) {
+      try {
+        return { ...PARAMETROS_DEFAULT, ...JSON.parse(savedV3) };
+      } catch (_) {}
+    }
     const savedV2 = localStorage.getItem('kpi_parametros_auditoria_v2');
     if (savedV2) {
       try {
-        return { ...PARAMETROS_DEFAULT, ...JSON.parse(savedV2) };
+        const prev2 = JSON.parse(savedV2);
+        // Migrar presets anteriores (5/5/15 o 15/15/30) automáticamente al nuevo estándar 15/20/120
+        if (
+          (prev2.tolerancia_retraso_a_tiempo_minutos === 15 &&
+            prev2.umbral_retraso_grave_minutos === 30) ||
+          (prev2.tolerancia_retraso_a_tiempo_minutos === 5 &&
+            prev2.umbral_retraso_grave_minutos === 15)
+        ) {
+          return PARAMETROS_DEFAULT;
+        }
+        return { ...PARAMETROS_DEFAULT, ...prev2 };
       } catch (_) {}
     }
     const savedLegacy = localStorage.getItem('kpi_parametros_auditoria');
     if (savedLegacy) {
       try {
         const legacy = JSON.parse(savedLegacy);
-        // Migrar automáticamente el antiguo preset 5/5/15 al nuevo estándar 15/15/30
         if (
-          legacy.tolerancia_anticipacion_minutos === 5 &&
-          legacy.tolerancia_retraso_a_tiempo_minutos === 5 &&
-          legacy.umbral_retraso_grave_minutos === 15
+          (legacy.tolerancia_anticipacion_minutos === 5 &&
+            legacy.tolerancia_retraso_a_tiempo_minutos === 5 &&
+            legacy.umbral_retraso_grave_minutos === 15) ||
+          (legacy.tolerancia_retraso_a_tiempo_minutos === 15 &&
+            legacy.umbral_retraso_grave_minutos === 30)
         ) {
           return PARAMETROS_DEFAULT;
         }
@@ -236,6 +260,7 @@ export default function App() {
     () => getRangoDefaultLeads().fin
   );
   const [paisResumen, setPaisResumen] = useState<'TODOS' | 'SV' | 'GT'>('TODOS');
+  const [asesorResumen, setAsesorResumen] = useState<string>('TODOS');
   const [exportandoResumen, setExportandoResumen] = useState(false);
   const [exportandoResumenPdf, setExportandoResumenPdf] = useState(false);
   const [sincronizando, setSincronizando] = useState(false);
@@ -772,8 +797,8 @@ export default function App() {
     return ejecutarCruceAuditoria(citasActivas, llamadas, parametros);
   }, [citasActivas, llamadas, parametros]);
 
-  // Cruces filtrados específicamente para la vista "Resumen KPIs"
-  const crucesResumenFiltrados = useMemo(() => {
+  // Cruces filtrados por fecha + país para Resumen KPIs (base para selector de ejecutivos)
+  const crucesResumenPorFechaPais = useMemo(() => {
     return crucesAuditoriaTodos.filter((c) => {
       if (paisResumen !== 'TODOS') {
         const p = String(c.pais || c.cita?.pais || 'SV').toUpperCase();
@@ -796,6 +821,27 @@ export default function App() {
     });
   }, [crucesAuditoriaTodos, fechaInicioResumen, fechaFinResumen, paisResumen]);
 
+  const asesoresResumenDisponibles = useMemo(() => {
+    return obtenerEjecutivosPorPais(catalogo, crucesResumenPorFechaPais, paisResumen);
+  }, [catalogo, crucesResumenPorFechaPais, paisResumen]);
+
+  useEffect(() => {
+    if (
+      asesorResumen !== 'TODOS' &&
+      !asesoresResumenDisponibles.some((a) => coincideAsesorFiltro(a, asesorResumen, catalogo))
+    ) {
+      setAsesorResumen('TODOS');
+    }
+  }, [paisResumen, asesoresResumenDisponibles, asesorResumen, catalogo]);
+
+  // Cruces filtrados finales (fecha + país + ejecutivo) para la vista "Resumen KPIs"
+  const crucesResumenFiltrados = useMemo(() => {
+    if (asesorResumen === 'TODOS') return crucesResumenPorFechaPais;
+    return crucesResumenPorFechaPais.filter((c) =>
+      coincideAsesorFiltro(asesorResumen, c.vendedor_nombre || 'Sin Asignar', catalogo)
+    );
+  }, [crucesResumenPorFechaPais, asesorResumen, catalogo]);
+
   const resumenKPIs = useMemo(() => {
     return calcularResumenKPIs(crucesResumenFiltrados);
   }, [crucesResumenFiltrados]);
@@ -812,6 +858,7 @@ export default function App() {
       fechaInicio: fechaInicioResumen,
       fechaFin: fechaFinResumen,
       paisFiltro: paisResumen,
+      asesorFiltro: asesorResumen,
     });
   };
 
@@ -956,7 +1003,7 @@ export default function App() {
               parametros={parametros}
               onActualizarParametros={(nuevos) => {
                 setParametros(nuevos);
-                localStorage.setItem('kpi_parametros_auditoria_v2', JSON.stringify(nuevos));
+                localStorage.setItem('kpi_parametros_auditoria_v3', JSON.stringify(nuevos));
                 mostrarToast('Criterios de auditoría actualizados.', 'exito');
               }}
             />
@@ -1309,6 +1356,30 @@ export default function App() {
                   ),
                 },
                 {
+                  clave: 'horario_ingreso_tipo',
+                  etiqueta: 'Horario Ingreso',
+                  exportValue: (_val, fila) =>
+                    clasificarHorarioIngreso(
+                      obtenerTimestampCreacionLead(fila),
+                      parametros.horario_laboral_inicio,
+                      parametros.horario_laboral_fin
+                    ),
+                  render: (_val, fila) => {
+                    const hTipo = clasificarHorarioIngreso(
+                      obtenerTimestampCreacionLead(fila),
+                      parametros.horario_laboral_inicio,
+                      parametros.horario_laboral_fin
+                    );
+                    return (
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${claseBadgeHorarioIngreso(hTipo)}`}
+                      >
+                        {hTipo}
+                      </span>
+                    );
+                  },
+                },
+                {
                   clave: 'asesor_nombre',
                   etiqueta: 'Asesor Asignado',
                   exportValue: (val, fila) => val || fila.asesor_id || 'Asesor General',
@@ -1632,6 +1703,30 @@ export default function App() {
                       {val || (fila.created_at ? String(fila.created_at).slice(11, 19) : 'N/D')}
                     </span>
                   ),
+                },
+                {
+                  clave: 'horario_ingreso_tipo',
+                  etiqueta: 'Horario Ingreso',
+                  exportValue: (_val, fila) =>
+                    clasificarHorarioIngreso(
+                      obtenerTimestampCreacionLead(fila),
+                      parametros.horario_laboral_inicio,
+                      parametros.horario_laboral_fin
+                    ),
+                  render: (_val, fila) => {
+                    const hTipo = clasificarHorarioIngreso(
+                      obtenerTimestampCreacionLead(fila),
+                      parametros.horario_laboral_inicio,
+                      parametros.horario_laboral_fin
+                    );
+                    return (
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${claseBadgeHorarioIngreso(hTipo)}`}
+                      >
+                        {hTipo}
+                      </span>
+                    );
+                  },
                 },
                 { clave: 'advisor_name', etiqueta: 'Asesor' },
                 { clave: 'campaign_name', etiqueta: 'Campaña' },
@@ -2007,8 +2102,12 @@ export default function App() {
                   const def = getRangoDefaultLeads();
                   setFechaInicioResumen(def.inicio);
                   setFechaFinResumen(def.fin);
+                  setAsesorResumen('TODOS');
                 }}
                 label={`Filtrar Período (${crucesResumenFiltrados.length} de ${crucesAuditoriaTodos.length} registros)`}
+                asesoresDisponibles={asesoresResumenDisponibles}
+                asesorSeleccionado={asesorResumen}
+                onChangeAsesor={setAsesorResumen}
               />
 
               <MetricsOverview
@@ -2017,6 +2116,7 @@ export default function App() {
                 parametros={parametros}
                 esNoCalificado={modoLeads === 'no_calificados'}
                 paisFiltro={paisResumen}
+                asesorFiltro={asesorResumen}
                 onVerTranscripcion={(cruce) => setLlamadaParaTranscripcion(cruce)}
                 onVerDetalleCruce={() => setVistaActiva('kpi_cumplimiento')}
                 onCambiarTab={() => {}}

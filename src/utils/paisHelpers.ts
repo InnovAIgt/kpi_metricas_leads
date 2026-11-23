@@ -240,3 +240,88 @@ export function detectarPaisLlamada(
   if (porAsesor) return porAsesor;
   return detectarPaisPorTelefono(call.numero_cliente || call.numero_ejecutivo) || 'SV';
 }
+
+/**
+ * Obtiene la lista ordenada de ejecutivos válidos para un país ('TODOS' | 'SV' | 'GT'),
+ * combinando el Catálogo oficial y los ejecutivos presentes en los cruces del mismo país.
+ */
+export function obtenerEjecutivosPorPais(
+  catalogo: any[] = [],
+  cruces: Array<{ vendedor_nombre?: string; pais?: string; cita?: { pais?: string } }> = [],
+  paisFiltro: 'TODOS' | 'SV' | 'GT' = 'TODOS'
+): string[] {
+  const mapaNormACanonico = new Map<string, string>();
+  const mapaPaisAsesor = new Map<string, CodigoPais>();
+
+  (Array.isArray(catalogo) ? catalogo : []).forEach((cat: any) => {
+    const nombre = String(cat?.nombre_ejecutivo || '').trim();
+    const pais = normalizarCodigoPais(cat?.pais);
+    if (!nombre || !pais) return;
+    const norm = normalizarTextoComparacion(nombre);
+    if (!norm) return;
+    mapaPaisAsesor.set(norm, pais);
+    if (paisFiltro === 'TODOS' || pais === paisFiltro) {
+      if (!mapaNormACanonico.has(norm)) {
+        mapaNormACanonico.set(norm, nombre);
+      }
+    }
+  });
+
+  (Array.isArray(cruces) ? cruces : []).forEach((c) => {
+    const nombre = String(c?.vendedor_nombre || '').trim();
+    if (!nombre) return;
+    const norm = normalizarTextoComparacion(nombre);
+    if (!norm) return;
+    const paisLead = normalizarCodigoPais(c?.pais || c?.cita?.pais) || 'SV';
+    const paisReal = mapaPaisAsesor.get(norm) || paisLead;
+    if (paisFiltro === 'TODOS' || paisReal === paisFiltro) {
+      if (!mapaNormACanonico.has(norm)) {
+        mapaNormACanonico.set(norm, nombre);
+      }
+    }
+  });
+
+  return Array.from(mapaNormACanonico.values()).sort((a, b) =>
+    a.localeCompare(b, 'es', { sensitivity: 'base' })
+  );
+}
+
+/**
+ * Verifica si un nombre de ejecutivo (o usuario) coincide con el ejecutivo seleccionado en el filtro.
+ */
+export function coincideAsesorFiltro(
+  asesorSeleccionado?: string | null,
+  candidatoNombre?: string | null,
+  catalogo: any[] = []
+): boolean {
+  if (!asesorSeleccionado || asesorSeleccionado === 'TODOS') return true;
+  if (!candidatoNombre) return false;
+
+  const selNorm = normalizarTextoComparacion(asesorSeleccionado);
+  const candNorm = normalizarTextoComparacion(candidatoNombre);
+  if (!selNorm || !candNorm) return false;
+  if (selNorm === candNorm) return true;
+
+  // Buscar aliases en catálogo para el ejecutivo seleccionado (usuario / nombre)
+  for (const cat of catalogo || []) {
+    const nomCat = normalizarTextoComparacion(cat?.nombre_ejecutivo);
+    const usrCat = normalizarTextoComparacion(cat?.usuario);
+    if (nomCat === selNorm || usrCat === selNorm) {
+      if ((nomCat && candNorm === nomCat) || (usrCat && candNorm === usrCat)) {
+        return true;
+      }
+    }
+  }
+
+  if (candNorm.includes(selNorm) || selNorm.includes(candNorm)) return true;
+
+  const t1 = selNorm.split(/\s+/).filter((t) => t.length >= 3);
+  const t2 = candNorm.split(/\s+/).filter((t) => t.length >= 3);
+  if (t1.length >= 2 && t2.length >= 2) {
+    const comunes = t1.filter((t) => t2.includes(t));
+    if (comunes.length >= 2) return true;
+  }
+
+  return false;
+}
+

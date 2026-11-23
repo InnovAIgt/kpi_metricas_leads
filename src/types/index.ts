@@ -61,15 +61,21 @@ export interface Llamada {
 }
 
 export type EstadoCumplimiento =
-  | 'A_TIEMPO'        // Llamó dentro del margen permitido (+/- 15 min o 1h/9am)
-  | 'TARDE_LEVE'      // Llamó con retraso leve (ej: 16 a 30 min)
-  | 'TARDE_GRAVE'     // Retraso severo (> 30 min)
+  | 'A_TIEMPO'        // Llamó dentro del margen permitido (Verde: hasta 20 min de retraso incl.)
+  | 'TARDE_LEVE'      // Llamó con retraso leve (Amarillo: 21 a 119 min)
+  | 'TARDE_GRAVE'     // Retraso grave (Rojo: a partir de 120 min incl.)
   | 'LLAMO_OTRO_DIA'  // Se llamó pero en una fecha/día diferente a la programada
   | 'NO_LLAMO'        // La cita ya pasó o fue hoy en el pasado y no hay registro de llamada
   | 'PENDIENTE'       // Cita próxima / agendada a futuro (no hoy o en el pasado)
   | 'LLAMADA_CORTA'   // Llamó pero duró menos del umbral (<45s) o fue buzón
   | 'ADELANTADA'      // Llamó con más de 15 min de anticipación
   | 'SIN_CITA';       // Llamada realizada sin cita previa
+
+export type HorarioIngresoTipo =
+  | 'Horario Laboral'
+  | 'Viernes Tarde (≥16:30)'
+  | 'Fin de Semana'
+  | 'Fuera de Horario (Noche)';
 
 export interface CruceAuditoria {
   id: string;
@@ -88,14 +94,16 @@ export interface CruceAuditoria {
   explicacion: string;
   canal_utilizado?: string;
   fuera_de_horario?: boolean;
+  horario_ingreso_tipo?: HorarioIngresoTipo;
+  horario_creacion_str?: string;
   auditado_por_supervisor?: boolean;
   notas_auditoria?: string;
 }
 
 export interface ParametrosAuditoria {
   tolerancia_anticipacion_minutos: number; // 15 min antes
-  tolerancia_retraso_a_tiempo_minutos: number; // 15 min tarde
-  umbral_retraso_grave_minutos: number; // > 30 min
+  tolerancia_retraso_a_tiempo_minutos: number; // 20 min tarde (incl.)
+  umbral_retraso_grave_minutos: number; // >= 120 min (2h incl.)
   duracion_minima_efectiva_segundos: number; // 45 seg
   considerar_buzon_como_fallido: boolean;
   horario_laboral_inicio: string; // "08:00"

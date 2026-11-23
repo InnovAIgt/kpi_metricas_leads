@@ -2,8 +2,8 @@ import { Cita, Llamada, ParametrosAuditoria } from "../types";
 
 export const PARAMETROS_DEFAULT: ParametrosAuditoria = {
   tolerancia_anticipacion_minutos: 15,
-  tolerancia_retraso_a_tiempo_minutos: 15,
-  umbral_retraso_grave_minutos: 30,
+  tolerancia_retraso_a_tiempo_minutos: 20,
+  umbral_retraso_grave_minutos: 120,
   duracion_minima_efectiva_segundos: 45,
   considerar_buzon_como_fallido: true,
   horario_laboral_inicio: "08:00",

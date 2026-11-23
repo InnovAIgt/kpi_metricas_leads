@@ -66,32 +66,31 @@ export const VistaCriterios: React.FC<VistaCriteriosProps> = ({
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs dark:shadow-none">
           <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold text-sm mb-2">
             <Clock className="h-4 w-4" />
-            Tolerancia de Horario (OK)
+            Semáforo del Validador (20 / 120 min)
           </div>
           <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed tabular-nums">
-            Se considera <strong>A Tiempo (OK en verde)</strong> cualquier llamada efectuada justo a la hora pactada o dentro de un margen de{' '}
-            <span className="text-emerald-600 dark:text-emerald-400 font-bold">
-              {form.tolerancia_anticipacion_minutos} minutos antes
-            </span>{' '}
-            y{' '}
-            <span className="text-emerald-600 dark:text-emerald-400 font-bold">
-              {form.tolerancia_retraso_a_tiempo_minutos} minutos después
-            </span>{' '}
-            de la hora establecida.
+            <strong className="text-emerald-600 dark:text-emerald-400">VERDE (A Tiempo):</strong> Hasta{' '}
+            <strong>{form.tolerancia_retraso_a_tiempo_minutos} min</strong> de retraso (minuto {form.tolerancia_retraso_a_tiempo_minutos} incluido; calificados -{form.tolerancia_anticipacion_minutos}m antes).
+            <br />
+            <strong className="text-amber-600 dark:text-amber-400">AMARILLO (Tarde Leve):</strong> Desde minuto {form.tolerancia_retraso_a_tiempo_minutos + 1} hasta antes de cumplir {form.umbral_retraso_grave_minutos} min.
+            <br />
+            <strong className="text-rose-600 dark:text-rose-400">ROJO (Tarde Grave):</strong> A partir de <strong>{form.umbral_retraso_grave_minutos} min</strong> (2 horas exactas incluidas).
           </p>
         </div>
 
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs dark:shadow-none">
           <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-bold text-sm mb-2">
             <Calendar className="h-4 w-4" />
-            Jornada Laboral
+            Jornada, Fin de Semana y Viernes
           </div>
           <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed tabular-nums">
-            Horario oficial de atención:{' '}
+            Horario laboral:{' '}
             <strong>
               {form.horario_laboral_inicio} a {form.horario_laboral_fin}
-            </strong>
-            , de <span className="text-amber-600 dark:text-amber-400 font-bold">Lunes a Viernes</span>.
+            </strong>{' '}
+            (Lun–Vie).{' '}
+            <span className="text-sky-600 dark:text-sky-400 font-bold">Sábado y Domingo</span> no cuentan como tiempo hábil;{' '}
+            <span className="text-amber-600 dark:text-amber-400 font-bold">Viernes desde 16:30</span> pasa al Lunes {form.horario_laboral_inicio}.
           </p>
         </div>
 
@@ -121,7 +120,7 @@ export const VistaCriterios: React.FC<VistaCriteriosProps> = ({
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 text-xs font-medium transition-colors cursor-pointer"
           >
             <RotateCcw className="h-3.5 w-3.5" />
-            <span>Restablecer Predeterminados (15 / 15 / 30)</span>
+            <span>Restablecer Predeterminados (15 / 20 / 120)</span>
           </button>
         </div>
 
@@ -142,13 +141,13 @@ export const VistaCriterios: React.FC<VistaCriteriosProps> = ({
                 className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white tabular-nums focus:outline-none focus:border-rose-500"
               />
               <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                Por defecto: 15 minutos antes de la cita
+                Por defecto: 15 minutos antes de la cita (Calificados)
               </span>
             </div>
 
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Tolerancia de Retraso A Tiempo (minutos después)
+                Tolerancia de Retraso A Tiempo — Verde (minutos)
               </label>
               <input
                 type="number"
@@ -161,18 +160,18 @@ export const VistaCriterios: React.FC<VistaCriteriosProps> = ({
                 className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white tabular-nums focus:outline-none focus:border-rose-500"
               />
               <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                Por defecto: 15 minutos después de la cita
+                Por defecto: 20 minutos (minuto 20 incluido en Verde)
               </span>
             </div>
 
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Umbral de Retraso Grave (minutos después)
+                Umbral de Retraso Grave — Rojo (minutos)
               </label>
               <input
                 type="number"
                 min="1"
-                max="240"
+                max="480"
                 value={form.umbral_retraso_grave_minutos}
                 onChange={(e) =>
                   setForm({ ...form, umbral_retraso_grave_minutos: Number(e.target.value) })
@@ -180,7 +179,7 @@ export const VistaCriterios: React.FC<VistaCriteriosProps> = ({
                 className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white tabular-nums focus:outline-none focus:border-rose-500"
               />
               <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                Por defecto: 30 minutos (cualquier llamada después de +{form.tolerancia_retraso_a_tiempo_minutos}m se tipifica como Tarde)
+                Por defecto: 120 minutos (2 horas exactas incluidas en Rojo; {form.tolerancia_retraso_a_tiempo_minutos + 1}–{form.umbral_retraso_grave_minutos - 1}m = Tarde Leve Amarillo)
               </span>
             </div>
 

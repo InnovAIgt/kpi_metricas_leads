@@ -27,6 +27,8 @@ import {
   obtenerCanalLlamadaLabel,
 } from '../utils/kpiExcelBuilder';
 import { formatLocalDate } from '../utils/dateHelpers';
+import { claseBadgeHorarioIngreso } from './SemaforoCumplimiento';
+import { clasificarHorarioIngreso, obtenerTimestampCreacionLead } from '../utils/matchingEngine';
 
 interface AuditTableProps {
   cruces: CruceAuditoria[];
@@ -73,6 +75,15 @@ export const AuditTable: React.FC<AuditTableProps> = ({
       { header: 'Canal de Llamada', key: 'canal_utilizado', width: 16, value: (c: CruceAuditoria) => obtenerCanalLlamadaLabel(c), align: 'center' as const },
       { header: 'Duración', key: 'duracion_llamada_segundos', value: (c: CruceAuditoria) => formatearSegundos(c.duracion_llamada_segundos), align: 'center' as const },
       { header: 'Desfase (min)', key: 'desfase_minutos', value: (c: CruceAuditoria) => c.desfase_minutos ?? '-', align: 'right' as const },
+      {
+        header: 'Horario Ingreso',
+        key: 'horario_ingreso_tipo',
+        width: 22,
+        value: (c: CruceAuditoria) =>
+          c.horario_ingreso_tipo || clasificarHorarioIngreso(obtenerTimestampCreacionLead(c.cita)),
+        semantic: 'status' as const,
+        align: 'center' as const,
+      },
       { header: 'Diagnóstico', key: 'explicacion', width: 42, wrapText: true },
     ],
     rows: crucesFiltrados,
@@ -91,10 +102,8 @@ export const AuditTable: React.FC<AuditTableProps> = ({
     const matchEstado =
       filtroEstado === 'todos'
         ? true
-        : filtroEstado === 'TARDE'
-        ? c.estado_cumplimiento === 'TARDE_LEVE' ||
-          c.estado_cumplimiento === 'TARDE_GRAVE' ||
-          c.estado_cumplimiento === 'LLAMADA_CORTA'
+        : filtroEstado === 'TARDE_LEVE'
+        ? c.estado_cumplimiento === 'TARDE_LEVE' || c.estado_cumplimiento === 'LLAMADA_CORTA'
         : c.estado_cumplimiento === filtroEstado;
 
     const matchVendedor =
@@ -131,25 +140,45 @@ export const AuditTable: React.FC<AuditTableProps> = ({
           </span>
         );
       case 'TARDE_LEVE':
-      case 'TARDE_GRAVE':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-300 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30">
             <AlertTriangle className="h-3.5 w-3.5" />
-            Tarde (+{desfase}m)
+            Tarde Leve {desfase !== undefined ? `(+${desfase}m)` : ''}
+          </span>
+        );
+      case 'TARDE_GRAVE':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-300 dark:bg-rose-500/15 dark:text-rose-300 dark:border-rose-500/30">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Tarde Grave {desfase !== undefined ? `(+${desfase}m)` : ''}
           </span>
         );
       case 'NO_LLAMO':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-300 dark:bg-rose-950 dark:text-rose-400 dark:border-rose-800">
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-50 text-purple-700 border border-purple-300 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800">
             <XCircle className="h-3.5 w-3.5" />
             No Llamó
           </span>
         );
       case 'LLAMADA_CORTA':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-50 text-orange-700 border border-orange-300 dark:bg-orange-500/15 dark:text-orange-300 dark:border-orange-500/30">
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-300 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30">
             <Clock className="h-3.5 w-3.5" />
-            Corta / Buzón
+            Tarde Leve (Corta)
+          </span>
+        );
+      case 'LLAMO_OTRO_DIA':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-300 dark:bg-indigo-500/15 dark:text-indigo-300 dark:border-indigo-500/30">
+            <Calendar className="h-3.5 w-3.5" />
+            Otro Día
+          </span>
+        );
+      case 'PENDIENTE':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
+            <Clock className="h-3.5 w-3.5" />
+            Pendiente
           </span>
         );
       case 'ADELANTADA':
@@ -221,16 +250,25 @@ export const AuditTable: React.FC<AuditTableProps> = ({
                   Todos los Estados ({cruces.length})
                 </option>
                 <option value="A_TIEMPO" className="bg-white dark:bg-slate-900">
-                  A Tiempo
+                  A Tiempo (Verde)
                 </option>
-                <option value="TARDE" className="bg-white dark:bg-slate-900">
-                  Tarde
+                <option value="TARDE_LEVE" className="bg-white dark:bg-slate-900">
+                  Tarde Leve (Amarillo)
+                </option>
+                <option value="TARDE_GRAVE" className="bg-white dark:bg-slate-900">
+                  Tarde Grave (Rojo)
                 </option>
                 <option value="NO_LLAMO" className="bg-white dark:bg-slate-900">
                   No Llamó
                 </option>
-                <option value="LLAMADA_CORTA" className="bg-white dark:bg-slate-900">
-                  Corta / Buzón
+                <option value="LLAMO_OTRO_DIA" className="bg-white dark:bg-slate-900">
+                  Otro Día
+                </option>
+                <option value="ADELANTADA" className="bg-white dark:bg-slate-900">
+                  Adelantada
+                </option>
+                <option value="PENDIENTE" className="bg-white dark:bg-slate-900">
+                  Pendiente
                 </option>
                 <option value="SIN_CITA" className="bg-white dark:bg-slate-900">
                   Sin Cita Previa
@@ -287,6 +325,7 @@ export const AuditTable: React.FC<AuditTableProps> = ({
               <tr>
                 <th className="px-4 py-3 font-semibold">Prospecto / Contacto</th>
                 <th className="px-4 py-3 font-semibold">Vendedor / Closer</th>
+                <th className="px-4 py-3 font-semibold">Horario Ingreso</th>
                 <th className="px-4 py-3 font-semibold">Cita Programada</th>
                 <th className="px-4 py-3 font-semibold">Llamada Real</th>
                 <th className="px-4 py-3 font-semibold">Duración</th>
@@ -297,7 +336,7 @@ export const AuditTable: React.FC<AuditTableProps> = ({
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60">
               {crucesFiltrados.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-10 text-slate-500 dark:text-slate-400">
+                  <td colSpan={8} className="text-center py-10 text-slate-500 dark:text-slate-400">
                     No se encontraron registros de cruce con los filtros seleccionados.
                   </td>
                 </tr>
@@ -332,6 +371,22 @@ export const AuditTable: React.FC<AuditTableProps> = ({
                         {/* Vendedor */}
                         <td className="px-4 py-3.5">
                           <span className="text-slate-800 dark:text-slate-200 font-medium">{item.vendedor_nombre}</span>
+                        </td>
+
+                        {/* Horario Ingreso */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          {(() => {
+                            const hTipo =
+                              item.horario_ingreso_tipo ||
+                              clasificarHorarioIngreso(obtenerTimestampCreacionLead(item.cita));
+                            return (
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${claseBadgeHorarioIngreso(hTipo)}`}
+                              >
+                                {hTipo}
+                              </span>
+                            );
+                          })()}
                         </td>
 
                         {/* Hora Cita */}
@@ -394,7 +449,7 @@ export const AuditTable: React.FC<AuditTableProps> = ({
                       {/* Expandable Audit Details Row */}
                       {estaExpandido && (
                         <tr className="bg-slate-50/80 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800">
-                          <td colSpan={7} className="p-4">
+                          <td colSpan={8} className="p-4">
                             <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 space-y-3 shadow-xs">
                               <div className="flex flex-col md:flex-row justify-between gap-4 border-b border-slate-200 dark:border-slate-800/80 pb-3">
                                 <div>

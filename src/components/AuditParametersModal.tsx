@@ -59,15 +59,15 @@ export const AuditParametersModal: React.FC<AuditParametersModalProps> = ({
           {/* Tolerancia a tiempo */}
           <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
             <label className="font-semibold text-slate-200 block">
-              Tolerancia Máxima de Retraso "A Tiempo" (minutos)
+              Tolerancia Máxima de Retraso "A Tiempo" — Verde (minutos)
             </label>
             <p className="text-[11px] text-slate-400">
-              Si la cita es a las 10:00 y el vendedor llama a las 10:03, sigue considerándose puntual.
+              Hasta este minuto incluido se clasifica en Verde (ej. 20 min; si la cita/ingreso es 10:00 y llama 10:20 es A Tiempo).
             </p>
             <input
               type="number"
               min="0"
-              max="30"
+              max="120"
               value={form.tolerancia_retraso_a_tiempo_minutos}
               onChange={(e) =>
                 setForm({
@@ -85,12 +85,12 @@ export const AuditParametersModal: React.FC<AuditParametersModalProps> = ({
               Tolerancia de Anticipación Aceptable (minutos antes)
             </label>
             <p className="text-[11px] text-slate-400">
-              Margen de llamada previa aceptable antes de la hora acordada (ej. 5 min antes).
+              Margen de llamada previa aceptable antes de la hora acordada (ej. 15 min antes en Calificados).
             </p>
             <input
               type="number"
               min="0"
-              max="30"
+              max="120"
               value={form.tolerancia_anticipacion_minutos}
               onChange={(e) =>
                 setForm({
@@ -105,15 +105,15 @@ export const AuditParametersModal: React.FC<AuditParametersModalProps> = ({
           {/* Umbral retraso grave */}
           <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
             <label className="font-semibold text-slate-200 block">
-              Umbral de Retraso Grave (minutos)
+              Umbral de Retraso Grave — Rojo (minutos)
             </label>
             <p className="text-[11px] text-slate-400">
-              Llamadas iniciadas después de este límite se catalogan como infracción severa.
+              A partir de este límite incluido se clasifica como Tarde Grave / Rojo (ej. 120 min = 2 horas exactas incluidas).
             </p>
             <input
               type="number"
               min="5"
-              max="60"
+              max="480"
               value={form.umbral_retraso_grave_minutos}
               onChange={(e) =>
                 setForm({

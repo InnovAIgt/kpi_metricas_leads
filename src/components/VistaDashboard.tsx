@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   ArrowRight,
@@ -42,6 +42,10 @@ import {
   calcularMetricasPorVendedor,
 } from '../utils/matchingEngine';
 import {
+  coincideAsesorFiltro,
+  obtenerEjecutivosPorPais,
+} from '../utils/paisHelpers';
+import {
   exportarLibroExcel,
 } from '../utils/excelExport';
 import { exportarLibroPdf } from '../utils/pdfExport';
@@ -49,7 +53,7 @@ import {
   construirHojasKpiExcel,
   formatearAlcanceLeads,
 } from '../utils/kpiExcelBuilder';
-import { SemaforoCumplimiento } from './SemaforoCumplimiento';
+import { SemaforoCumplimiento, claseBadgeHorarioIngreso } from './SemaforoCumplimiento';
 import {
   DashboardGraficas,
   DatoMensualDashboard,
@@ -72,12 +76,12 @@ interface VistaDashboardProps {
 
 const ETIQUETA_ESTADO: Record<string, string> = {
   A_TIEMPO: 'A Tiempo',
-  TARDE_LEVE: 'Tarde',
-  TARDE_GRAVE: 'Tarde',
-  LLAMO_OTRO_DIA: 'Llamó Otro Día',
+  TARDE_LEVE: 'Tarde Leve',
+  TARDE_GRAVE: 'Tarde Grave',
+  LLAMO_OTRO_DIA: 'Otro Día',
   NO_LLAMO: 'No Llamó',
   PENDIENTE: 'Pendiente / Próxima',
-  LLAMADA_CORTA: 'Tarde (Corta / Buzón)',
+  LLAMADA_CORTA: 'Tarde Leve (Corta)',
   ADELANTADA: 'Adelantada (>15m)',
   SIN_CITA: 'Sin Cita Previa',
 };
@@ -129,13 +133,15 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     () => getRangoDefaultLeads().fin
   );
   const [paisFiltro, setPaisFiltro] = useState<'TODOS' | 'SV' | 'GT'>('TODOS');
+  const [asesorFiltro, setAsesorFiltro] = useState<string>('TODOS');
   const [exportando, setExportando] = useState(false);
   const [exportandoPdf, setExportandoPdf] = useState(false);
 
   const tolAntes = parametros.tolerancia_anticipacion_minutos ?? 15;
-  const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 15;
+  const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 20;
+  const umbralGrave = parametros.umbral_retraso_grave_minutos ?? 120;
 
-  // Cruces filtrados solo por período (para calcular el split SV vs GT real sin anular el otro país)
+  // Cruces filtrados solo por período
   const crucesPeriodo = useMemo(() => {
     return crucesTodos.filter((c) => {
       if (fechaInicio || fechaFin) {
@@ -148,20 +154,44 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     });
   }, [crucesTodos, fechaInicio, fechaFin]);
 
-  // Filtrado por rango de fechas y país
+  // Ejecutivos disponibles según país seleccionado (SV / GT / TODOS)
+  const asesoresDisponibles = useMemo(
+    () => obtenerEjecutivosPorPais(catalogo, crucesPeriodo, paisFiltro),
+    [catalogo, crucesPeriodo, paisFiltro]
+  );
+
+  useEffect(() => {
+    if (asesorFiltro !== 'TODOS' && !asesoresDisponibles.includes(asesorFiltro)) {
+      setAsesorFiltro('TODOS');
+    }
+  }, [asesoresDisponibles, asesorFiltro]);
+
+  // Cruces en el período filtrados por ejecutivo (sirve para calcular split por país si aplica)
+  const crucesPeriodoAsesor = useMemo(() => {
+    if (!asesorFiltro || asesorFiltro === 'TODOS') return crucesPeriodo;
+    return crucesPeriodo.filter((c) =>
+      coincideAsesorFiltro(asesorFiltro, c.vendedor_nombre, catalogo)
+    );
+  }, [crucesPeriodo, asesorFiltro, catalogo]);
+
+  // Filtrado completo por rango de fechas, país y ejecutivo
   const crucesFiltrados = useMemo(() => {
-    if (paisFiltro === 'TODOS') return crucesPeriodo;
-    return crucesPeriodo.filter((c) => {
+    if (paisFiltro === 'TODOS') return crucesPeriodoAsesor;
+    return crucesPeriodoAsesor.filter((c) => {
       const pais = (c.pais || c.cita?.pais || 'SV').toUpperCase();
       return pais === paisFiltro;
     });
-  }, [crucesPeriodo, paisFiltro]);
+  }, [crucesPeriodoAsesor, paisFiltro]);
 
   const citasFiltradas = useMemo(() => {
     return citasActivas.filter((c) => {
       if (paisFiltro !== 'TODOS') {
         const pais = (c.pais || 'SV').toUpperCase();
         if (pais !== paisFiltro) return false;
+      }
+      if (asesorFiltro !== 'TODOS') {
+        const vend = c.vendedor_nombre || (c as any).asesor_nombre || '';
+        if (!coincideAsesorFiltro(asesorFiltro, vend, catalogo)) return false;
       }
       if (fechaInicio || fechaFin) {
         const f = extraerFechaCitaStr(c);
@@ -171,13 +201,22 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
       }
       return true;
     });
-  }, [citasActivas, fechaInicio, fechaFin, paisFiltro]);
+  }, [citasActivas, fechaInicio, fechaFin, paisFiltro, asesorFiltro, catalogo]);
 
   const llamadasEnPeriodo = useMemo(() => {
     return llamadas.filter((ll) => {
       if (paisFiltro !== 'TODOS') {
         const paisCall = String(ll.pais || 'SV').toUpperCase();
         if (paisCall !== paisFiltro) return false;
+      }
+      if (asesorFiltro !== 'TODOS') {
+        const cand =
+          ll.vendedor_nombre ||
+          (ll as any).asesor_nombre ||
+          (ll as any).usuario ||
+          (ll as any).ejecutivo_nombre ||
+          '';
+        if (!coincideAsesorFiltro(asesorFiltro, cand, catalogo)) return false;
       }
       if (fechaInicio || fechaFin) {
         const match = String(ll.fecha_hora_inicio || '').match(
@@ -190,7 +229,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
       }
       return true;
     });
-  }, [llamadas, fechaInicio, fechaFin, paisFiltro]);
+  }, [llamadas, fechaInicio, fechaFin, paisFiltro, asesorFiltro, catalogo]);
 
   const rankingVendedores = useMemo(
     () => calcularMetricasPorVendedor(crucesFiltrados),
@@ -221,7 +260,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     return Math.max(0, crucesFiltrados.length - conteosEstado.PENDIENTE);
   }, [crucesFiltrados.length, conteosEstado.PENDIENTE]);
 
-  // Distribución real por País en el período (SV vs GT siempre visible para comparar)
+  // Distribución real por País en el período (respeta asesorFiltro y fechas)
   const splitPais = useMemo(() => {
     let svTotal = 0;
     let svOk = 0;
@@ -230,7 +269,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     let gtOk = 0;
     let gtPend = 0;
 
-    crucesPeriodo.forEach((c) => {
+    crucesPeriodoAsesor.forEach((c) => {
       const p = (c.pais || c.cita?.pais || 'SV').toUpperCase();
       if (p === 'GT') {
         gtTotal++;
@@ -257,7 +296,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
         pct: gtAudit > 0 ? Math.round((gtOk / gtAudit) * 100) : 0,
       },
     };
-  }, [crucesPeriodo]);
+  }, [crucesPeriodoAsesor]);
 
   // Actividad multicanal en el período
   const canalesPeriodo = useMemo(() => {
@@ -312,74 +351,75 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     };
   }, [citasFiltradas]);
 
-  // Analítica específica de No Calificados: Speed-to-Lead buckets
+  // Analítica específica de No Calificados: Speed-to-Lead buckets (20m / 120m)
   const bucketsNoCalificados = useMemo(() => {
-    let hasta15 = 0;
-    let entre16y60 = 0;
-    let mas60 = 0;
-    let otroDia = 0;
-    let sinLlamada = 0;
+    let enMeta = 0;
+    let tardeLeve = 0;
+    let tardeGrave = 0;
+    let otroDiaOAdelantada = 0;
+    let sinLlamadaOPendiente = 0;
 
     crucesFiltrados.forEach((c) => {
-      if (c.estado_cumplimiento === 'NO_LLAMO') {
-        sinLlamada++;
-      } else if (c.estado_cumplimiento === 'LLAMO_OTRO_DIA') {
-        otroDia++;
-      } else if (typeof c.desfase_minutos === 'number') {
-        const abs = Math.abs(c.desfase_minutos);
-        if (abs <= 15 || c.estado_cumplimiento === 'A_TIEMPO') {
-          hasta15++;
-        } else if (abs <= 60) {
-          entre16y60++;
-        } else {
-          mas60++;
-        }
+      if (c.estado_cumplimiento === 'A_TIEMPO') {
+        enMeta++;
+      } else if (
+        c.estado_cumplimiento === 'TARDE_LEVE' ||
+        c.estado_cumplimiento === 'LLAMADA_CORTA'
+      ) {
+        tardeLeve++;
+      } else if (c.estado_cumplimiento === 'TARDE_GRAVE') {
+        tardeGrave++;
+      } else if (
+        c.estado_cumplimiento === 'LLAMO_OTRO_DIA' ||
+        c.estado_cumplimiento === 'ADELANTADA'
+      ) {
+        otroDiaOAdelantada++;
       } else {
-        sinLlamada++;
+        sinLlamadaOPendiente++;
       }
     });
 
     const total = Math.max(1, crucesFiltrados.length);
     return [
       {
-        label: 'Respuesta Inmediata (≤ 15 min / En Meta)',
-        count: hasta15,
-        pct: Math.round((hasta15 / total) * 100),
+        label: `En Meta (Verde ≤ ${tolDespues} min hábil)`,
+        count: enMeta,
+        pct: Math.round((enMeta / total) * 100),
         color: 'bg-emerald-500',
         textColor: 'text-emerald-700 dark:text-emerald-400',
       },
       {
-        label: 'Seguimiento Rápido (16 – 60 min)',
-        count: entre16y60,
-        pct: Math.round((entre16y60 / total) * 100),
-        color: 'bg-cyan-500',
-        textColor: 'text-cyan-700 dark:text-cyan-400',
-      },
-      {
-        label: 'Respuesta Tardía (> 60 min)',
-        count: mas60,
-        pct: Math.round((mas60 / total) * 100),
-        color: 'bg-amber-500',
+        label: `Tarde Leve (Amarillo ${tolDespues + 1}–${umbralGrave - 1} min)`,
+        count: tardeLeve,
+        pct: Math.round((tardeLeve / total) * 100),
+        color: 'bg-amber-400',
         textColor: 'text-amber-700 dark:text-amber-400',
       },
       {
-        label: 'Contactado Otro Día / Fuera Horario',
-        count: otroDia,
-        pct: Math.round((otroDia / total) * 100),
+        label: `Tarde Grave (Rojo ≥ ${umbralGrave} min)`,
+        count: tardeGrave,
+        pct: Math.round((tardeGrave / total) * 100),
+        color: 'bg-rose-500',
+        textColor: 'text-rose-700 dark:text-rose-400',
+      },
+      {
+        label: 'Otro Día / Adelantada',
+        count: otroDiaOAdelantada,
+        pct: Math.round((otroDiaOAdelantada / total) * 100),
         color: 'bg-indigo-500',
         textColor: 'text-indigo-700 dark:text-indigo-400',
       },
       {
-        label: 'Sin Llamada Registrada',
-        count: sinLlamada,
-        pct: Math.round((sinLlamada / total) * 100),
-        color: 'bg-rose-500',
-        textColor: 'text-rose-700 dark:text-rose-400',
+        label: 'No Llamó / Pendiente',
+        count: sinLlamadaOPendiente,
+        pct: Math.round((sinLlamadaOPendiente / total) * 100),
+        color: 'bg-purple-500',
+        textColor: 'text-purple-700 dark:text-purple-400',
       },
     ];
-  }, [crucesFiltrados]);
+  }, [crucesFiltrados, tolDespues, umbralGrave]);
 
-  // Comparativa Mensual histórica (Mes actual vs meses anteriores, independiente del filtro de fechas actual)
+  // Comparativa Mensual histórica (Mes actual vs meses anteriores, filtrada por país y ejecutivo)
   const comparativaMensual: DatoMensualDashboard[] = useMemo(() => {
     const MESES_CORTOS = [
       'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
@@ -396,6 +436,9 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
       if (paisFiltro !== 'TODOS') {
         const p = (c.pais || c.cita?.pais || 'SV').toUpperCase();
         if (p !== paisFiltro) return;
+      }
+      if (asesorFiltro !== 'TODOS' && !coincideAsesorFiltro(asesorFiltro, c.vendedor_nombre, catalogo)) {
+        return;
       }
       const f = extraerFechaStr(c);
       if (!f || f.length < 7) return;
@@ -414,7 +457,8 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
           total: 0,
           auditables: 0,
           aTiempo: 0,
-          tarde: 0,
+          tardeLeve: 0,
+          tardeGrave: 0,
           noLlamo: 0,
           pendientes: 0,
           pctCumplimiento: 0,
@@ -429,17 +473,15 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
         item.auditables++;
       }
 
-      if (
-        c.estado_cumplimiento === 'A_TIEMPO' ||
-        c.estado_cumplimiento === 'ADELANTADA'
-      ) {
+      if (c.estado_cumplimiento === 'A_TIEMPO') {
         item.aTiempo++;
       } else if (
         c.estado_cumplimiento === 'TARDE_LEVE' ||
-        c.estado_cumplimiento === 'TARDE_GRAVE' ||
-        c.estado_cumplimiento === 'LLAMO_OTRO_DIA'
+        c.estado_cumplimiento === 'LLAMADA_CORTA'
       ) {
-        item.tarde++;
+        item.tardeLeve++;
+      } else if (c.estado_cumplimiento === 'TARDE_GRAVE') {
+        item.tardeGrave++;
       } else if (c.estado_cumplimiento === 'NO_LLAMO') {
         item.noLlamo++;
       }
@@ -458,16 +500,16 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
       .sort((a, b) => a.mesKey.localeCompare(b.mesKey));
 
     return lista.slice(-6);
-  }, [crucesTodos, paisFiltro, mesInfo]);
+  }, [crucesTodos, paisFiltro, asesorFiltro, catalogo, mesInfo]);
 
   // Alertas prioritarias (últimas brechas más relevantes)
   const alertasPrioritarias = useMemo(() => {
     const prioridad: Record<string, number> = {
-      NO_LLAMO: 1,
-      TARDE_GRAVE: 2,
-      LLAMO_OTRO_DIA: 3,
-      LLAMADA_CORTA: 4,
-      TARDE_LEVE: 5,
+      TARDE_GRAVE: 1,
+      NO_LLAMO: 2,
+      TARDE_LEVE: 3,
+      LLAMO_OTRO_DIA: 4,
+      LLAMADA_CORTA: 5,
     };
     return crucesFiltrados
       .filter((c) => c.estado_cumplimiento in prioridad)
@@ -482,6 +524,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
 
   const construirHojasDashboard = () => {
     const alcanceLabel = formatearAlcanceLeads(!esCalificado, paisFiltro);
+    const sufijoEjec = asesorFiltro !== 'TODOS' ? ` · Ejecutivo: ${asesorFiltro}` : '';
     return construirHojasKpiExcel({
       cruces: crucesFiltrados,
       parametros,
@@ -489,20 +532,22 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
       fechaInicio,
       fechaFin,
       paisFiltro,
+      asesorFiltro: asesorFiltro !== 'TODOS' ? asesorFiltro : undefined,
       extraInfo: `Llamadas período: ${llamadasEnPeriodo.length} (PBX ${canalesPeriodo.PBX} · Cel ${canalesPeriodo.Celular} · WA ${canalesPeriodo.WhatsApp} · Teams ${canalesPeriodo.Teams})`,
       hojasExtra: [
         {
           name: 'Comparativa Mensual',
           title: `Comparativa Mensual — ${alcanceLabel}`,
-          subtitle: `Histórico mensual (${alcanceLabel})`,
+          subtitle: `Histórico mensual (${alcanceLabel}${sufijoEjec})`,
           accentHex: '059669',
           columns: [
             { header: 'Mes', key: 'labelLargo', width: 22 },
             { header: 'Total Leads', key: 'total', align: 'right' },
             { header: 'Auditables', key: 'auditables', align: 'right' },
             { header: 'A Tiempo (Verde)', key: 'aTiempo', align: 'right', columnTint: 'verde' },
-            { header: 'Tarde / Otro Día (Amarillo)', key: 'tarde', align: 'right', columnTint: 'amarillo' },
-            { header: 'No Llamó (Rojo)', key: 'noLlamo', align: 'right', columnTint: 'rojo' },
+            { header: 'Tarde Leve (Amarillo)', key: 'tardeLeve', align: 'right', columnTint: 'amarillo' },
+            { header: 'Tarde Grave (Rojo)', key: 'tardeGrave', align: 'right', columnTint: 'rojo' },
+            { header: 'No Llamó', key: 'noLlamo', align: 'right' },
             { header: '% Cumplimiento', key: 'pctCumplimiento', value: (r) => r.pctCumplimiento / 100, numFmt: '0%', align: 'right' },
           ],
           rows: comparativaMensual,
@@ -511,11 +556,16 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     });
   };
 
+  const sufijoArchivoAsesor =
+    asesorFiltro !== 'TODOS'
+      ? `_${asesorFiltro.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 24)}`
+      : '';
+
   const handleExportarDashboard = async () => {
     setExportando(true);
     try {
       await exportarLibroExcel(
-        `Dashboard_KPI_${esCalificado ? 'Calificados' : 'NoCalificados'}_${paisFiltro}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        `Dashboard_KPI_${esCalificado ? 'Calificados' : 'NoCalificados'}_${paisFiltro}${sufijoArchivoAsesor}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
         construirHojasDashboard()
       );
     } finally {
@@ -527,7 +577,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     setExportandoPdf(true);
     try {
       await exportarLibroPdf(
-        `Dashboard_KPI_${esCalificado ? 'Calificados' : 'NoCalificados'}_${paisFiltro}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        `Dashboard_KPI_${esCalificado ? 'Calificados' : 'NoCalificados'}_${paisFiltro}${sufijoArchivoAsesor}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
         construirHojasDashboard()
       );
     } finally {
@@ -535,17 +585,15 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     }
   };
 
-  // Segmentos de barra apilada (solo Tarde unificado, sin Tarde Leve / Retraso Grave)
-  const totalTarde =
-    conteosEstado.TARDE_LEVE +
-    conteosEstado.TARDE_GRAVE +
-    conteosEstado.LLAMADA_CORTA;
+  // Segmentos de barra apilada (con Tarde Leve y Tarde Grave separados + las 4 categorías fuera del semáforo)
+  const totalTardeLeve = conteosEstado.TARDE_LEVE + conteosEstado.LLAMADA_CORTA;
   const segmentosBarra = [
     { key: 'A_TIEMPO', label: 'A Tiempo', count: conteosEstado.A_TIEMPO, bar: 'bg-emerald-500', pill: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/50' },
+    { key: 'TARDE_LEVE', label: 'Tarde Leve', count: totalTardeLeve, bar: 'bg-amber-400', pill: 'bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800/50' },
+    { key: 'TARDE_GRAVE', label: 'Tarde Grave', count: conteosEstado.TARDE_GRAVE, bar: 'bg-rose-500', pill: 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/50' },
     { key: 'ADELANTADA', label: 'Adelantada', count: conteosEstado.ADELANTADA, bar: 'bg-sky-500', pill: 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800/50' },
-    { key: 'TARDE', label: 'Tarde', count: totalTarde, bar: 'bg-amber-400', pill: 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/50' },
     { key: 'LLAMO_OTRO_DIA', label: 'Otro Día', count: conteosEstado.LLAMO_OTRO_DIA, bar: 'bg-indigo-500', pill: 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/50' },
-    { key: 'NO_LLAMO', label: 'No Llamó', count: conteosEstado.NO_LLAMO, bar: 'bg-rose-500', pill: 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/50' },
+    { key: 'NO_LLAMO', label: 'No Llamó', count: conteosEstado.NO_LLAMO, bar: 'bg-purple-500', pill: 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800/50' },
     { key: 'PENDIENTE', label: 'Pendiente', count: conteosEstado.PENDIENTE, bar: 'bg-slate-400 dark:bg-slate-600', pill: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700' },
   ];
 
@@ -569,6 +617,11 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
             <span className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
               {mesInfo.nombreMes} {mesInfo.anio} · Al {mesInfo.hoy}
             </span>
+            {asesorFiltro !== 'TODOS' && (
+              <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700/60">
+                Ejecutivo: {asesorFiltro}
+              </span>
+            )}
           </div>
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
             {esCalificado
@@ -577,8 +630,8 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400">
             {esCalificado
-              ? `Visión consolidada en vivo de cumplimiento (-${tolAntes} / +${tolDespues} min), SLA y retroalimentación de etapas.`
-              : 'Visión consolidada en vivo de respuesta rápida (meta 1 hora hábil o 9:00 a.m.), SLA y retroalimentación de etapas.'}
+              ? `Visión consolidada en vivo de cumplimiento (-${tolAntes} / +${tolDespues} min incl., ≥${umbralGrave}m grave), SLA y retroalimentación de etapas.`
+              : `Visión consolidada en vivo de respuesta rápida (≤ ${tolDespues} min hábil verde, 21–${umbralGrave - 1}m leve, ≥${umbralGrave}m grave; vie ≥16:30 y fin de semana → lun 08:00).`}
           </p>
         </div>
 
@@ -652,30 +705,35 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
         </div>
       </div>
 
-      {/* Filtro de Fechas (por defecto del 1 del mes actual a hoy) */}
+      {/* Filtro de Fechas + Ejecutivo (por defecto del 1 del mes actual a hoy) */}
       <DateRangeFilter
         fechaInicio={fechaInicio}
         fechaFin={fechaFin}
         onChangeInicio={setFechaInicio}
         onChangeFin={setFechaFin}
+        asesoresDisponibles={asesoresDisponibles}
+        asesorSeleccionado={asesorFiltro}
+        onChangeAsesor={setAsesorFiltro}
         onLimpiar={() => {
           const def = getRangoDefaultLeads();
           setFechaInicio(def.inicio);
           setFechaFin(def.fin);
+          setAsesorFiltro('TODOS');
         }}
         label={`Filtrar Período (${crucesFiltrados.length} de ${crucesTodos.length} registros)`}
       />
 
-      {/* Tarjeta Grande Citas del Período + Semáforo Real de Tránsito (sin tarjetas repetidas ni desfase) */}
+      {/* Tarjeta Grande Citas del Período + 4 cuadritos fuera del semáforo + Semáforo Real de Tránsito */}
       <SemaforoCumplimiento
         cruces={crucesFiltrados}
         esNoCalificado={!esCalificado}
         paisFiltro={paisFiltro}
+        asesorFiltro={asesorFiltro !== 'TODOS' ? asesorFiltro : undefined}
         parametros={parametros}
         onVerTranscripcion={onVerTranscripcion}
         titulo={`Semáforo de Cumplimiento · ${esCalificado ? 'Leads Calificados' : 'Leads No Calificados'}`}
         heroAside={
-          <div className="h-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs flex flex-col justify-between gap-5">
+          <div className="h-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs flex flex-col justify-between gap-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
@@ -700,38 +758,47 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
               </div>
             </div>
 
-            <div className="my-auto py-2">
+            <div className="my-auto py-1">
               <div className="text-6xl font-black tracking-tight text-slate-900 dark:text-white leading-none">
                 {crucesFiltrados.length}
               </div>
-              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mt-2">
+              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mt-1.5">
                 {esCalificado ? 'citas agendadas filtradas' : 'leads directos filtrados'}
               </p>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 pt-4 border-t border-slate-100 dark:border-slate-800 text-center">
-              <div className="bg-slate-50 dark:bg-slate-950/70 rounded-xl py-2 px-2 border border-slate-200/80 dark:border-slate-800">
-                <span className="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
-                  Auditables
-                </span>
-                <span className="text-base font-extrabold text-slate-900 dark:text-white">
-                  {totalAuditables}
-                </span>
-              </div>
+            {/* 4 cuadros: categorías fuera del semáforo */}
+            <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-100 dark:border-slate-800 text-center">
               <div className="bg-slate-50 dark:bg-slate-950/70 rounded-xl py-2 px-2 border border-slate-200/80 dark:border-slate-800">
                 <span className="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
                   Pendientes
                 </span>
-                <span className="text-base font-extrabold text-slate-700 dark:text-slate-300">
+                <span className="text-base font-extrabold text-slate-700 dark:text-slate-200">
                   {conteosEstado.PENDIENTE}
                 </span>
               </div>
-              <div className="bg-slate-50 dark:bg-slate-950/70 rounded-xl py-2 px-2 border border-slate-200/80 dark:border-slate-800">
-                <span className="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
-                  Llamadas
+              <div className="bg-purple-50/70 dark:bg-purple-950/30 rounded-xl py-2 px-2 border border-purple-200/80 dark:border-purple-800/50">
+                <span className="block text-[10px] font-bold uppercase text-purple-700 dark:text-purple-300">
+                  No Llamó
                 </span>
-                <span className="text-base font-extrabold text-indigo-600 dark:text-indigo-400">
-                  {llamadasEnPeriodo.length}
+                <span className="text-base font-extrabold text-purple-700 dark:text-purple-300">
+                  {conteosEstado.NO_LLAMO}
+                </span>
+              </div>
+              <div className="bg-indigo-50/70 dark:bg-indigo-950/30 rounded-xl py-2 px-2 border border-indigo-200/80 dark:border-indigo-800/50">
+                <span className="block text-[10px] font-bold uppercase text-indigo-700 dark:text-indigo-300">
+                  Otro Día
+                </span>
+                <span className="text-base font-extrabold text-indigo-700 dark:text-indigo-300">
+                  {conteosEstado.LLAMO_OTRO_DIA}
+                </span>
+              </div>
+              <div className="bg-sky-50/70 dark:bg-sky-950/30 rounded-xl py-2 px-2 border border-sky-200/80 dark:border-sky-800/50">
+                <span className="block text-[10px] font-bold uppercase text-sky-700 dark:text-sky-300">
+                  Adelantadas
+                </span>
+                <span className="text-base font-extrabold text-sky-700 dark:text-sky-300">
+                  {conteosEstado.ADELANTADA}
                 </span>
               </div>
             </div>
@@ -778,73 +845,89 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
             })}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-1">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 pt-1">
             {segmentosBarra.map((seg) => (
               <div
                 key={seg.key}
-                className={`px-3 py-2 rounded-xl border text-xs flex items-center justify-between ${seg.pill}`}
+                className={`px-2.5 py-2 rounded-xl border text-xs flex items-center justify-between ${seg.pill}`}
               >
-                <span className="font-semibold truncate pr-2">{seg.label}</span>
+                <span className="font-semibold truncate pr-1.5">{seg.label}</span>
                 <span className="font-extrabold">{seg.count}</span>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Split País & Actividad por Canal */}
+        {/* Split País & Actividad por Canal (respeta paisFiltro, fechas y asesorFiltro) */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-4">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Globe2 className="h-4 w-4 text-indigo-500" />
-            Desempeño por País y Canal
-          </h3>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Globe2 className="h-4 w-4 text-indigo-500" />
+              Desempeño por País y Canal
+            </h3>
+            {paisFiltro !== 'TODOS' && (
+              <button
+                type="button"
+                onClick={() => setPaisFiltro('TODOS')}
+                className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+              >
+                Ver SV y GT
+              </button>
+            )}
+          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={() => setPaisFiltro(paisFiltro === 'SV' ? 'TODOS' : 'SV')}
-              className={`p-3 rounded-xl text-left transition-all cursor-pointer border ${
-                paisFiltro === 'SV'
-                  ? 'bg-indigo-100/90 dark:bg-indigo-950/60 border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-500/30'
-                  : 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-200/80 dark:border-indigo-800/40 hover:border-indigo-300 dark:hover:border-indigo-700'
-              }`}
-              title="Clic para filtrar por El Salvador o ver todos"
-            >
-              <div className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
-                🇸🇻 El Salvador
-              </div>
-              <div className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
-                {splitPais.sv.pct}%
-              </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                {splitPais.sv.ok} OK de {splitPais.sv.total} leads
-              </div>
-            </button>
+          <div className={`grid ${paisFiltro === 'TODOS' ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
+            {(paisFiltro === 'TODOS' || paisFiltro === 'SV') && (
+              <button
+                type="button"
+                onClick={() => setPaisFiltro(paisFiltro === 'SV' ? 'TODOS' : 'SV')}
+                className={`p-3 rounded-xl text-left transition-all cursor-pointer border ${
+                  paisFiltro === 'SV'
+                    ? 'bg-indigo-100/90 dark:bg-indigo-950/60 border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-500/30'
+                    : 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-200/80 dark:border-indigo-800/40 hover:border-indigo-300 dark:hover:border-indigo-700'
+                }`}
+                title="Clic para filtrar por El Salvador o ver todos"
+              >
+                <div className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                  🇸🇻 El Salvador
+                </div>
+                <div className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
+                  {splitPais.sv.pct}%
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {splitPais.sv.ok} OK de {splitPais.sv.total} leads
+                </div>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => setPaisFiltro(paisFiltro === 'GT' ? 'TODOS' : 'GT')}
-              className={`p-3 rounded-xl text-left transition-all cursor-pointer border ${
-                paisFiltro === 'GT'
-                  ? 'bg-cyan-100/90 dark:bg-cyan-950/60 border-cyan-400 dark:border-cyan-500 ring-2 ring-cyan-500/30'
-                  : 'bg-cyan-50/70 dark:bg-cyan-950/30 border-cyan-200/80 dark:border-cyan-800/40 hover:border-cyan-300 dark:hover:border-cyan-700'
-              }`}
-              title="Clic para filtrar por Guatemala o ver todos"
-            >
-              <div className="text-xs font-bold text-cyan-700 dark:text-cyan-300">
-                🇬🇹 Guatemala
-              </div>
-              <div className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
-                {splitPais.gt.pct}%
-              </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                {splitPais.gt.ok} OK de {splitPais.gt.total} leads
-              </div>
-            </button>
+            {(paisFiltro === 'TODOS' || paisFiltro === 'GT') && (
+              <button
+                type="button"
+                onClick={() => setPaisFiltro(paisFiltro === 'GT' ? 'TODOS' : 'GT')}
+                className={`p-3 rounded-xl text-left transition-all cursor-pointer border ${
+                  paisFiltro === 'GT'
+                    ? 'bg-cyan-100/90 dark:bg-cyan-950/60 border-cyan-400 dark:border-cyan-500 ring-2 ring-cyan-500/30'
+                    : 'bg-cyan-50/70 dark:bg-cyan-950/30 border-cyan-200/80 dark:border-cyan-800/40 hover:border-cyan-300 dark:hover:border-cyan-700'
+                }`}
+                title="Clic para filtrar por Guatemala o ver todos"
+              >
+                <div className="text-xs font-bold text-cyan-700 dark:text-cyan-300">
+                  🇬🇹 Guatemala
+                </div>
+                <div className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
+                  {splitPais.gt.pct}%
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {splitPais.gt.ok} OK de {splitPais.gt.total} leads
+                </div>
+              </button>
+            )}
           </div>
 
           <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-              Llamadas Detectadas en el Período
+            <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              <span>Llamadas Detectadas en el Período</span>
+              <span className="text-slate-600 dark:text-slate-300">{llamadasEnPeriodo.length}</span>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <button
@@ -1171,7 +1254,8 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
                   <th className="py-3 px-4 font-bold">Asesor</th>
                   <th className="py-3 px-3 font-bold text-right">Leads</th>
                   <th className="py-3 px-3 font-bold text-right">A Tiempo</th>
-                  <th className="py-3 px-3 font-bold text-right">Tarde</th>
+                  <th className="py-3 px-3 font-bold text-right">Tarde Leve</th>
+                  <th className="py-3 px-3 font-bold text-right">Tarde Grave</th>
                   <th className="py-3 px-3 font-bold text-right">No Llamó</th>
                   <th className="py-3 px-4 font-bold text-right">% Meta</th>
                 </tr>
@@ -1180,10 +1264,10 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
                 {rankingVendedores.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={7}
                       className="py-8 text-center text-slate-500 dark:text-slate-400"
                     >
-                      No hay registros de asesores para el rango de fechas seleccionado.
+                      No hay registros de asesores para el rango de fechas y filtros seleccionados.
                     </td>
                   </tr>
                 ) : (
@@ -1208,9 +1292,12 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
                         {v.citas_a_tiempo}
                       </td>
                       <td className="py-3 px-3 text-right font-mono text-amber-600 dark:text-amber-400">
-                        {v.citas_tarde_leve + v.citas_tarde_grave}
+                        {v.citas_tarde_leve + v.citas_llamada_corta}
                       </td>
-                      <td className="py-3 px-3 text-right font-mono text-rose-600 dark:text-rose-400">
+                      <td className="py-3 px-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
+                        {v.citas_tarde_grave}
+                      </td>
+                      <td className="py-3 px-3 text-right font-mono text-purple-600 dark:text-purple-400">
                         {v.citas_no_llamo}
                       </td>
                       <td className="py-3 px-4 text-right">
@@ -1243,7 +1330,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
                 Alertas Prioritarias ({alertasPrioritarias.length})
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Leads sin llamada o fuera de tolerancia en el período
+                Leads fuera de tolerancia o sin llamada en el período
               </p>
             </div>
             <button
@@ -1267,16 +1354,25 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
                   className="px-5 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/40 flex items-center justify-between gap-3"
                 >
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span
                         className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          a.estado_cumplimiento === 'NO_LLAMO'
+                          a.estado_cumplimiento === 'TARDE_GRAVE'
                             ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/70 dark:text-rose-300'
+                            : a.estado_cumplimiento === 'NO_LLAMO'
+                            ? 'bg-purple-100 text-purple-800 dark:bg-purple-950/70 dark:text-purple-300'
                             : 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300'
                         }`}
                       >
                         {ETIQUETA_ESTADO[a.estado_cumplimiento] || a.estado_cumplimiento}
                       </span>
+                      {a.horario_ingreso_tipo && (
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${claseBadgeHorarioIngreso(a.horario_ingreso_tipo)}`}
+                        >
+                          {a.horario_ingreso_tipo}
+                        </span>
+                      )}
                       <span className="text-[11px] font-mono text-slate-400">
                         {a.pais || a.cita?.pais || 'SV'}
                       </span>

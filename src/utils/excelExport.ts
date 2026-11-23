@@ -55,25 +55,30 @@ export function resolverColorSemantico(
     return null;
   }
 
-  // Semáforo explícito Verde / Amarillo / Rojo
+  // Semáforo explícito Verde / Amarillo / Rojo / No Llamó / Otro Día / Adelantada
   if (
     tipo === 'semaforo' ||
     v.includes('🟢') ||
     v.includes('🟡') ||
     v.includes('🔴') ||
+    v.includes('⚫') ||
+    v.includes('🟦') ||
     v.includes('🔵') ||
     v.includes('⚪')
   ) {
     if (v.includes('verde') || v.includes('🟢') || v.includes('a tiempo')) {
       return { fillHex: 'BBF7D0', textHex: '14532D' };
     }
-    if (v.includes('amarillo') || v.includes('🟡') || v.includes('tarde')) {
+    if (v.includes('amarillo') || v.includes('🟡') || v.includes('tarde leve') || v.includes('corta')) {
       return { fillHex: 'FEF08A', textHex: '854D0E' };
     }
-    if (v.includes('rojo') || v.includes('🔴') || v.includes('no llamó') || v.includes('no llamo')) {
+    if (v.includes('rojo') || v.includes('🔴') || v.includes('tarde grave') || v.includes('en riesgo') || v.includes('crítico') || v.includes('critico')) {
       return { fillHex: 'FECACA', textHex: '991B1B' };
     }
-    if (v.includes('otro día') || v.includes('otro dia') || v.includes('🔵')) {
+    if (v.includes('⚫') || v.includes('no llamó') || v.includes('no llamo')) {
+      return { fillHex: 'F3E8FF', textHex: '6B21A8' };
+    }
+    if (v.includes('otro día') || v.includes('otro dia') || v.includes('adelantada') || v.includes('🔵') || v.includes('🟦')) {
       return { fillHex: 'DBEAFE', textHex: '1E40AF' };
     }
     if (v.includes('pendiente') || v.includes('⚪')) {
@@ -81,12 +86,25 @@ export function resolverColorSemantico(
     }
   }
 
-  // Semántico de estados (A Tiempo = Verde, Tarde = Amarillo, No Llamó = Rojo)
+  // Tipificación de Horario de Ingreso
+  if (v.includes('horario laboral')) {
+    return { fillHex: 'DCFCE7', textHex: '166534' };
+  }
+  if (v.includes('viernes tarde')) {
+    return { fillHex: 'FEF08A', textHex: '854D0E' };
+  }
+  if (v.includes('fin de semana')) {
+    return { fillHex: 'DBEAFE', textHex: '1E40AF' };
+  }
+  if (v.includes('fuera de horario') || v.includes('noche')) {
+    return { fillHex: 'EDE9FE', textHex: '5B21B6' };
+  }
+
+  // Semántico de estados (A Tiempo = Verde, Tarde Leve = Amarillo, Tarde Grave = Rojo, No Llamó = Morado)
   if (
     v.includes('a tiempo') ||
     v.includes('excelente') ||
     v.includes('llamó antes') ||
-    v.includes('adelantada') ||
     (v.includes('contestada') && !v.includes('no contestada')) ||
     v === 'answered' ||
     v.includes('si se hizo y tiene evidencia') ||
@@ -98,9 +116,6 @@ export function resolverColorSemantico(
   if (
     v.includes('tarde leve') ||
     v.includes('retraso leve') ||
-    v.includes('tarde grave') ||
-    v.includes('retraso grave') ||
-    v.includes('con retraso') ||
     v === 'tarde' ||
     v.includes('aceptable') ||
     v.includes('bueno') ||
@@ -112,8 +127,8 @@ export function resolverColorSemantico(
   }
 
   if (
-    v.includes('no llamó') ||
-    v.includes('no llamo') ||
+    v.includes('tarde grave') ||
+    v.includes('retraso grave') ||
     v.includes('no contestada') ||
     v.includes('en riesgo') ||
     v.includes('crítico') ||
@@ -121,12 +136,17 @@ export function resolverColorSemantico(
     v.includes('fallida') ||
     v.includes('no se realizó')
   ) {
-    return { fillHex: 'FEE2E2', textHex: '991B1B' };
+    return { fillHex: 'FECACA', textHex: '991B1B' };
+  }
+
+  if (v.includes('no llamó') || v.includes('no llamo')) {
+    return { fillHex: 'F3E8FF', textHex: '6B21A8' };
   }
 
   if (
     v.includes('otro día') ||
     v.includes('otro dia') ||
+    v.includes('adelantada') ||
     v.includes('teams')
   ) {
     return { fillHex: 'DBEAFE', textHex: '1E40AF' };

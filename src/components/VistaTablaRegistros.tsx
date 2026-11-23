@@ -564,7 +564,11 @@ export const VistaTablaRegistros: React.FC<VistaTablaRegistrosProps> = ({
     const excelCols: ExcelColumn<any>[] = columnas.map((col) => {
       const esBool =
         col.clave.startsWith('kpi_sla_') || col.clave.startsWith('kpi_retroalimentacion_');
-      const esStatus = col.clave === 'estado' || col.clave === 'estado_teams' || col.clave === 'status';
+      const esStatus =
+        col.clave === 'estado' ||
+        col.clave === 'estado_teams' ||
+        col.clave === 'status' ||
+        col.clave === 'horario_ingreso_tipo';
       return {
         header: col.grupo ? `${col.grupo} - ${col.etiqueta}` : col.etiqueta,
         key: col.clave,

@@ -22,6 +22,8 @@ import {
   Sun,
   Moon,
   LayoutDashboard,
+  Wrench,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { VistaApp, ModoLeads } from '../types';
 import { useTheme } from '../context/ThemeContext';
@@ -64,6 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   sincronizandoProspektia = false,
 }) => {
   const [menuRegistrosAbierto, setMenuRegistrosAbierto] = useState(true);
+  const [menuHerramientasAbierto, setMenuHerramientasAbierto] = useState(true);
   const [menuResumenAbierto, setMenuResumenAbierto] = useState(true);
   const { tema, esOscuro, alternarTema } = useTheme();
   const esCalificado = modoLeads !== 'no_calificados';
@@ -273,7 +276,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {/* 4. Resumen (Desplegable) */}
+        {/* 4. Herramientas (Desplegable) */}
+        <div className="pt-2">
+          <button
+            type="button"
+            onClick={() => setMenuHerramientasAbierto(!menuHerramientasAbierto)}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-3">
+              <Wrench className="h-4 w-4 text-slate-400" />
+              <span>Herramientas</span>
+            </div>
+            {menuHerramientasAbierto ? (
+              <ChevronDown className="h-4 w-4 text-slate-400" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-slate-400" />
+            )}
+          </button>
+
+          {menuHerramientasAbierto && (
+            <div className="ml-4 pl-2 border-l border-slate-200 dark:border-slate-800/80 space-y-1 mt-1">
+              <button
+                type="button"
+                onClick={() => onCambiarVista('herramientas_comparacion')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all cursor-pointer ${
+                  vistaActiva === 'herramientas_comparacion'
+                    ? esCalificado
+                      ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-200 font-semibold border-l-2 border-amber-500 shadow-xs'
+                      : 'bg-cyan-50 text-cyan-800 dark:bg-cyan-950/60 dark:text-cyan-200 font-semibold border-l-2 border-cyan-500 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/40 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+                title="Comparar desempeño lado a lado entre períodos, ejecutivos o países"
+              >
+                <ArrowLeftRight
+                  className={`h-3.5 w-3.5 shrink-0 ${
+                    esCalificado ? 'text-amber-500' : 'text-cyan-500'
+                  }`}
+                />
+                <span className="truncate">Comparación</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 5. Resumen (Desplegable) */}
         <div className="pt-2">
           <button
             onClick={() => setMenuResumenAbierto(!menuResumenAbierto)}

@@ -172,4 +172,5 @@ export type VistaApp =
   | 'resumen_kpis'
   | 'kpi_cumplimiento'
   | 'kpi_sla'
-  | 'kpi_retroalimentacion';
+  | 'kpi_retroalimentacion'
+  | 'herramientas_comparacion';

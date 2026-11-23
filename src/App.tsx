@@ -57,6 +57,7 @@ import { VistaKpiSla } from './components/VistaKpiSla';
 import { VistaKpiRetroalimentacion } from './components/VistaKpiRetroalimentacion';
 import { VistaTablaRegistros } from './components/VistaTablaRegistros';
 import { VistaCatalogoCrud } from './components/VistaCatalogoCrud';
+import { VistaComparacion } from './components/VistaComparacion';
 import { DateRangeFilter } from './components/DateRangeFilter';
 import { MetricsOverview } from './components/MetricsOverview';
 import { VendorScorecard } from './components/VendorScorecard';
@@ -2038,6 +2039,19 @@ export default function App() {
               catalogo={catalogo}
               onGuardarItem={handleGuardarCatalogo}
               onEliminarItem={handleEliminarCatalogo}
+            />
+          )}
+
+          {/* VISTA 7B: HERRAMIENTAS -> COMPARACIÓN LADO A LADO */}
+          {vistaActiva === 'herramientas_comparacion' && (
+            <VistaComparacion
+              crucesTodos={crucesAuditoriaTodos}
+              citasActivas={citasActivas}
+              llamadas={llamadas}
+              catalogo={catalogo}
+              parametros={parametros}
+              modoLeads={modoLeads}
+              onVerTranscripcion={(cruce) => setLlamadaParaTranscripcion(cruce)}
             />
           )}
 

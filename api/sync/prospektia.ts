@@ -23,6 +23,17 @@ const PROSPEKTIA_HEADERS = {
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
 
+function normalizarTipoReunion(tipoReunion?: unknown, tipoLlamada?: unknown, tipoAlt?: unknown): string {
+  for (const cand of [tipoReunion, tipoLlamada, tipoAlt]) {
+    if (cand === null || cand === undefined) continue;
+    const raw = String(cand).trim();
+    const lower = raw.toLowerCase();
+    if (!raw || ['null', 'undefined', 'none', 'n/a', 'na', '-'].includes(lower)) continue;
+    return raw;
+  }
+  return 'Llamada Telefonica';
+}
+
 function normalizarTexto(val?: string | null): string {
   if (!val) return '';
   return String(val)
@@ -330,7 +341,7 @@ export default async function handler(req: any, res: any) {
         hora_agendada: hAg,
         fecha_creado: pl.fecha_creado || null,
         hora_creado: pl.hora_creado || null,
-        tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
+        tipo_reunion: normalizarTipoReunion(pl.tipo_reunion, pl.tipo_llamada, pl.tipo),
         pais: pl.pais || '',
         asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
         asesor_nombre: asesorRes,

@@ -10,6 +10,10 @@ import {
   detectarPaisLlamada,
   normalizarTextoComparacion,
 } from './src/utils/paisHelpers';
+import {
+  normalizarTipoReunion,
+  esTipoReunionVirtual,
+} from './src/utils/leadValidation';
 
 dotenv.config();
 
@@ -671,7 +675,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
         hora_agendada: hAg,
         fecha_creado: pl.fecha_creado || null,
         hora_creado: pl.hora_creado || null,
-        tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
+        tipo_reunion: normalizarTipoReunion(pl.tipo_reunion, pl.tipo_llamada, pl.tipo),
         pais: pl.pais || '',
         asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
         asesor_nombre: asesorRes || pl.asesor_nombre || null,
@@ -954,8 +958,7 @@ app.get('/api/sync/datos-completos', async (req, res) => {
     const llamadasTeams = [...teamsRaw];
 
     leads.forEach((lv: any) => {
-      const tipo = String(lv.tipo_reunion || '').toLowerCase();
-      if (tipo.includes('virtual')) {
+      if (esTipoReunionVirtual(lv.tipo_reunion)) {
         const cod = String(lv.codigo_prospecto || '').trim().toLowerCase();
         if (!mapaTeamsExistente.has(cod)) {
           llamadasTeams.push({
@@ -1172,7 +1175,7 @@ app.all('/api/sync/prospektia', async (_req, res) => {
         hora_agendada: hAg,
         fecha_creado: pl.fecha_creado || null,
         hora_creado: pl.hora_creado || null,
-        tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
+        tipo_reunion: normalizarTipoReunion(pl.tipo_reunion, pl.tipo_llamada, pl.tipo),
         pais: pl.pais || '',
         asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
         asesor_nombre: asesorRes,
@@ -1302,9 +1305,40 @@ app.all('/api/sync/prospektia', async (_req, res) => {
     if (cacheDatosCompletos?.data?.datos) {
       cacheDatosCompletos.data.datos.leads = leads;
       cacheDatosCompletos.data.datos.leadsNoCalificados = leadsNoCalificados;
+
+      // Asegurar que nuevos leads virtuales queden apartados en llamadasTeams en caché
+      const teamsCache: any[] = Array.isArray(cacheDatosCompletos.data.datos.llamadasTeams)
+        ? cacheDatosCompletos.data.datos.llamadasTeams
+        : [];
+      const teamsExist = new Set(
+        teamsCache.map((t: any) => String(t.codigo_prospecto || '').trim().toLowerCase()).filter(Boolean)
+      );
+      leads.forEach((lv: any) => {
+        if (!esTipoReunionVirtual(lv.tipo_reunion)) return;
+        const cod = String(lv.codigo_prospecto || '').trim().toLowerCase();
+        if (!cod || teamsExist.has(cod)) return;
+        teamsExist.add(cod);
+        teamsCache.push({
+          id: `lead-virtual-${lv.id || lv.codigo_prospecto}`,
+          codigo_prospecto: lv.codigo_prospecto,
+          pais: lv.pais || 'SV',
+          ejecutivo: lv.asesor_nombre,
+          ejecutivo_nombre: lv.asesor_nombre,
+          cliente: lv.nombre_prospecto || (lv.codigo_prospecto ? `Prospecto ${lv.codigo_prospecto}` : 'Cliente Virtual'),
+          fecha_reunion: lv.fecha_agendada || lv.fecha_creado,
+          hora_reunion: lv.hora_agendada || lv.hora_creado,
+          evidencia_url: '',
+          estado_teams: 'Pendiente de realizar',
+          origen_lead_virtual: true,
+          lead_id: lv.id,
+          telefono: lv.telefono,
+        });
+      });
+
       if (cacheDatosCompletos.data.estadisticas) {
         cacheDatosCompletos.data.estadisticas.total_leads = leads.length;
         cacheDatosCompletos.data.estadisticas.total_leads_no_calificados = leadsNoCalificados.length;
+        cacheDatosCompletos.data.estadisticas.total_llamadas_teams = teamsCache.length;
       }
     }
 

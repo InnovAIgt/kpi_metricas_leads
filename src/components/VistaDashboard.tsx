@@ -1,12 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import {
   Activity,
-  AlertTriangle,
   ArrowRight,
   Building2,
   CalendarCheck,
   CheckCircle2,
-  Clock,
   Download,
   Globe2,
   Headphones,
@@ -41,12 +39,12 @@ import {
 } from '../utils/dateHelpers';
 import {
   calcularMetricasPorVendedor,
-  calcularResumenKPIs,
 } from '../utils/matchingEngine';
 import {
   exportarLibroExcel,
-  formatearSubtituloExportacion,
 } from '../utils/excelExport';
+import { construirHojasKpiExcel } from '../utils/kpiExcelBuilder';
+import { SemaforoCumplimiento } from './SemaforoCumplimiento';
 import {
   DashboardGraficas,
   DatoMensualDashboard,
@@ -69,12 +67,12 @@ interface VistaDashboardProps {
 
 const ETIQUETA_ESTADO: Record<string, string> = {
   A_TIEMPO: 'A Tiempo',
-  TARDE_LEVE: 'Tarde Leve',
-  TARDE_GRAVE: 'Retraso Grave',
+  TARDE_LEVE: 'Tarde',
+  TARDE_GRAVE: 'Tarde',
   LLAMO_OTRO_DIA: 'Llamó Otro Día',
   NO_LLAMO: 'No Llamó',
   PENDIENTE: 'Pendiente / Próxima',
-  LLAMADA_CORTA: 'Llamada Corta / Buzón',
+  LLAMADA_CORTA: 'Tarde (Corta / Buzón)',
   ADELANTADA: 'Adelantada (>15m)',
   SIN_CITA: 'Sin Cita Previa',
 };
@@ -130,7 +128,6 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
 
   const tolAntes = parametros.tolerancia_anticipacion_minutos ?? 15;
   const tolDespues = parametros.tolerancia_retraso_a_tiempo_minutos ?? 15;
-  const umbralGrave = parametros.umbral_retraso_grave_minutos ?? 30;
 
   // Cruces filtrados solo por período (para calcular el split SV vs GT real sin anular el otro país)
   const crucesPeriodo = useMemo(() => {
@@ -189,11 +186,6 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     });
   }, [llamadas, fechaInicio, fechaFin, paisFiltro]);
 
-  const resumenKPIs = useMemo(
-    () => calcularResumenKPIs(crucesFiltrados),
-    [crucesFiltrados]
-  );
-
   const rankingVendedores = useMemo(
     () => calcularMetricasPorVendedor(crucesFiltrados),
     [crucesFiltrados]
@@ -222,11 +214,6 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
   const totalAuditables = useMemo(() => {
     return Math.max(0, crucesFiltrados.length - conteosEstado.PENDIENTE);
   }, [crucesFiltrados.length, conteosEstado.PENDIENTE]);
-
-  const brechasTotales =
-    conteosEstado.NO_LLAMO +
-    conteosEstado.TARDE_GRAVE +
-    conteosEstado.LLAMO_OTRO_DIA;
 
   // Distribución real por País en el período (SV vs GT siempre visible para comparar)
   const splitPais = useMemo(() => {
@@ -491,69 +478,15 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
     setExportando(true);
     try {
       const modoLabel = esCalificado ? 'Leads Calificados' : 'Leads No Calificados';
-      const subtitulo = formatearSubtituloExportacion({
+      const hojasKpi = construirHojasKpiExcel({
+        cruces: crucesFiltrados,
+        parametros,
+        esNoCalificado: !esCalificado,
         fechaInicio,
         fechaFin,
-        totalFilas: crucesFiltrados.length,
-        modo: `${modoLabel}${paisFiltro !== 'TODOS' ? ` · País: ${paisFiltro}` : ''}`,
-      });
-
-      const filasResumen = [
-        { indicador: 'Modo de Auditoría', valor: modoLabel, detalle: `Tolerancia -${tolAntes} / +${tolDespues} min` },
-        { indicador: 'Período Analizado', valor: `${fechaInicio || 'Inicio'} al ${fechaFin || 'Hoy'}`, detalle: paisFiltro === 'TODOS' ? 'SV + GT' : paisFiltro },
-        { indicador: 'Total Leads en Período', valor: crucesFiltrados.length, detalle: `${totalAuditables} auditables · ${conteosEstado.PENDIENTE} pendientes` },
-        { indicador: 'Cumplimiento A Tiempo', valor: `${resumenKPIs.tasa_cumplimiento_general}%`, detalle: `${resumenKPIs.citas_llamadas_a_tiempo} leads en verde` },
-        { indicador: 'Tarde Leve / Adelantada', valor: conteosEstado.TARDE_LEVE + conteosEstado.ADELANTADA, detalle: `${conteosEstado.TARDE_LEVE} tarde leve · ${conteosEstado.ADELANTADA} adelantada` },
-        { indicador: 'Retraso Grave / Otro Día', valor: conteosEstado.TARDE_GRAVE + conteosEstado.LLAMO_OTRO_DIA, detalle: `>${umbralGrave}m: ${conteosEstado.TARDE_GRAVE} · Otro día: ${conteosEstado.LLAMO_OTRO_DIA}` },
-        { indicador: 'No Llamó (Sin Gestión)', valor: conteosEstado.NO_LLAMO, detalle: 'Requiere seguimiento inmediato' },
-        { indicador: 'Desfase / Respuesta Promedio', valor: `${resumenKPIs.promedio_tiempo_respuesta_minutos} min`, detalle: 'Entre hora objetivo y llamada' },
-        { indicador: 'Asesores Activos en Catálogo', valor: catalogo.length, detalle: `${rankingVendedores.length} con actividad en período` },
-        { indicador: 'Llamadas en Período (PBX / Cel / WA / Teams)', valor: llamadasEnPeriodo.length, detalle: `PBX: ${canalesPeriodo.PBX} · Cel: ${canalesPeriodo.Celular} · WA: ${canalesPeriodo.WhatsApp} · Teams: ${canalesPeriodo.Teams}` },
-        ...analiticaEtapas.sla.map((s) => ({
-          indicador: `KPI 2 · ${s.label}`,
-          valor: `${s.pct}%`,
-          detalle: `${s.done} de ${analiticaEtapas.total} leads con Sí`,
-        })),
-        ...analiticaEtapas.retro.map((r) => ({
-          indicador: `KPI 3 · ${r.label}`,
-          valor: `${r.pct}%`,
-          detalle: `${r.done} de ${analiticaEtapas.total} leads con Sí`,
-        })),
-      ];
-
-      await exportarLibroExcel(
-        `Dashboard_${esCalificado ? 'Calificados' : 'NoCalificados'}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
-        [
-          {
-            name: 'Resumen Ejecutivo',
-            title: `Dashboard Ejecutivo — ${modoLabel}`,
-            subtitle: subtitulo,
-            accentHex: esCalificado ? 'E11D48' : '0891B2',
-            columns: [
-              { header: 'Indicador Clave', key: 'indicador', width: 38 },
-              { header: 'Valor', key: 'valor', width: 22, align: 'center' },
-              { header: 'Detalle', key: 'detalle', width: 42 },
-            ],
-            rows: filasResumen,
-          },
-          {
-            name: 'Ranking Asesores',
-            title: `Ranking por Asesor — ${modoLabel}`,
-            subtitle: subtitulo,
-            accentHex: 'D97706',
-            columns: [
-              { header: 'Asesor / Ejecutivo', key: 'vendedor_nombre', width: 28 },
-              { header: 'Total Leads', key: 'total_citas', align: 'right' },
-              { header: 'A Tiempo', key: 'citas_a_tiempo', align: 'right' },
-              { header: 'Tarde Leve', key: 'citas_tarde_leve', align: 'right' },
-              { header: 'Retraso Grave', key: 'citas_tarde_grave', align: 'right' },
-              { header: 'No Llamó', key: 'citas_no_llamo', align: 'right' },
-              { header: '% Cumplimiento', key: 'tasa_cumplimiento_pct', value: (r) => r.tasa_cumplimiento_pct / 100, numFmt: '0%', align: 'right' },
-              { header: 'Desfase Prom. (min)', key: 'promedio_desfase_minutos', align: 'right' },
-              { header: 'Score', key: 'score_rendimiento', semantic: 'status', align: 'center' },
-            ],
-            rows: rankingVendedores,
-          },
+        paisFiltro,
+        extraInfo: `Llamadas período: ${llamadasEnPeriodo.length} (PBX ${canalesPeriodo.PBX} · Cel ${canalesPeriodo.Celular} · WA ${canalesPeriodo.WhatsApp} · Teams ${canalesPeriodo.Teams})`,
+        hojasExtra: [
           {
             name: 'Comparativa Mensual',
             title: `Comparativa Mensual — ${modoLabel}`,
@@ -563,47 +496,34 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
               { header: 'Mes', key: 'labelLargo', width: 22 },
               { header: 'Total Leads', key: 'total', align: 'right' },
               { header: 'Auditables', key: 'auditables', align: 'right' },
-              { header: 'A Tiempo', key: 'aTiempo', align: 'right' },
-              { header: 'Con Retraso / Otro Día', key: 'tarde', align: 'right' },
-              { header: 'No Llamó', key: 'noLlamo', align: 'right' },
+              { header: 'A Tiempo (Verde)', key: 'aTiempo', align: 'right', columnTint: 'verde' },
+              { header: 'Tarde / Otro Día (Amarillo)', key: 'tarde', align: 'right', columnTint: 'amarillo' },
+              { header: 'No Llamó (Rojo)', key: 'noLlamo', align: 'right', columnTint: 'rojo' },
               { header: '% Cumplimiento', key: 'pctCumplimiento', value: (r) => r.pctCumplimiento / 100, numFmt: '0%', align: 'right' },
             ],
             rows: comparativaMensual,
           },
-          {
-            name: 'Detalle Leads Período',
-            title: `Detalle de Auditoría — ${modoLabel}`,
-            subtitle: subtitulo,
-            accentHex: '1E293B',
-            columns: [
-              { header: 'Código', key: 'codigo', value: (r) => r.cita?.codigo_prospecto || r.id, width: 16 },
-              { header: 'País', key: 'pais', value: (r) => r.pais || r.cita?.pais || 'SV', width: 10, align: 'center' },
-              { header: 'Prospecto', key: 'prospecto_nombre', width: 26 },
-              { header: 'Teléfono', key: 'telefono', width: 16 },
-              { header: 'Asesor Asignado', key: 'vendedor_nombre', width: 26 },
-              { header: esCalificado ? 'Fecha/Hora Cita' : 'Fecha/Hora Ingreso', key: 'fecha_cita', value: (r) => r.fecha_cita || r.cita?.fecha_hora_programada || '-', width: 20 },
-              { header: 'Fecha/Hora Llamada', key: 'fecha_llamada', value: (r) => r.fecha_llamada || '-', width: 20 },
-              { header: 'Canal', key: 'canal_utilizado', value: (r) => r.canal_utilizado || 'Sin llamada', width: 14 },
-              { header: 'Desfase (min)', key: 'desfase_minutos', value: (r) => r.desfase_minutos ?? '', align: 'right' },
-              { header: 'Duración (s)', key: 'duracion_llamada_segundos', value: (r) => r.duracion_llamada_segundos ?? 0, align: 'right' },
-              { header: 'Estado Cumplimiento', key: 'estado_label', value: (r) => ETIQUETA_ESTADO[r.estado_cumplimiento] || r.estado_cumplimiento, semantic: 'status', align: 'center' },
-              { header: 'Explicación', key: 'explicacion', width: 44 },
-            ],
-            rows: crucesFiltrados,
-          },
-        ]
+        ],
+      });
+
+      await exportarLibroExcel(
+        `Dashboard_KPI_${esCalificado ? 'Calificados' : 'NoCalificados'}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
+        hojasKpi
       );
     } finally {
       setExportando(false);
     }
   };
 
-  // Segmentos de barra apilada
+  // Segmentos de barra apilada (solo Tarde unificado, sin Tarde Leve / Retraso Grave)
+  const totalTarde =
+    conteosEstado.TARDE_LEVE +
+    conteosEstado.TARDE_GRAVE +
+    conteosEstado.LLAMADA_CORTA;
   const segmentosBarra = [
     { key: 'A_TIEMPO', label: 'A Tiempo', count: conteosEstado.A_TIEMPO, bar: 'bg-emerald-500', pill: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/50' },
-    { key: 'TARDE_LEVE', label: 'Tarde Leve', count: conteosEstado.TARDE_LEVE, bar: 'bg-amber-400', pill: 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/50' },
     { key: 'ADELANTADA', label: 'Adelantada', count: conteosEstado.ADELANTADA, bar: 'bg-sky-500', pill: 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800/50' },
-    { key: 'TARDE_GRAVE', label: 'Retraso Grave', count: conteosEstado.TARDE_GRAVE, bar: 'bg-orange-500', pill: 'bg-orange-50 dark:bg-orange-950/60 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800/50' },
+    { key: 'TARDE', label: 'Tarde', count: totalTarde, bar: 'bg-amber-400', pill: 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/50' },
     { key: 'LLAMO_OTRO_DIA', label: 'Otro Día', count: conteosEstado.LLAMO_OTRO_DIA, bar: 'bg-indigo-500', pill: 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/50' },
     { key: 'NO_LLAMO', label: 'No Llamó', count: conteosEstado.NO_LLAMO, bar: 'bg-rose-500', pill: 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/50' },
     { key: 'PENDIENTE', label: 'Pendiente', count: conteosEstado.PENDIENTE, bar: 'bg-slate-400 dark:bg-slate-600', pill: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700' },
@@ -716,107 +636,77 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
         label={`Filtrar Período (${crucesFiltrados.length} de ${crucesTodos.length} registros)`}
       />
 
-      {/* 4 Tarjetas KPI Principales */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {/* Card 1 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              {esCalificado ? 'Citas del Período' : 'Leads Ingresados'}
-            </span>
-            <div
-              className={`p-2 rounded-xl ${
-                esCalificado
-                  ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400'
-                  : 'bg-cyan-50 dark:bg-cyan-950/60 text-cyan-600 dark:text-cyan-400'
-              }`}
-            >
-              {esCalificado ? (
-                <CalendarCheck className="h-4 w-4" />
-              ) : (
-                <UserPlus className="h-4 w-4" />
-              )}
+      {/* Tarjeta Grande Citas del Período + Semáforo Real de Tránsito (sin tarjetas repetidas ni desfase) */}
+      <SemaforoCumplimiento
+        cruces={crucesFiltrados}
+        esNoCalificado={!esCalificado}
+        parametros={parametros}
+        onVerTranscripcion={onVerTranscripcion}
+        titulo={`Semáforo de Cumplimiento · ${esCalificado ? 'Leads Calificados' : 'Leads No Calificados'}`}
+        heroAside={
+          <div className="h-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs flex flex-col justify-between gap-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  {esCalificado ? 'Citas del Período' : 'Leads del Período'}
+                </span>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Total en el rango seleccionado
+                </p>
+              </div>
+              <div
+                className={`p-3 rounded-2xl border ${
+                  esCalificado
+                    ? 'bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800/50 text-amber-600 dark:text-amber-400'
+                    : 'bg-cyan-50 dark:bg-cyan-950/60 border-cyan-200 dark:border-cyan-800/50 text-cyan-600 dark:text-cyan-400'
+                }`}
+              >
+                {esCalificado ? (
+                  <CalendarCheck className="h-6 w-6" />
+                ) : (
+                  <UserPlus className="h-6 w-6" />
+                )}
+              </div>
             </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-3xl font-extrabold text-slate-900 dark:text-white">
-              {crucesFiltrados.length}
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              {totalAuditables} auditables · {conteosEstado.PENDIENTE} próximas/pendientes
-            </p>
-          </div>
-        </div>
 
-        {/* Card 2 */}
-        <div className="bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-900/60 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-              Cumplimiento a Tiempo
-            </span>
-            <div className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-              <CheckCircle2 className="h-4 w-4" />
+            <div className="my-auto py-2">
+              <div className="text-6xl font-black tracking-tight text-slate-900 dark:text-white leading-none">
+                {crucesFiltrados.length}
+              </div>
+              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mt-2">
+                {esCalificado ? 'citas agendadas filtradas' : 'leads directos filtrados'}
+              </p>
             </div>
-          </div>
-          <div className="mt-3">
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-extrabold text-emerald-600 dark:text-emerald-400">
-                {resumenKPIs.tasa_cumplimiento_general}%
-              </span>
-              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                ({resumenKPIs.citas_llamadas_a_tiempo}/{totalAuditables})
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              {esCalificado
-                ? `Criterio verde: -${tolAntes} / +${tolDespues} min`
-                : 'Meta verde: ≤1h hábil o 9:00 a.m.'}
-            </p>
-          </div>
-        </div>
 
-        {/* Card 3 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              {esCalificado ? 'Desfase Promedio' : 'Respuesta Promedio'}
-            </span>
-            <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
-              <Clock className="h-4 w-4" />
+            <div className="grid grid-cols-3 gap-2 pt-4 border-t border-slate-100 dark:border-slate-800 text-center">
+              <div className="bg-slate-50 dark:bg-slate-950/70 rounded-xl py-2 px-2 border border-slate-200/80 dark:border-slate-800">
+                <span className="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
+                  Auditables
+                </span>
+                <span className="text-base font-extrabold text-slate-900 dark:text-white">
+                  {totalAuditables}
+                </span>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-950/70 rounded-xl py-2 px-2 border border-slate-200/80 dark:border-slate-800">
+                <span className="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
+                  Pendientes
+                </span>
+                <span className="text-base font-extrabold text-slate-700 dark:text-slate-300">
+                  {conteosEstado.PENDIENTE}
+                </span>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-950/70 rounded-xl py-2 px-2 border border-slate-200/80 dark:border-slate-800">
+                <span className="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
+                  Llamadas
+                </span>
+                <span className="text-base font-extrabold text-indigo-600 dark:text-indigo-400">
+                  {llamadasEnPeriodo.length}
+                </span>
+              </div>
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-3xl font-extrabold text-slate-900 dark:text-white">
-              {resumenKPIs.promedio_tiempo_respuesta_minutos}{' '}
-              <span className="text-base font-semibold text-slate-400">min</span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              {llamadasEnPeriodo.length} llamadas registradas ·{' '}
-              {resumenKPIs.duracion_total_llamadas_horas}h totales
-            </p>
-          </div>
-        </div>
-
-        {/* Card 4 */}
-        <div className="bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900/60 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
-              Brechas / Sin Llamada
-            </span>
-            <div className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400">
-              <AlertTriangle className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-3xl font-extrabold text-rose-600 dark:text-rose-400">
-              {brechasTotales}
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              {conteosEstado.NO_LLAMO} sin llamada · {conteosEstado.TARDE_GRAVE} retraso grave · {conteosEstado.LLAMO_OTRO_DIA} otro día
-            </p>
-          </div>
-        </div>
-      </div>
+        }
+      />
 
       {/* Distribución de Cumplimiento + País + Canales */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -857,7 +747,7 @@ export const VistaDashboard: React.FC<VistaDashboardProps> = ({
             })}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-1">
             {segmentosBarra.map((seg) => (
               <div
                 key={seg.key}

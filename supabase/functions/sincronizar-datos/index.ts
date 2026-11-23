@@ -289,6 +289,17 @@ async function normalizarCallRow(registro: any, defaultPais: string = "SV") {
   };
 }
 
+function normalizarTipoReunion(tipoReunion?: unknown, tipoLlamada?: unknown, tipoAlt?: unknown): string {
+  for (const cand of [tipoReunion, tipoLlamada, tipoAlt]) {
+    if (cand === null || cand === undefined) continue;
+    const raw = String(cand).trim();
+    const lower = raw.toLowerCase();
+    if (!raw || ["null", "undefined", "none", "n/a", "na", "-"].includes(lower)) continue;
+    return raw;
+  }
+  return "Llamada Telefonica";
+}
+
 function normalizarLead(registro: any) {
   const fAg = registro.fecha_agendada && registro.fecha_agendada !== "null" ? String(registro.fecha_agendada).trim() : null;
   const hAg = registro.hora_agendada && registro.hora_agendada !== "null" ? String(registro.hora_agendada).trim() : null;
@@ -311,7 +322,7 @@ function normalizarLead(registro: any) {
     hora_agendada: hAg,
     fecha_creado: fCr,
     hora_creado: hCr,
-    tipo_reunion: registro.tipo_reunion || "Llamada Telefonica",
+    tipo_reunion: normalizarTipoReunion(registro.tipo_reunion, registro.tipo_llamada, registro.tipo),
     pais: registro.pais || "SV",
     asesor_id: registro.asesor_id ? String(registro.asesor_id) : null,
     asesor_nombre: registro.asesor_nombre || registro.ejecutivo || null,

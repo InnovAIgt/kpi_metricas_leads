@@ -1,10 +1,46 @@
 /**
  * Utilidades de validación y clasificación estricta de Leads.
  * Un lead calificado DEBE tener:
- * 1. Fecha agendada y hora agendada reales (no inventadas a partir de fecha_creado).
- * 2. Tipo de reunión válido (NO "(sin reunion)", "sin reunion", o vacío).
+ * 1. Fecha agendada real (no nula ni inventada a partir de fecha_creado).
+ * 2. Tipo de reunión válido (NO "(sin reunion)", "sin reunion", etc.; si viene null/"null" se asume "Llamada Telefonica").
  * 3. Nombre real del contacto o empresa (NO emojis solos como "😎", NO iniciales de 1 letra como "L", NO apodos informales como "El Amigo").
  */
+
+/**
+ * Normaliza el tipo de llamada / reunión proveniente de ProspektIA.
+ * - Si viene null, "null", undefined o vacío -> "Llamada Telefonica" por defecto.
+ * - Si trae algo diferente ("Virtual", "Llamada Virtual Teams", "Presencial", "(sin reunion)", etc.) se respeta.
+ */
+export function normalizarTipoReunion(
+  tipoReunion?: unknown,
+  tipoLlamada?: unknown,
+  tipoAlt?: unknown
+): string {
+  const candidatos = [tipoReunion, tipoLlamada, tipoAlt];
+  for (const cand of candidatos) {
+    if (cand === null || cand === undefined) continue;
+    const raw = String(cand).trim();
+    const lower = raw.toLowerCase();
+    if (
+      !raw ||
+      lower === 'null' ||
+      lower === 'undefined' ||
+      lower === 'none' ||
+      lower === 'n/a' ||
+      lower === 'na' ||
+      lower === '-'
+    ) {
+      continue;
+    }
+    return raw;
+  }
+  return 'Llamada Telefonica';
+}
+
+export function esTipoReunionVirtual(tipo?: unknown): boolean {
+  const lower = String(tipo || '').toLowerCase().trim();
+  return lower.includes('virtual') || lower.includes('teams');
+}
 
 export function esNombreValido(nombre: string | null | undefined): boolean {
   if (!nombre) return false;

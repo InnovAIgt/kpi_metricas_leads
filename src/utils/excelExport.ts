@@ -7,7 +7,9 @@ export interface ExcelColumn<T = any> {
   value?: (row: T) => string | number | boolean | null | undefined;
   numFmt?: string;
   align?: 'left' | 'center' | 'right';
-  semantic?: 'status' | 'boolean';
+  semantic?: 'status' | 'boolean' | 'semaforo';
+  columnTint?: 'verde' | 'amarillo' | 'rojo';
+  wrapText?: boolean;
 }
 
 export interface ExcelSheetConfig<T = any> {
@@ -17,6 +19,7 @@ export interface ExcelSheetConfig<T = any> {
   accentHex?: string; // Default: 1E293B (Slate 800)
   columns: ExcelColumn<T>[];
   rows: T[];
+  totalsRow?: Record<string, string | number>;
 }
 
 function sanitizarNombreHoja(nombre: string, fallback: string, usados: Set<string>): string {
@@ -37,7 +40,7 @@ function sanitizarNombreHoja(nombre: string, fallback: string, usados: Set<strin
 
 function resolverColorSemantico(
   valorStr: string,
-  tipo: 'status' | 'boolean'
+  tipo: 'status' | 'boolean' | 'semaforo'
 ): { fillHex: string; textHex: string } | null {
   const v = valorStr.toLowerCase().trim();
   if (!v) return null;
@@ -52,10 +55,38 @@ function resolverColorSemantico(
     return null;
   }
 
-  // Semántico de estados
+  // Semáforo explícito Verde / Amarillo / Rojo
+  if (
+    tipo === 'semaforo' ||
+    v.includes('🟢') ||
+    v.includes('🟡') ||
+    v.includes('🔴') ||
+    v.includes('🔵') ||
+    v.includes('⚪')
+  ) {
+    if (v.includes('verde') || v.includes('🟢') || v.includes('a tiempo')) {
+      return { fillHex: 'BBF7D0', textHex: '14532D' };
+    }
+    if (v.includes('amarillo') || v.includes('🟡') || v.includes('tarde')) {
+      return { fillHex: 'FEF08A', textHex: '854D0E' };
+    }
+    if (v.includes('rojo') || v.includes('🔴') || v.includes('no llamó') || v.includes('no llamo')) {
+      return { fillHex: 'FECACA', textHex: '991B1B' };
+    }
+    if (v.includes('otro día') || v.includes('otro dia') || v.includes('🔵')) {
+      return { fillHex: 'DBEAFE', textHex: '1E40AF' };
+    }
+    if (v.includes('pendiente') || v.includes('⚪')) {
+      return { fillHex: 'E2E8F0', textHex: '334155' };
+    }
+  }
+
+  // Semántico de estados (A Tiempo = Verde, Tarde Leve/Retraso Grave = Amarillo, No Llamó = Rojo)
   if (
     v.includes('a tiempo') ||
     v.includes('excelente') ||
+    v.includes('llamó antes') ||
+    v.includes('adelantada') ||
     (v.includes('contestada') && !v.includes('no contestada')) ||
     v === 'answered' ||
     v.includes('si se hizo y tiene evidencia') ||
@@ -67,22 +98,26 @@ function resolverColorSemantico(
   if (
     v.includes('tarde leve') ||
     v.includes('retraso leve') ||
+    v.includes('tarde grave') ||
+    v.includes('retraso grave') ||
+    v.includes('con retraso') ||
+    v === 'tarde' ||
     v.includes('aceptable') ||
-    v.includes('pendiente') ||
+    v.includes('bueno') ||
     v.includes('sin evidencia') ||
     v.includes('ocupad') ||
     v.includes('busy')
   ) {
-    return { fillHex: 'FEF3C7', textHex: '92400E' };
+    return { fillHex: 'FEF08A', textHex: '854D0E' };
   }
 
   if (
     v.includes('no llamó') ||
     v.includes('no llamo') ||
-    v.includes('tarde grave') ||
-    v.includes('retraso grave') ||
     v.includes('no contestada') ||
     v.includes('en riesgo') ||
+    v.includes('crítico') ||
+    v.includes('critico') ||
     v.includes('fallida') ||
     v.includes('no se realizó')
   ) {
@@ -92,9 +127,6 @@ function resolverColorSemantico(
   if (
     v.includes('otro día') ||
     v.includes('otro dia') ||
-    v.includes('adelantada') ||
-    v.includes('llamó antes') ||
-    v.includes('bueno') ||
     v.includes('teams')
   ) {
     return { fillHex: 'DBEAFE', textHex: '1E40AF' };
@@ -104,8 +136,18 @@ function resolverColorSemantico(
     return { fillHex: 'FFEDD5', textHex: '9A3412' };
   }
 
+  if (v.includes('pendiente')) {
+    return { fillHex: 'F1F5F9', textHex: '475569' };
+  }
+
   return null;
 }
+
+const TINT_COLORS: Record<'verde' | 'amarillo' | 'rojo', { headerBg: string; cellBg: string; textHex: string }> = {
+  verde: { headerBg: 'FF15803D', cellBg: 'FFF0FDF4', textHex: 'FF166534' },
+  amarillo: { headerBg: 'FFCA8A04', cellBg: 'FFFEFCE8', textHex: 'FF854D0E' },
+  rojo: { headerBg: 'FFB91C1C', cellBg: 'FFFEF2F2', textHex: 'FF991B1B' },
+};
 
 function construirHojaExcel<T>(
   workbook: ExcelJS.Workbook,
@@ -114,7 +156,7 @@ function construirHojaExcel<T>(
 ) {
   const ws = workbook.addWorksheet(nombreHoja, {
     views: [{ state: 'frozen', ySplit: config.subtitle ? 3 : 2 }],
-    properties: { defaultRowHeight: 20 },
+    properties: { defaultRowHeight: 21 },
   });
 
   const numCols = Math.max(1, config.columns.length);
@@ -145,10 +187,12 @@ function construirHojaExcel<T>(
   // Fila de Encabezados
   const headerValues = config.columns.map((c) => c.header);
   const headerRow = ws.addRow(headerValues);
-  headerRow.height = 24;
-  headerRow.eachCell((cell) => {
+  headerRow.height = 26;
+  headerRow.eachCell((cell, colNumber) => {
+    const colDef = config.columns[colNumber - 1];
+    const tint = colDef?.columnTint ? TINT_COLORS[colDef.columnTint] : null;
     cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${accentHex}` } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: tint ? tint.headerBg : `FF${accentHex}` } };
     cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
     cell.border = {
       top: { style: 'thin', color: { argb: 'FF334155' } },
@@ -188,7 +232,7 @@ function construirHojaExcel<T>(
     });
 
     const dataRow = ws.addRow(valores);
-    dataRow.height = 20;
+    dataRow.height = config.columns.some((c) => c.wrapText) ? 30 : 21;
 
     dataRow.eachCell((cell, colNumber) => {
       const colDef = config.columns[colNumber - 1];
@@ -198,6 +242,7 @@ function construirHojaExcel<T>(
       cell.alignment = {
         vertical: 'middle',
         horizontal: colDef?.align || (typeof cell.value === 'number' ? 'right' : 'left'),
+        wrapText: Boolean(colDef?.wrapText),
       };
       if (colDef?.numFmt && typeof cell.value === 'number') {
         cell.numFmt = colDef.numFmt;
@@ -206,6 +251,7 @@ function construirHojaExcel<T>(
       const semanticColor = colDef?.semantic
         ? resolverColorSemantico(cellStr, colDef.semantic)
         : null;
+      const tint = colDef?.columnTint ? TINT_COLORS[colDef.columnTint] : null;
 
       if (semanticColor) {
         cell.fill = {
@@ -218,6 +264,18 @@ function construirHojaExcel<T>(
           size: 10,
           bold: true,
           color: { argb: `FF${semanticColor.textHex}` },
+        };
+      } else if (tint) {
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: tint.cellBg },
+        };
+        cell.font = {
+          name: 'Calibri',
+          size: 10,
+          bold: true,
+          color: { argb: tint.textHex },
         };
       } else if (esZebra) {
         cell.fill = {
@@ -236,10 +294,38 @@ function construirHojaExcel<T>(
     });
   });
 
-  // Aplicar anchos calculados con límites limpios [10..48]
+  // Fila opcional de TOTALES
+  if (config.totalsRow) {
+    const totalVals = config.columns.map((c) => {
+      const v = config.totalsRow?.[c.key];
+      return v === undefined || v === null ? '' : v;
+    });
+    const tRow = ws.addRow(totalVals);
+    tRow.height = 24;
+    tRow.eachCell((cell, colNumber) => {
+      const colDef = config.columns[colNumber - 1];
+      cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+      cell.alignment = {
+        vertical: 'middle',
+        horizontal: colDef?.align || (typeof cell.value === 'number' ? 'right' : 'left'),
+      };
+      if (colDef?.numFmt && typeof cell.value === 'number') {
+        cell.numFmt = colDef.numFmt;
+      }
+      cell.border = {
+        top: { style: 'medium', color: { argb: 'FF334155' } },
+        bottom: { style: 'double', color: { argb: 'FF0F172A' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      };
+    });
+  }
+
+  // Aplicar anchos calculados con límites limpios [10..52]
   config.columns.forEach((col, i) => {
     const column = ws.getColumn(i + 1);
-    const width = col.width ?? Math.min(48, Math.max(10, maxAnchos[i]));
+    const width = col.width ?? Math.min(52, Math.max(10, maxAnchos[i]));
     column.width = width;
   });
 }

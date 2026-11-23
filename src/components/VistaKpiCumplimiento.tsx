@@ -29,7 +29,9 @@ import {
   getMesAnteriorInfo,
   formatLocalDate,
 } from '../utils/dateHelpers';
-import { exportarLibroExcel, formatearSubtituloExportacion } from '../utils/excelExport';
+import { exportarLibroExcel } from '../utils/excelExport';
+import { construirHojasKpiExcel } from '../utils/kpiExcelBuilder';
+import { SemaforoCumplimiento } from './SemaforoCumplimiento';
 
 interface VistaKpiCumplimientoProps {
   cruces: CruceAuditoria[];
@@ -225,9 +227,13 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
         else if (clave === 'canal') valorFila = String(fila.canal_utilizado || 'Sin llamada').trim();
         else if (clave === 'estado') {
           if (fila.estado_cumplimiento === 'A_TIEMPO') valorFila = etiquetaATiempoEstado;
-          else if (fila.estado_cumplimiento === 'TARDE_LEVE') valorFila = 'Tarde Leve';
-          else if (fila.estado_cumplimiento === 'TARDE_GRAVE') valorFila = 'Tarde Grave';
-          else if (fila.estado_cumplimiento === 'LLAMO_OTRO_DIA') valorFila = 'Llamó Otro Día';
+          else if (
+            fila.estado_cumplimiento === 'TARDE_LEVE' ||
+            fila.estado_cumplimiento === 'TARDE_GRAVE' ||
+            fila.estado_cumplimiento === 'LLAMADA_CORTA'
+          ) {
+            valorFila = 'Tarde';
+          } else if (fila.estado_cumplimiento === 'LLAMO_OTRO_DIA') valorFila = 'Llamó Otro Día';
           else if (fila.estado_cumplimiento === 'NO_LLAMO') valorFila = 'No Llamó';
           else if (fila.estado_cumplimiento === 'PENDIENTE') valorFila = 'Pendiente (Próxima)';
           else if (fila.estado_cumplimiento === 'ADELANTADA') valorFila = etiquetaAdelantadaEstado;
@@ -269,9 +275,13 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
       paises.add(p === 'GT' ? 'Guatemala (GT)' : 'El Salvador (SV)');
 
       if (c.estado_cumplimiento === 'A_TIEMPO') estados.add(etiquetaATiempoEstado);
-      else if (c.estado_cumplimiento === 'TARDE_LEVE') estados.add('Tarde Leve');
-      else if (c.estado_cumplimiento === 'TARDE_GRAVE') estados.add('Tarde Grave');
-      else if (c.estado_cumplimiento === 'LLAMO_OTRO_DIA') estados.add('Llamó Otro Día');
+      else if (
+        c.estado_cumplimiento === 'TARDE_LEVE' ||
+        c.estado_cumplimiento === 'TARDE_GRAVE' ||
+        c.estado_cumplimiento === 'LLAMADA_CORTA'
+      ) {
+        estados.add('Tarde');
+      } else if (c.estado_cumplimiento === 'LLAMO_OTRO_DIA') estados.add('Llamó Otro Día');
       else if (c.estado_cumplimiento === 'NO_LLAMO') estados.add('No Llamó');
       else if (c.estado_cumplimiento === 'PENDIENTE') estados.add('Pendiente (Próxima)');
       else if (c.estado_cumplimiento === 'ADELANTADA') estados.add(etiquetaAdelantadaEstado);
@@ -302,96 +312,24 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
   const totalAuditables = total - pendientes;
   const pctCumplimiento = totalAuditables > 0 ? Math.round((aTiempo / totalAuditables) * 100) : (total > 0 ? 100 : 0);
 
-  const nombreEstadoExport = (estado: CruceAuditoria['estado_cumplimiento']) => {
-    if (estado === 'A_TIEMPO') return 'A Tiempo';
-    if (estado === 'ADELANTADA') return 'Llamó Antes';
-    if (estado === 'TARDE_LEVE') return 'Tarde Leve';
-    if (estado === 'TARDE_GRAVE') return 'Retraso Grave';
-    if (estado === 'LLAMO_OTRO_DIA') return 'Llamó Otro Día';
-    if (estado === 'NO_LLAMO') return 'No Llamó';
-    if (estado === 'PENDIENTE') return 'Pendiente';
-    return 'Llamada Corta';
-  };
-
   const handleExportarExcel = async () => {
     setExportando(true);
     try {
-      const modoLabel = esNoCalificado ? 'Leads No Calificados' : 'Leads Calificados';
-      const asesoresExport = vendedorSeleccionado
-        ? vendedoresAgrupados.filter((v) => v.nombre === vendedorSeleccionado)
-        : vendedoresAgrupados;
+      const crucesExport = vendedorSeleccionado ? leadsParaDetalle : crucesConFecha;
+      const hojas = construirHojasKpiExcel({
+        cruces: crucesExport,
+        parametros,
+        esNoCalificado,
+        fechaInicio,
+        fechaFin,
+        paisFiltro,
+        asesorFiltro: vendedorSeleccionado,
+        extraInfo: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
+      });
 
       await exportarLibroExcel(
         `KPI_Cumplimiento_${esNoCalificado ? 'NoCalificados' : 'Calificados'}_${fechaInicio || 'inicio'}_${fechaFin || formatLocalDate()}`,
-        [
-          {
-            name: 'Resumen por Asesor',
-            title: `KPI 1: Cumplimiento por Asesor — ${modoLabel}`,
-            subtitle: formatearSubtituloExportacion({
-              fechaInicio,
-              fechaFin,
-              totalFilas: asesoresExport.length,
-              modo: esNoCalificado ? 'Regla 1h / 9am' : `Tolerancia ${etiquetaTol}`,
-            }),
-            accentHex: 'E11D48',
-            columns: [
-              { header: 'Asesor / Ejecutivo', key: 'nombre', width: 28 },
-              { header: 'Total Leads', key: 'total', align: 'right' },
-              { header: 'A Tiempo (OK)', key: 'aTiempo', align: 'right' },
-              { header: 'Con Retraso', key: 'conRetraso', align: 'right' },
-              { header: 'Llamó Otro Día', key: 'llamoOtroDia', align: 'right' },
-              { header: 'No Llamó', key: 'noLlamo', align: 'right' },
-              { header: 'Pendientes', key: 'pendientes', align: 'right' },
-              {
-                header: '% Cumplimiento',
-                key: 'pctCumplimiento',
-                value: (v) => v.pctCumplimiento / 100,
-                numFmt: '0%',
-                align: 'right',
-              },
-            ],
-            rows: asesoresExport,
-          },
-          {
-            name: 'Detalle de Leads',
-            title: `Detalle de Auditoría de Cumplimiento — ${modoLabel}`,
-            subtitle: formatearSubtituloExportacion({
-              fechaInicio,
-              fechaFin,
-              totalFilas: leadsParaDetalle.length,
-              modo: vendedorSeleccionado ? `Asesor: ${vendedorSeleccionado}` : modoLabel,
-              extra: busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : undefined,
-            }),
-            accentHex: '1E293B',
-            columns: [
-              { header: 'Código', key: 'codigo', value: (c) => c.cita?.codigo_prospecto || c.cita?.id || '-' },
-              { header: 'Prospecto / Cliente', key: 'prospecto_nombre', width: 26 },
-              { header: 'Teléfono', key: 'telefono', width: 16 },
-              {
-                header: 'País',
-                key: 'pais',
-                value: (c) => (c.pais || c.cita?.pais) === 'GT' ? 'Guatemala (GT)' : 'El Salvador (SV)',
-                align: 'center',
-              },
-              { header: 'Asesor Asignado', key: 'vendedor_nombre', width: 24 },
-              { header: 'Fecha Cita/Ingreso', key: 'fecha_cita', value: (c) => (c.fecha_cita ? c.fecha_cita.slice(0, 10) : 'N/D'), align: 'center' },
-              { header: 'Hora Cita/Ingreso', key: 'hora_cita', value: (c) => (c.cita?.hora_agendada ? c.cita.hora_agendada.slice(0, 8) : c.fecha_cita ? c.fecha_cita.slice(11, 19) : 'N/D'), align: 'center' },
-              { header: 'Llamada Detectada', key: 'fecha_llamada', value: (c) => (c.fecha_llamada ? c.fecha_llamada.replace('T', ' ').slice(0, 19) : 'Sin registro'), align: 'center' },
-              { header: 'Canal', key: 'canal_utilizado', value: (c) => c.canal_utilizado || 'Sin Canal', align: 'center' },
-              { header: 'Duración (seg)', key: 'duracion_llamada_segundos', value: (c) => c.duracion_llamada_segundos ?? 0, align: 'right' },
-              { header: 'Desfase (min)', key: 'desfase_minutos', value: (c) => (c.desfase_minutos !== undefined ? c.desfase_minutos : '-'), align: 'right' },
-              {
-                header: 'Cumplimiento',
-                key: 'estado_cumplimiento',
-                value: (c) => nombreEstadoExport(c.estado_cumplimiento),
-                semantic: 'status',
-                align: 'center',
-              },
-              { header: 'Diagnóstico', key: 'explicacion', width: 44 },
-            ],
-            rows: leadsParaDetalle,
-          },
-        ]
+        hojas
       );
     } finally {
       setExportando(false);
@@ -500,6 +438,15 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
           setFechaFin('');
         }}
         label="Filtrar Auditoría por Fechas"
+      />
+
+      {/* Semáforo Interactivo Superior */}
+      <SemaforoCumplimiento
+        cruces={crucesConFecha}
+        esNoCalificado={esNoCalificado}
+        parametros={parametros}
+        onVerTranscripcion={onVerTranscripcion}
+        titulo={`Semáforo KPI 1 · ${esNoCalificado ? 'Leads No Calificados' : 'Leads Calificados'}`}
       />
 
       {/* Indicador de cobertura y estado de filtros */}
@@ -926,14 +873,10 @@ export const VistaKpiCumplimiento: React.FC<VistaKpiCumplimientoProps> = ({
                               <CheckCircle2 className="h-3 w-3" /> A Tiempo
                             </span>
                           )}
-                          {cruce.estado_cumplimiento === 'TARDE_LEVE' && (
+                          {(cruce.estado_cumplimiento === 'TARDE_LEVE' ||
+                            cruce.estado_cumplimiento === 'TARDE_GRAVE') && (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-500/40">
-                              <AlertTriangle className="h-3 w-3" /> Tarde Leve
-                            </span>
-                          )}
-                          {cruce.estado_cumplimiento === 'TARDE_GRAVE' && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-300 dark:bg-rose-950/80 dark:text-rose-300 dark:border-rose-500/40">
-                              <XCircle className="h-3 w-3" /> Retraso Grave
+                              <AlertTriangle className="h-3 w-3" /> Tarde
                             </span>
                           )}
                           {cruce.estado_cumplimiento === 'LLAMO_OTRO_DIA' && (

@@ -9,6 +9,22 @@ const supabaseHeaders = {
   Accept: 'application/json',
 };
 
+function normalizarTipoReunion(tipoReunion?: unknown, tipoLlamada?: unknown, tipoAlt?: unknown): string {
+  for (const cand of [tipoReunion, tipoLlamada, tipoAlt]) {
+    if (cand === null || cand === undefined) continue;
+    const raw = String(cand).trim();
+    const lower = raw.toLowerCase();
+    if (!raw || ['null', 'undefined', 'none', 'n/a', 'na', '-'].includes(lower)) continue;
+    return raw;
+  }
+  return 'Llamada Telefonica';
+}
+
+function esTipoReunionVirtual(tipo?: unknown): boolean {
+  const lower = String(tipo || '').toLowerCase().trim();
+  return lower.includes('virtual') || lower.includes('teams');
+}
+
 const COLS_CATALOGO = 'id,pais,nombre_ejecutivo,usuario,extension,celular';
 const COLS_TEAMS = 'id,codigo_prospecto,pais,ejecutivo,cliente,fecha_reunion,hora_reunion,evidencia_url,estado_teams';
 const COLS_WHATSAPP = 'id,ejecutivo_id,numero_ejecutivo,numero_cliente,fecha_llamada,duracion_segundos,estado,direccion,nota';
@@ -548,7 +564,7 @@ export default async function handler(req: any, res: any) {
         hora_agendada: hAg,
         fecha_creado: pl.fecha_creado || null,
         hora_creado: pl.hora_creado || null,
-        tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
+        tipo_reunion: normalizarTipoReunion(pl.tipo_reunion, pl.tipo_llamada, pl.tipo),
         pais: pl.pais || '',
         asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
         asesor_nombre: asesorRes || pl.asesor_nombre || null,
@@ -804,8 +820,7 @@ export default async function handler(req: any, res: any) {
 
     const llamadasTeams = [...teamsRaw];
     leadsCalificadosValidos.forEach((lv: any) => {
-      const tipo = String(lv.tipo_reunion || '').toLowerCase();
-      if (tipo.includes('virtual')) {
+      if (esTipoReunionVirtual(lv.tipo_reunion)) {
         const cod = String(lv.codigo_prospecto || '').trim().toLowerCase();
         if (!mapaTeamsExistente.has(cod)) {
           llamadasTeams.push({

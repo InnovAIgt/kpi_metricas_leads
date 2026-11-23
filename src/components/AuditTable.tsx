@@ -52,7 +52,13 @@ export const AuditTable: React.FC<AuditTableProps> = ({
       c.vendedor_nombre.toLowerCase().includes(busqueda.toLowerCase());
 
     const matchEstado =
-      filtroEstado === 'todos' ? true : c.estado_cumplimiento === filtroEstado;
+      filtroEstado === 'todos'
+        ? true
+        : filtroEstado === 'TARDE'
+        ? c.estado_cumplimiento === 'TARDE_LEVE' ||
+          c.estado_cumplimiento === 'TARDE_GRAVE' ||
+          c.estado_cumplimiento === 'LLAMADA_CORTA'
+        : c.estado_cumplimiento === filtroEstado;
 
     const matchVendedor =
       filtroVendedor === 'todos' ? true : c.vendedor_nombre === filtroVendedor;
@@ -88,17 +94,11 @@ export const AuditTable: React.FC<AuditTableProps> = ({
           </span>
         );
       case 'TARDE_LEVE':
+      case 'TARDE_GRAVE':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-300 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30">
             <AlertTriangle className="h-3.5 w-3.5" />
-            Retraso Leve (+{desfase}m)
-          </span>
-        );
-      case 'TARDE_GRAVE':
-        return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-300 dark:bg-rose-500/15 dark:text-rose-300 dark:border-rose-500/30">
-            <XCircle className="h-3.5 w-3.5" />
-            Retraso Grave (+{desfase}m)
+            Tarde (+{desfase}m)
           </span>
         );
       case 'NO_LLAMO':
@@ -186,11 +186,8 @@ export const AuditTable: React.FC<AuditTableProps> = ({
                 <option value="A_TIEMPO" className="bg-white dark:bg-slate-900">
                   A Tiempo
                 </option>
-                <option value="TARDE_LEVE" className="bg-white dark:bg-slate-900">
-                  Retraso Leve
-                </option>
-                <option value="TARDE_GRAVE" className="bg-white dark:bg-slate-900">
-                  Retraso Grave
+                <option value="TARDE" className="bg-white dark:bg-slate-900">
+                  Tarde
                 </option>
                 <option value="NO_LLAMO" className="bg-white dark:bg-slate-900">
                   No Llamó

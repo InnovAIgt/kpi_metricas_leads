@@ -101,8 +101,7 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
     return [
       { key: 'A_TIEMPO', label: 'A Tiempo', count: conteosEstado.A_TIEMPO, color: '#10b981' },
       { key: 'ADELANTADA', label: 'Adelantada', count: conteosEstado.ADELANTADA, color: '#0ea5e9' },
-      { key: 'TARDE_LEVE', label: 'Tarde Leve', count: conteosEstado.TARDE_LEVE, color: '#f59e0b' },
-      { key: 'TARDE_GRAVE', label: 'Retraso Grave', count: conteosEstado.TARDE_GRAVE, color: '#f97316' },
+      { key: 'TARDE', label: 'Tarde', count: conteosEstado.TARDE_LEVE + conteosEstado.TARDE_GRAVE + conteosEstado.LLAMADA_CORTA, color: '#f59e0b' },
       { key: 'LLAMO_OTRO_DIA', label: 'Otro Día', count: conteosEstado.LLAMO_OTRO_DIA, color: '#6366f1' },
       { key: 'NO_LLAMO', label: 'No Llamó', count: conteosEstado.NO_LLAMO, color: '#ef4444' },
       { key: 'PENDIENTE', label: 'Pendiente', count: conteosEstado.PENDIENTE, color: '#94a3b8' },
@@ -521,7 +520,7 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                     <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500" /> A Tiempo
                   </span>
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-xs bg-amber-500" /> Con Retraso
+                    <span className="w-2.5 h-2.5 rounded-xs bg-amber-500" /> Tarde
                   </span>
                   <span className="inline-flex items-center gap-1.5">
                     <span className="w-2.5 h-2.5 rounded-xs bg-rose-500" /> No Llamó
@@ -722,7 +721,7 @@ export const DashboardGraficas: React.FC<DashboardGraficasProps> = ({
                       invert: false,
                     },
                     {
-                      label: 'Con Retraso',
+                      label: 'Tarde',
                       base: mesBaseObj.tarde,
                       comp: mesCompObj.tarde,
                       suffix: '',

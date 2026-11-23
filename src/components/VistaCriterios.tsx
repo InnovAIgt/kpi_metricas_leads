@@ -180,7 +180,7 @@ export const VistaCriterios: React.FC<VistaCriteriosProps> = ({
                 className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white tabular-nums focus:outline-none focus:border-rose-500"
               />
               <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                Por defecto: 30 minutos (entre {form.tolerancia_retraso_a_tiempo_minutos + 1}m y {form.umbral_retraso_grave_minutos}m es Tarde Leve)
+                Por defecto: 30 minutos (cualquier llamada después de +{form.tolerancia_retraso_a_tiempo_minutos}m se tipifica como Tarde)
               </span>
             </div>
 

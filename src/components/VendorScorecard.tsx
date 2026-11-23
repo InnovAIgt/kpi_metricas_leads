@@ -38,7 +38,7 @@ export const VendorScorecard: React.FC<VendorScorecardProps> = ({
             { header: 'Rol', key: 'rol', width: 20 },
             { header: 'Total Citas', key: 'total_citas', align: 'right' },
             { header: 'A Tiempo', key: 'citas_a_tiempo', align: 'right' },
-            { header: 'Con Retraso', key: 'citas_tarde', align: 'right' },
+            { header: 'Tarde', key: 'citas_tarde', align: 'right' },
             { header: 'No Llamó', key: 'citas_no_llamo', align: 'right' },
             { header: '% Cumplimiento', key: 'tasa_cumplimiento_pct', value: (v) => v.tasa_cumplimiento_pct / 100, numFmt: '0%', align: 'right' },
             { header: 'Desfase Medio (min)', key: 'promedio_desfase_minutos', align: 'right' },

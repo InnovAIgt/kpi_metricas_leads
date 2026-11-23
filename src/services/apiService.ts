@@ -1,5 +1,9 @@
 import { Cita, Llamada } from '../types';
-import { esLeadCalificadoValido } from '../utils/leadValidation';
+import {
+  esLeadCalificadoValido,
+  normalizarTipoReunion,
+  esTipoReunionVirtual,
+} from '../utils/leadValidation';
 import { formatLocalDate } from '../utils/dateHelpers';
 import { filtrarPbxPorCatalogo, filtrarCelularPorCatalogo } from '../utils/catalogoFilter';
 import {
@@ -290,6 +294,7 @@ function procesarLeadsProspektia({
         (cod ? `Prospecto ${cod}` : 'Prospecto Sin Nombre'),
       asesor_nombre: asesor,
       pais,
+      tipo_reunion: normalizarTipoReunion(orig.tipo_reunion, orig.tipo_llamada, orig.tipo),
       fecha_agendada: fAg || null,
       hora_agendada: hAg || null,
       fecha_creado: fCre || null,
@@ -333,7 +338,7 @@ function procesarLeadsProspektia({
       fecha_hora_programada: `${fObj}T${normalizarHoraStr(hObj, '09:00:00')}`,
       estado_cita: 'programada',
       fuente: 'Supabase',
-      tipo_reunion: l.tipo_reunion || 'Llamada Telefonica',
+      tipo_reunion: normalizarTipoReunion(l.tipo_reunion, l.tipo_llamada, l.tipo),
       fecha_agendada: l.fecha_agendada || undefined,
       hora_agendada: l.hora_agendada || undefined,
       fecha_creado: l.fecha_creado || undefined,
@@ -1016,7 +1021,7 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
         hora_agendada: hAg,
         fecha_creado: pl.fecha_creado || null,
         hora_creado: pl.hora_creado || null,
-        tipo_reunion: pl.tipo_reunion || 'Llamada Telefonica',
+        tipo_reunion: normalizarTipoReunion(pl.tipo_reunion, pl.tipo_llamada, pl.tipo),
         pais: pl.pais || '',
         asesor_id: pl.asesor_id ? String(pl.asesor_id) : null,
         asesor_nombre: pl.asesor_nombre || null,
@@ -1071,6 +1076,35 @@ async function sincronizarDirectoSupabase(inicio: number): Promise<DatosSyncBack
       leads,
       leadsNoCalificados,
       catalogo,
+    });
+
+    const mapaTeamsExist = new Set(
+      llamadasTeams
+        .map((t: any) => String(t.codigo_prospecto || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    leadsCalificadosValidos.forEach((lv: any) => {
+      if (!esTipoReunionVirtual(lv.tipo_reunion)) return;
+      const cod = String(lv.codigo_prospecto || '').trim().toLowerCase();
+      if (!cod || mapaTeamsExist.has(cod)) return;
+      mapaTeamsExist.add(cod);
+      llamadasTeams.push({
+        id: `lead-virtual-${lv.id || lv.codigo_prospecto}`,
+        codigo_prospecto: lv.codigo_prospecto,
+        pais: lv.pais || 'SV',
+        ejecutivo: lv.asesor_nombre,
+        ejecutivo_nombre: lv.asesor_nombre,
+        cliente:
+          lv.nombre_prospecto ||
+          (lv.codigo_prospecto ? `Prospecto ${lv.codigo_prospecto}` : 'Cliente Virtual'),
+        fecha_reunion: lv.fecha_agendada || lv.fecha_creado,
+        hora_reunion: lv.hora_agendada || lv.hora_creado,
+        evidencia_url: '',
+        estado_teams: 'Pendiente de realizar',
+        origen_lead_virtual: true,
+        lead_id: lv.id,
+        telefono: lv.telefono,
+      });
     });
 
     // Mapear Llamadas Unificadas (PBX, Celular, Teams, WhatsApp) con inferencia de país

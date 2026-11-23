@@ -23,7 +23,11 @@ import {
   getMesActualInfo,
   getRangoDefaultLeads,
 } from './utils/dateHelpers';
-import { esLeadCalificadoValido } from './utils/leadValidation';
+import {
+  esLeadCalificadoValido,
+  normalizarTipoReunion,
+  esTipoReunionVirtual,
+} from './utils/leadValidation';
 import { filtrarPbxPorCatalogo, filtrarCelularPorCatalogo } from './utils/catalogoFilter';
 import { detectarPaisLead } from './utils/paisHelpers';
 import {
@@ -36,7 +40,8 @@ import {
   guardarLlamadaManualBackend,
   triggerEdgeFunction,
 } from './services/apiService';
-import { exportarLibroExcel, formatearSubtituloExportacion } from './utils/excelExport';
+import { exportarLibroExcel } from './utils/excelExport';
+import { construirHojasKpiExcel } from './utils/kpiExcelBuilder';
 import { Sidebar } from './components/Sidebar';
 import { VistaDashboard } from './components/VistaDashboard';
 import { VistaCriterios } from './components/VistaCriterios';
@@ -404,6 +409,48 @@ export default function App() {
       setCitasCalificadas(res.citasCalificadas);
       setCitasNoCalificadas(res.citasNoCalificadas);
 
+      // Apartar automáticamente nuevos leads virtuales / Teams en Reuniones Teams
+      const virtuales = res.rawLeads.filter((l: any) => esTipoReunionVirtual(l.tipo_reunion));
+      if (virtuales.length > 0) {
+        setRawTeams((prev) => {
+          const mapaExistente = new Set(
+            prev
+              .map((t: any) => String(t.codigo_prospecto || '').trim().toLowerCase())
+              .filter(Boolean)
+          );
+          const nuevosTeams = [...prev];
+          let huboNuevos = false;
+          virtuales.forEach((lv: any) => {
+            const cod = String(lv.codigo_prospecto || '').trim().toLowerCase();
+            if (!cod || mapaExistente.has(cod)) return;
+            mapaExistente.add(cod);
+            huboNuevos = true;
+            nuevosTeams.push({
+              id: `lead-virtual-${lv.id || lv.codigo_prospecto}`,
+              codigo_prospecto: lv.codigo_prospecto,
+              pais: lv.pais || 'SV',
+              ejecutivo: lv.asesor_nombre,
+              ejecutivo_nombre: lv.asesor_nombre,
+              cliente:
+                lv.nombre_prospecto ||
+                (lv.codigo_prospecto ? `Prospecto ${lv.codigo_prospecto}` : 'Cliente Virtual'),
+              fecha_reunion: lv.fecha_agendada || lv.fecha_creado,
+              hora_reunion: lv.hora_agendada || lv.hora_creado,
+              evidencia_url: '',
+              estado_teams: 'Pendiente de realizar',
+              origen_lead_virtual: true,
+              lead_id: lv.id,
+              telefono: lv.telefono,
+            });
+          });
+          if (huboNuevos) {
+            safeSetLocalStorage('kpi_raw_teams_cache', nuevosTeams);
+            return nuevosTeams;
+          }
+          return prev;
+        });
+      }
+
       safeSetLocalStorage('kpi_raw_leads_cache', res.rawLeads);
       safeSetLocalStorage('kpi_raw_nc_cache_v2', res.rawLeadsNoCalificados);
       safeSetLocalStorage('kpi_citas_calificadas', res.citasCalificadas);
@@ -757,77 +804,17 @@ export default function App() {
   const handleExportarResumenExcel = async () => {
     setExportandoResumen(true);
     try {
-      const modoLabel =
-        modoLeads === 'calificados' ? 'Leads Calificados' : 'Leads No Calificados';
-      const subtitulo = formatearSubtituloExportacion({
+      const hojas = construirHojasKpiExcel({
+        cruces: crucesResumenFiltrados,
+        parametros,
+        esNoCalificado: modoLeads === 'no_calificados',
         fechaInicio: fechaInicioResumen,
         fechaFin: fechaFinResumen,
-        totalFilas: crucesResumenFiltrados.length,
-        modo: `Resumen KPIs (${modoLabel})`,
+        paisFiltro: paisResumen,
       });
       await exportarLibroExcel(
         `Resumen_KPIs_${modoLeads}_${fechaInicioResumen || 'inicio'}_${fechaFinResumen || formatLocalDate()}`,
-        [
-          {
-            name: 'Resumen KPIs',
-            title: `Resumen Ejecutivo de KPIs — ${modoLabel}`,
-            subtitle: subtitulo,
-            accentHex: 'E11D48',
-            columns: [
-              { header: 'Métrica', key: 'metrica', width: 38 },
-              { header: 'Resultado', key: 'resultado', width: 22, align: 'center' },
-            ],
-            rows: [
-              { metrica: 'Total Citas / Leads Auditados', resultado: resumenKPIs.total_citas },
-              { metrica: 'Llamadas a Tiempo (Verde)', resultado: resumenKPIs.citas_llamadas_a_tiempo },
-              { metrica: 'Tasa de Cumplimiento General', resultado: `${resumenKPIs.tasa_cumplimiento_general}%` },
-              { metrica: 'Citas No Atendidas (No Llamó)', resultado: resumenKPIs.citas_no_atendidas },
-              { metrica: 'Citas Pendientes / Próximas', resultado: resumenKPIs.citas_pendientes || 0 },
-              { metrica: 'Llamadas con Retraso / Otro Día', resultado: resumenKPIs.citas_con_retraso },
-              { metrica: 'Llamadas Insuficientes / Cortas', resultado: resumenKPIs.citas_llamada_insuficiente },
-              { metrica: 'Desfase / Respuesta Promedio', resultado: `${resumenKPIs.promedio_tiempo_respuesta_minutos} min` },
-              { metrica: 'Horas Totales en Llamadas', resultado: `${resumenKPIs.duracion_total_llamadas_horas} hrs` },
-            ],
-          },
-          {
-            name: 'Ranking Asesores',
-            title: `Scorecard por Asesor — ${modoLabel}`,
-            subtitle: subtitulo,
-            accentHex: 'D97706',
-            columns: [
-              { header: 'Asesor / Ejecutivo', key: 'vendedor_nombre', width: 28 },
-              { header: 'Rol', key: 'rol', width: 18 },
-              { header: 'Total Leads', key: 'total_citas', align: 'right' },
-              { header: 'A Tiempo', key: 'citas_a_tiempo', align: 'right' },
-              { header: 'Tarde Leve', key: 'citas_tarde_leve', align: 'right' },
-              { header: 'Retraso Grave', key: 'citas_tarde_grave', align: 'right' },
-              { header: 'No Llamó', key: 'citas_no_llamo', align: 'right' },
-              { header: '% Cumplimiento', key: 'tasa_cumplimiento_pct', value: (r) => r.tasa_cumplimiento_pct / 100, numFmt: '0%', align: 'right' },
-              { header: 'Desfase Medio (min)', key: 'promedio_desfase_minutos', align: 'right' },
-              { header: 'Score', key: 'score_rendimiento', semantic: 'status', align: 'center' },
-            ],
-            rows: metricasVendedores,
-          },
-          {
-            name: 'Detalle Cruces',
-            title: `Detalle de Cruces — ${modoLabel}`,
-            subtitle: subtitulo,
-            accentHex: '1E293B',
-            columns: [
-              { header: 'País', key: 'pais', value: (r) => r.pais || r.cita?.pais || 'SV', width: 10, align: 'center' },
-              { header: 'Prospecto', key: 'prospecto_nombre', width: 26 },
-              { header: 'Teléfono', key: 'telefono', width: 16 },
-              { header: 'Asesor', key: 'vendedor_nombre', width: 26 },
-              { header: 'Fecha Objetivo', key: 'fecha_cita', value: (r) => r.fecha_cita || '-', width: 20 },
-              { header: 'Fecha Llamada', key: 'fecha_llamada', value: (r) => r.fecha_llamada || '-', width: 20 },
-              { header: 'Canal', key: 'canal_utilizado', value: (r) => r.canal_utilizado || 'Sin llamada', width: 14 },
-              { header: 'Desfase (min)', key: 'desfase_minutos', value: (r) => r.desfase_minutos ?? '', align: 'right' },
-              { header: 'Estado', key: 'estado_cumplimiento', semantic: 'status', align: 'center' },
-              { header: 'Explicación', key: 'explicacion', width: 42 },
-            ],
-            rows: crucesResumenFiltrados,
-          },
-        ]
+        hojas
       );
     } finally {
       setExportandoResumen(false);
@@ -1219,11 +1206,12 @@ export default function App() {
                 {
                   clave: 'tipo_reunion',
                   etiqueta: 'Tipo de Reunión',
-                  exportValue: (val) => String(val || 'Llamada Telefonica').trim(),
-                  render: (val) => {
-                    const tipo = String(val || 'Llamada Telefonica').trim();
+                  exportValue: (val, fila) =>
+                    normalizarTipoReunion(val, fila?.tipo_llamada, fila?.tipo),
+                  render: (val, fila) => {
+                    const tipo = normalizarTipoReunion(val, fila?.tipo_llamada, fila?.tipo);
                     const tipoLower = tipo.toLowerCase();
-                    if (tipoLower.includes('teams') || tipoLower.includes('virtual')) {
+                    if (esTipoReunionVirtual(tipo)) {
                       return (
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/80 dark:text-blue-300 dark:border-blue-700/50 whitespace-nowrap">
                           <Video className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400 shrink-0" />
@@ -2000,6 +1988,8 @@ export default function App() {
                 kpis={resumenKPIs}
                 cruces={crucesResumenFiltrados}
                 parametros={parametros}
+                esNoCalificado={modoLeads === 'no_calificados'}
+                onVerTranscripcion={(cruce) => setLlamadaParaTranscripcion(cruce)}
                 onVerDetalleCruce={() => setVistaActiva('kpi_cumplimiento')}
                 onCambiarTab={() => {}}
               />

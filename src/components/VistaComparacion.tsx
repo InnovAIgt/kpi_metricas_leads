@@ -6,16 +6,13 @@ import {
   Download,
   FileText,
   FilterX,
+  Globe2,
   MessageSquare,
   Phone,
-  PhoneCall,
   RotateCcw,
   Smartphone,
-  TrendingDown,
-  TrendingUp,
   User,
   UserPlus,
-  Users,
   Video,
 } from 'lucide-react';
 import {
@@ -26,15 +23,11 @@ import {
   ParametrosAuditoria,
 } from '../types';
 import { PARAMETROS_DEFAULT } from '../data/mockData';
+import { formatLocalDate } from '../utils/dateHelpers';
 import {
-  formatLocalDate,
-  getMesActualInfo,
-  getMesAnteriorInfo,
-  getRangoDefaultLeads,
-  getRangoMesAnterior,
-} from '../utils/dateHelpers';
-import {
+  CodigoPais,
   coincideAsesorFiltro,
+  normalizarCodigoPais,
   obtenerEjecutivosPorPais,
 } from '../utils/paisHelpers';
 import {
@@ -52,7 +45,7 @@ import {
 
 interface VistaComparacionProps {
   crucesTodos: CruceAuditoria[];
-  citasActivas: Cita[];
+  citasActivas?: Cita[];
   llamadas: Llamada[];
   catalogo: any[];
   parametros?: ParametrosAuditoria;
@@ -60,16 +53,18 @@ interface VistaComparacionProps {
   onVerTranscripcion?: (cruce: CruceAuditoria) => void;
 }
 
+type FiltroPaisGlobal = 'TODOS' | 'SV' | 'GT' | 'SV_VS_GT';
+
 interface FiltroEscenario {
-  pais: 'TODOS' | 'SV' | 'GT';
-  asesor: string;
+  asesor: string; // '' = sin seleccionar (por defecto), 'TODOS' = todos, o nombre específico
   fechaInicio: string;
   fechaFin: string;
 }
 
 interface EscenarioCalculado {
+  activo: boolean;
+  paisEfectivo: 'TODOS' | 'SV' | 'GT';
   filtro: FiltroEscenario;
-  crucesPeriodo: CruceAuditoria[];
   crucesFiltrados: CruceAuditoria[];
   asesoresDisponibles: string[];
   llamadasPeriodo: Llamada[];
@@ -87,9 +82,6 @@ interface EscenarioCalculado {
     auditables: number;
   };
   pctVerdeSemaforo: number;
-  pctAmarilloSemaforo: number;
-  pctRojoSemaforo: number;
-  pctCumplimientoAuditables: number;
   desfasePromedioMin: number;
   horarioCounts: {
     laboral: number;
@@ -114,83 +106,113 @@ function extraerFechaStr(cruce: CruceAuditoria): string {
   return match ? match[1] : '';
 }
 
-function getRangoUltimosNDias(dias: number): { inicio: string; fin: string } {
-  const hoy = new Date();
-  const ini = new Date(hoy);
-  ini.setDate(hoy.getDate() - Math.max(0, dias - 1));
-  return {
-    inicio: formatLocalDate(ini),
-    fin: formatLocalDate(hoy),
-  };
-}
-
 function formatearPaisLabel(pais: 'TODOS' | 'SV' | 'GT'): string {
   if (pais === 'SV') return 'El Salvador (SV)';
   if (pais === 'GT') return 'Guatemala (GT)';
-  return 'Todos Países (SV + GT)';
+  return 'Todos los Países';
+}
+
+function resolverPaisEjecutivo(
+  nombreAsesor: string,
+  catalogo: any[],
+  crucesTodos: CruceAuditoria[]
+): CodigoPais | null {
+  if (!nombreAsesor || nombreAsesor === 'TODOS') return null;
+
+  for (const cat of catalogo || []) {
+    const nom = String(cat?.nombre_ejecutivo || '').trim();
+    if (nom && coincideAsesorFiltro(nombreAsesor, nom, catalogo)) {
+      const p = normalizarCodigoPais(cat?.pais);
+      if (p) return p;
+    }
+  }
+
+  for (const c of crucesTodos || []) {
+    if (c.vendedor_nombre && coincideAsesorFiltro(nombreAsesor, c.vendedor_nombre, catalogo)) {
+      const p = normalizarCodigoPais(c.pais || c.cita?.pais);
+      if (p) return p;
+    }
+  }
+
+  return null;
 }
 
 function calcularDatosEscenario(
   filtro: FiltroEscenario,
+  paisPanel: 'TODOS' | 'SV' | 'GT',
+  paisGlobal: FiltroPaisGlobal,
   crucesTodos: CruceAuditoria[],
   llamadas: Llamada[],
   catalogo: any[],
   parametros: ParametrosAuditoria
 ): EscenarioCalculado {
-  const crucesPeriodo = crucesTodos.filter((c) => {
-    if (filtro.fechaInicio || filtro.fechaFin) {
-      const f = extraerFechaStr(c);
-      if (!f) return false;
-      if (filtro.fechaInicio && f < filtro.fechaInicio) return false;
-      if (filtro.fechaFin && f > filtro.fechaFin) return false;
-    }
-    return true;
-  });
-
   const asesoresDisponibles = obtenerEjecutivosPorPais(
     catalogo,
-    crucesPeriodo,
-    filtro.pais
+    crucesTodos,
+    paisPanel
   );
 
-  const crucesFiltrados = crucesPeriodo.filter((c) => {
-    if (filtro.pais !== 'TODOS') {
-      const p = String(c.pais || c.cita?.pais || 'SV').toUpperCase();
-      if (p !== filtro.pais) return false;
-    }
-    if (filtro.asesor && filtro.asesor !== 'TODOS') {
-      if (!coincideAsesorFiltro(filtro.asesor, c.vendedor_nombre, catalogo)) {
-        return false;
-      }
-    }
-    return true;
-  });
+  const tieneEjecutivo = Boolean(filtro.asesor);
+  const tieneFechas = Boolean(filtro.fechaInicio || filtro.fechaFin);
+  const activo = tieneEjecutivo || tieneFechas || paisGlobal !== 'TODOS';
 
-  const llamadasPeriodo = llamadas.filter((ll) => {
-    if (filtro.pais !== 'TODOS') {
-      const pCall = String(ll.pais || 'SV').toUpperCase();
-      if (pCall !== filtro.pais) return false;
-    }
-    if (filtro.asesor && filtro.asesor !== 'TODOS') {
-      const cand =
-        ll.vendedor_nombre ||
-        (ll as any).asesor_nombre ||
-        (ll as any).usuario ||
-        (ll as any).ejecutivo_nombre ||
-        '';
-      if (!coincideAsesorFiltro(filtro.asesor, cand, catalogo)) return false;
-    }
-    if (filtro.fechaInicio || filtro.fechaFin) {
-      const match = String(ll.fecha_hora_inicio || '').match(
-        /^(\d{4}-\d{2}-\d{2})/
-      );
-      const f = match ? match[1] : '';
-      if (!f) return false;
-      if (filtro.fechaInicio && f < filtro.fechaInicio) return false;
-      if (filtro.fechaFin && f > filtro.fechaFin) return false;
-    }
-    return true;
-  });
+  // Si un ejecutivo específico fue elegido en modo global TODOS, mostrar su país real como etiqueta informativa
+  const paisEjecutivoReal =
+    filtro.asesor && filtro.asesor !== 'TODOS'
+      ? resolverPaisEjecutivo(filtro.asesor, catalogo, crucesTodos)
+      : null;
+
+  const paisEfectivo: 'TODOS' | 'SV' | 'GT' =
+    paisPanel !== 'TODOS' ? paisPanel : paisEjecutivoReal || 'TODOS';
+
+  const crucesFiltrados = !activo
+    ? []
+    : crucesTodos.filter((c) => {
+        if (paisPanel !== 'TODOS') {
+          const p = String(c.pais || c.cita?.pais || 'SV').toUpperCase();
+          if (p !== paisPanel) return false;
+        }
+        if (filtro.asesor && filtro.asesor !== 'TODOS') {
+          if (!coincideAsesorFiltro(filtro.asesor, c.vendedor_nombre, catalogo)) {
+            return false;
+          }
+        }
+        if (filtro.fechaInicio || filtro.fechaFin) {
+          const f = extraerFechaStr(c);
+          if (!f) return false;
+          if (filtro.fechaInicio && f < filtro.fechaInicio) return false;
+          if (filtro.fechaFin && f > filtro.fechaFin) return false;
+        }
+        return true;
+      });
+
+  const llamadasPeriodo = !activo
+    ? []
+    : llamadas.filter((ll) => {
+        if (paisPanel !== 'TODOS') {
+          const pCall = String(ll.pais || 'SV').toUpperCase();
+          if (pCall !== paisPanel) return false;
+        }
+        if (filtro.asesor && filtro.asesor !== 'TODOS') {
+          const cand =
+            ll.vendedor_nombre ||
+            (ll as any).asesor_nombre ||
+            (ll as any).usuario ||
+            (ll as any).ejecutivo_nombre ||
+            '';
+          if (!coincideAsesorFiltro(filtro.asesor, cand, catalogo)) return false;
+        }
+        if (filtro.fechaInicio || filtro.fechaFin) {
+          const match = String(ll.fecha_hora_inicio || '').match(
+            /^(\d{4}-\d{2}-\d{2})/
+          );
+          const f = match ? match[1] : '';
+          if (!f) return false;
+          if (filtro.fechaInicio && f < filtro.fechaInicio) return false;
+          if (filtro.fechaFin && f > filtro.fechaFin) return false;
+        }
+        return true;
+      });
 
   const canales = { PBX: 0, Celular: 0, WhatsApp: 0, Teams: 0 };
   llamadasPeriodo.forEach((ll) => {
@@ -250,12 +272,20 @@ function calcularDatosEscenario(
 
   const etiquetaRango =
     !filtro.fechaInicio && !filtro.fechaFin
-      ? 'Histórico Completo'
+      ? 'Todas las fechas'
       : `${filtro.fechaInicio || 'Inicio'} → ${filtro.fechaFin || 'Hoy'}`;
 
+  const etiquetaEjecutivo =
+    filtro.asesor === ''
+      ? 'Sin ejecutivo seleccionado'
+      : filtro.asesor === 'TODOS'
+      ? 'Todos los ejecutivos'
+      : filtro.asesor;
+
   return {
+    activo,
+    paisEfectivo,
     filtro,
-    crucesPeriodo,
     crucesFiltrados,
     asesoresDisponibles,
     llamadasPeriodo,
@@ -273,26 +303,23 @@ function calcularDatosEscenario(
       auditables,
     },
     pctVerdeSemaforo: totalSemaforo > 0 ? Math.round((verde / denomSem) * 100) : 0,
-    pctAmarilloSemaforo: totalSemaforo > 0 ? Math.round((amarillo / denomSem) * 100) : 0,
-    pctRojoSemaforo: totalSemaforo > 0 ? Math.round((rojo / denomSem) * 100) : 0,
-    pctCumplimientoAuditables:
-      auditables > 0 ? Math.round((verde / auditables) * 100) : 0,
     desfasePromedioMin:
       countDesfase > 0 ? Number((sumaDesfase / countDesfase).toFixed(1)) : 0,
     horarioCounts,
     etiquetaRango,
-    etiquetaEjecutivo:
-      filtro.asesor === 'TODOS' ? 'Todos los ejecutivos' : filtro.asesor,
-    etiquetaPais: formatearPaisLabel(filtro.pais),
+    etiquetaEjecutivo,
+    etiquetaPais: formatearPaisLabel(paisEfectivo),
   };
 }
 
 interface PanelEscenarioProps {
   lado: 'A' | 'B';
   tituloBadge: string;
-  subtituloRol: string;
+  paisPanel: 'TODOS' | 'SV' | 'GT';
   esCalificado: boolean;
   datos: EscenarioCalculado;
+  catalogo: any[];
+  crucesTodos: CruceAuditoria[];
   onChangeFiltro: (nuevo: FiltroEscenario) => void;
   parametros: ParametrosAuditoria;
   onVerTranscripcion?: (cruce: CruceAuditoria) => void;
@@ -301,69 +328,34 @@ interface PanelEscenarioProps {
 const PanelEscenario: React.FC<PanelEscenarioProps> = ({
   lado,
   tituloBadge,
-  subtituloRol,
+  paisPanel,
   esCalificado,
   datos,
+  catalogo,
+  crucesTodos,
   onChangeFiltro,
   parametros,
   onVerTranscripcion,
 }) => {
   const esA = lado === 'A';
-  const mesActual = useMemo(() => getMesActualInfo(), []);
-  const mesAnterior = useMemo(() => getMesAnteriorInfo(), []);
-
-  // Mantener coherencia cuando cambia el país y el ejecutivo seleccionado ya no pertenece a ese país
-  useEffect(() => {
-    if (
-      datos.filtro.asesor !== 'TODOS' &&
-      !datos.asesoresDisponibles.some((a) =>
-        coincideAsesorFiltro(a, datos.filtro.asesor)
-      )
-    ) {
-      onChangeFiltro({ ...datos.filtro, asesor: 'TODOS' });
-    }
-  }, [datos.asesoresDisponibles, datos.filtro, onChangeFiltro]);
-
-  const aplicarRangoRapido = (tipo: 'mes_actual' | 'mes_anterior' | '7d' | 'hoy' | 'todo') => {
-    if (tipo === 'mes_actual') {
-      const r = getRangoDefaultLeads();
-      onChangeFiltro({ ...datos.filtro, fechaInicio: r.inicio, fechaFin: r.fin });
-    } else if (tipo === 'mes_anterior') {
-      const r = getRangoMesAnterior();
-      onChangeFiltro({ ...datos.filtro, fechaInicio: r.inicio, fechaFin: r.fin });
-    } else if (tipo === '7d') {
-      const r = getRangoUltimosNDias(7);
-      onChangeFiltro({ ...datos.filtro, fechaInicio: r.inicio, fechaFin: r.fin });
-    } else if (tipo === 'hoy') {
-      const hoy = formatLocalDate(new Date());
-      onChangeFiltro({ ...datos.filtro, fechaInicio: hoy, fechaFin: hoy });
-    } else {
-      onChangeFiltro({ ...datos.filtro, fechaInicio: '', fechaFin: '' });
-    }
-  };
-
-  const esPreset = (tipo: 'mes_actual' | 'mes_anterior' | '7d' | 'hoy' | 'todo') => {
-    const { fechaInicio, fechaFin } = datos.filtro;
-    if (tipo === 'mes_actual') {
-      const r = getRangoDefaultLeads();
-      return fechaInicio === r.inicio && fechaFin === r.fin;
-    }
-    if (tipo === 'mes_anterior') {
-      const r = getRangoMesAnterior();
-      return fechaInicio === r.inicio && fechaFin === r.fin;
-    }
-    if (tipo === '7d') {
-      const r = getRangoUltimosNDias(7);
-      return fechaInicio === r.inicio && fechaFin === r.fin;
-    }
-    if (tipo === 'hoy') {
-      const hoy = formatLocalDate(new Date());
-      return fechaInicio === hoy && fechaFin === hoy;
-    }
-    return !fechaInicio && !fechaFin;
-  };
-
   const { conteos, canales } = datos;
+
+  const tieneFiltrosEnPanel = Boolean(
+    datos.filtro.asesor || datos.filtro.fechaInicio || datos.filtro.fechaFin
+  );
+
+  // Etiquetar el país junto al nombre cuando el selector superior está en "Todos los Países"
+  const opcionesEjecutivos = useMemo(() => {
+    return datos.asesoresDisponibles.map((nombre) => {
+      const p = resolverPaisEjecutivo(nombre, catalogo, crucesTodos);
+      return {
+        nombre,
+        pais: p,
+        label: paisPanel === 'TODOS' && p ? `${nombre} (${p})` : nombre,
+      };
+    });
+  }, [datos.asesoresDisponibles, catalogo, crucesTodos, paisPanel]);
+
   const segmentos = [
     { key: 'verde', label: 'A Tiempo', count: conteos.verde, bar: 'bg-emerald-500' },
     { key: 'amarillo', label: 'Tarde Leve', count: conteos.amarillo, bar: 'bg-amber-400' },
@@ -383,7 +375,7 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
           : 'border-emerald-200 dark:border-emerald-800/70'
       }`}
     >
-      {/* Cabecera distintiva del Escenario (A vs B) */}
+      {/* Cabecera de la Tabla Comparativa */}
       <div
         className={`px-5 py-3.5 border-b flex flex-wrap items-center justify-between gap-2 ${
           esA
@@ -394,9 +386,7 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
         <div className="flex items-center gap-2.5 min-w-0">
           <span
             className={`px-2.5 py-1 rounded-lg text-xs font-black tracking-wide uppercase shrink-0 ${
-              esA
-                ? 'bg-indigo-600 text-white'
-                : 'bg-emerald-600 text-white'
+              esA ? 'bg-indigo-600 text-white' : 'bg-emerald-600 text-white'
             }`}
           >
             {tituloBadge}
@@ -406,51 +396,32 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
               {datos.etiquetaEjecutivo}
             </p>
             <p className="text-[11px] text-slate-600 dark:text-slate-300 truncate">
-              {subtituloRol} · {datos.etiquetaPais} · {datos.etiquetaRango}
+              {datos.etiquetaPais} · {datos.etiquetaRango}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 text-xs font-mono font-bold">
-          <span
-            className={`px-2.5 py-1 rounded-lg border ${
-              esA
-                ? 'bg-white dark:bg-slate-900 border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300'
-                : 'bg-white dark:bg-slate-900 border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300'
-            }`}
-          >
-            {conteos.total} {esCalificado ? 'citas' : 'leads'}
-          </span>
+          {datos.activo && (
+            <span
+              className={`px-2.5 py-1 rounded-lg border ${
+                esA
+                  ? 'bg-white dark:bg-slate-900 border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300'
+                  : 'bg-white dark:bg-slate-900 border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300'
+              }`}
+            >
+              {conteos.total} {esCalificado ? 'citas' : 'leads'}
+            </span>
+          )}
         </div>
       </div>
 
       <div className="p-5 space-y-5 flex-1 flex flex-col">
-        {/* Controles Independientes del Escenario */}
+        {/* Filtros Propios de Este Lado: Ejecutivo + Rango de Fechas (Desde / Hasta) */}
         <div className="bg-slate-50/80 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-3">
-          {/* Fila 1: País + Ejecutivo */}
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
-            {/* País */}
-            <div className="sm:col-span-5 flex items-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5">
-              {(['TODOS', 'SV', 'GT'] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => onChangeFiltro({ ...datos.filtro, pais: p })}
-                  className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap ${
-                    datos.filtro.pais === p
-                      ? esA
-                        ? 'bg-indigo-600 text-white shadow-xs'
-                        : 'bg-emerald-600 text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  {p === 'TODOS' ? 'Todos' : p === 'SV' ? '🇸🇻 SV' : '🇬🇹 GT'}
-                </button>
-              ))}
-            </div>
-
-            {/* Ejecutivo */}
-            <div className="sm:col-span-7 flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5">
+          {/* Selector de Ejecutivo (sin filtro de país adentro) */}
+          <div className="flex items-center gap-2">
+            <div className="flex-1 flex items-center gap-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-2">
               <User className="h-3.5 w-3.5 text-slate-400 shrink-0" />
               <select
                 value={datos.filtro.asesor}
@@ -458,24 +429,52 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
                   onChangeFiltro({ ...datos.filtro, asesor: e.target.value })
                 }
                 aria-label={`Ejecutivo ${tituloBadge}`}
-                className="w-full bg-transparent text-xs font-semibold text-slate-800 dark:text-slate-200 outline-none cursor-pointer truncate"
+                className="w-full bg-white dark:bg-slate-950 text-xs font-semibold text-slate-900 dark:text-slate-100 outline-none cursor-pointer truncate"
               >
-                <option value="TODOS">
-                  Todos los ejecutivos ({datos.asesoresDisponibles.length})
+                <option
+                  value=""
+                  className="bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100"
+                >
+                  -- Seleccionar ejecutivo --
                 </option>
-                {datos.asesoresDisponibles.map((as) => (
-                  <option key={as} value={as}>
-                    {as}
+                <option
+                  value="TODOS"
+                  className="bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100"
+                >
+                  Todos los ejecutivos ({opcionesEjecutivos.length})
+                </option>
+                {opcionesEjecutivos.map((op) => (
+                  <option
+                    key={op.nombre}
+                    value={op.nombre}
+                    className="bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100"
+                  >
+                    {op.label}
                   </option>
                 ))}
               </select>
             </div>
+
+            {tieneFiltrosEnPanel && (
+              <button
+                type="button"
+                onClick={() =>
+                  onChangeFiltro({ asesor: '', fechaInicio: '', fechaFin: '' })
+                }
+                title={`Limpiar filtros de ${tituloBadge}`}
+                className="px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer shrink-0"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Limpiar</span>
+              </button>
+            )}
           </div>
 
-          {/* Fila 2: Rango de Fechas */}
-          <div className="grid grid-cols-2 gap-2.5">
-            <label className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs">
-              <span className="text-[10px] font-bold uppercase text-slate-400 shrink-0">
+          {/* Rango de Fechas Desde / Hasta */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <label className="flex items-center gap-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs">
+              <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+              <span className="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400 shrink-0">
                 Desde
               </span>
               <input
@@ -484,12 +483,13 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
                 onChange={(e) =>
                   onChangeFiltro({ ...datos.filtro, fechaInicio: e.target.value })
                 }
-                className="w-full bg-transparent font-mono text-xs text-slate-800 dark:text-slate-200 outline-none"
+                className="w-full bg-transparent font-mono text-xs text-slate-900 dark:text-slate-100 outline-none"
               />
             </label>
 
-            <label className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs">
-              <span className="text-[10px] font-bold uppercase text-slate-400 shrink-0">
+            <label className="flex items-center gap-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs">
+              <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+              <span className="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400 shrink-0">
                 Hasta
               </span>
               <input
@@ -498,44 +498,27 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
                 onChange={(e) =>
                   onChangeFiltro({ ...datos.filtro, fechaFin: e.target.value })
                 }
-                className="w-full bg-transparent font-mono text-xs text-slate-800 dark:text-slate-200 outline-none"
+                className="w-full bg-transparent font-mono text-xs text-slate-900 dark:text-slate-100 outline-none"
               />
             </label>
           </div>
-
-          {/* Fila 3: Presets Rápidos de Fecha */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Calendar className="h-3.5 w-3.5 text-slate-400 mr-0.5 shrink-0" />
-            {(
-              [
-                { id: 'mes_actual', label: `${mesActual.nombreMes} (Al día)` },
-                { id: 'mes_anterior', label: `${mesAnterior.nombreMes}` },
-                { id: '7d', label: 'Últimos 7 días' },
-                { id: 'hoy', label: 'Hoy' },
-                { id: 'todo', label: 'Todo' },
-              ] as const
-            ).map((btn) => (
-              <button
-                key={btn.id}
-                type="button"
-                onClick={() => aplicarRangoRapido(btn.id)}
-                className={`px-2 py-1 rounded-md text-[11px] font-semibold border transition-all cursor-pointer ${
-                  esPreset(btn.id)
-                    ? esA
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-emerald-600 text-white border-emerald-600'
-                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                {btn.label}
-              </button>
-            ))}
-          </div>
         </div>
 
-        {/* Estado Vacío o Dashboard del Escenario */}
-        {conteos.total === 0 ? (
-          <div className="flex-1 min-h-[320px] flex flex-col items-center justify-center text-center p-8 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-950/30 space-y-3">
+        {/* Estado Inicial en Blanco / Sin Selección, Sin Registros, o Tablita + Semáforo */}
+        {!datos.activo ? (
+          <div className="flex-1 min-h-[300px] flex flex-col items-center justify-center text-center p-8 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/40 dark:bg-slate-950/30 space-y-2.5">
+            <User className="h-9 w-9 text-slate-400" />
+            <div className="space-y-1 max-w-sm">
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                {tituloBadge} en blanco
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Elige un ejecutivo específico (o <strong>Todos los ejecutivos</strong>), un rango de fechas <strong>Desde / Hasta</strong>, o selecciona un país arriba para cargar la información.
+              </p>
+            </div>
+          </div>
+        ) : conteos.total === 0 ? (
+          <div className="flex-1 min-h-[300px] flex flex-col items-center justify-center text-center p-8 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-950/30 space-y-3">
             <FilterX className="h-10 w-10 text-slate-400" />
             <div className="space-y-1 max-w-sm">
               <h4 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -543,30 +526,23 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
               </h4>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 No se encontraron registros para <strong>{datos.etiquetaEjecutivo}</strong> en{' '}
-                <strong>{datos.etiquetaPais}</strong> dentro del rango{' '}
-                <strong>{datos.etiquetaRango}</strong>.
+                <strong>{datos.etiquetaPais}</strong> ({datos.etiquetaRango}).
               </p>
             </div>
             <button
               type="button"
-              onClick={() => {
-                const r = getRangoDefaultLeads();
-                onChangeFiltro({
-                  pais: 'TODOS',
-                  asesor: 'TODOS',
-                  fechaInicio: r.inicio,
-                  fechaFin: r.fin,
-                });
-              }}
+              onClick={() =>
+                onChangeFiltro({ asesor: '', fechaInicio: '', fechaFin: '' })
+              }
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-800 text-white text-xs font-bold hover:bg-slate-800 dark:hover:bg-slate-700 transition-colors cursor-pointer"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              <span>Restablecer filtros de {tituloBadge}</span>
+              <span>Limpiar filtros de {tituloBadge}</span>
             </button>
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Tarjeta Principal: Citas/Leads del Período + 4 Cuadros fuera del Semáforo */}
+            {/* Tarjeta Resumen del Lado: Total Citas/Leads + 4 Cuadros + Canales + Horario */}
             <div className="bg-slate-50/70 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-3.5">
@@ -619,7 +595,7 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
                 </div>
               </div>
 
-              {/* Los 4 cuadros fuera del semáforo */}
+              {/* 4 cuadros fuera del semáforo */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
                 <div className="bg-white dark:bg-slate-900 rounded-xl py-2 px-2 border border-slate-200 dark:border-slate-800">
                   <span className="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
@@ -655,7 +631,7 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
                 </div>
               </div>
 
-              {/* Barra Apilada compacta + Llamadas detectadas en el período */}
+              {/* Barra Apilada + Canales + Horario Ingreso */}
               <div className="space-y-2 pt-1">
                 <div className="h-2.5 w-full rounded-full overflow-hidden bg-slate-200 dark:bg-slate-800 flex">
                   {segmentos.map((seg) => {
@@ -717,9 +693,11 @@ const PanelEscenario: React.FC<PanelEscenarioProps> = ({
             <SemaforoCumplimiento
               cruces={datos.crucesFiltrados}
               esNoCalificado={!esCalificado}
-              paisFiltro={datos.filtro.pais}
+              paisFiltro={datos.paisEfectivo}
               asesorFiltro={
-                datos.filtro.asesor !== 'TODOS' ? datos.filtro.asesor : undefined
+                datos.filtro.asesor && datos.filtro.asesor !== 'TODOS'
+                  ? datos.filtro.asesor
+                  : undefined
               }
               parametros={parametros}
               onVerTranscripcion={onVerTranscripcion}
@@ -741,310 +719,121 @@ export const VistaComparacion: React.FC<VistaComparacionProps> = ({
   onVerTranscripcion,
 }) => {
   const esCalificado = modoLeads === 'calificados';
-  const mesActual = useMemo(() => getMesActualInfo(), []);
-  const mesAnterior = useMemo(() => getMesAnteriorInfo(), []);
 
-  // Por defecto: Escenario A = Mes Anterior (Pasado), Escenario B = Mes Actual al día (Presente)
-  const [filtroA, setFiltroA] = useState<FiltroEscenario>(() => {
-    const ant = getRangoMesAnterior();
-    return {
-      pais: 'TODOS',
-      asesor: 'TODOS',
-      fechaInicio: ant.inicio,
-      fechaFin: ant.fin,
-    };
+  // Filtro global de país ARRIBA: 'TODOS' | 'SV' | 'GT' | 'SV_VS_GT'
+  const [paisGlobal, setPaisGlobal] = useState<FiltroPaisGlobal>('TODOS');
+
+  // Por defecto arranca en BLANCO sin seleccionar nada automáticamente
+  const [filtroA, setFiltroA] = useState<FiltroEscenario>({
+    asesor: '',
+    fechaInicio: '',
+    fechaFin: '',
   });
 
-  const [filtroB, setFiltroB] = useState<FiltroEscenario>(() => {
-    const act = getRangoDefaultLeads();
-    return {
-      pais: 'TODOS',
-      asesor: 'TODOS',
-      fechaInicio: act.inicio,
-      fechaFin: act.fin,
-    };
+  const [filtroB, setFiltroB] = useState<FiltroEscenario>({
+    asesor: '',
+    fechaInicio: '',
+    fechaFin: '',
   });
 
-  const [modoGrafica, setModoGrafica] = useState<'porcentaje' | 'cantidad'>(
-    'porcentaje'
-  );
   const [exportandoExcel, setExportandoExcel] = useState(false);
   const [exportandoPdf, setExportandoPdf] = useState(false);
 
+  const paisPanelA: 'TODOS' | 'SV' | 'GT' =
+    paisGlobal === 'SV_VS_GT' ? 'SV' : paisGlobal === 'SV' ? 'SV' : paisGlobal === 'GT' ? 'GT' : 'TODOS';
+  const paisPanelB: 'TODOS' | 'SV' | 'GT' =
+    paisGlobal === 'SV_VS_GT' ? 'GT' : paisGlobal === 'SV' ? 'SV' : paisGlobal === 'GT' ? 'GT' : 'TODOS';
+
   const datosA = useMemo(
-    () => calcularDatosEscenario(filtroA, crucesTodos, llamadas, catalogo, parametros),
-    [filtroA, crucesTodos, llamadas, catalogo, parametros]
+    () =>
+      calcularDatosEscenario(
+        filtroA,
+        paisPanelA,
+        paisGlobal,
+        crucesTodos,
+        llamadas,
+        catalogo,
+        parametros
+      ),
+    [filtroA, paisPanelA, paisGlobal, crucesTodos, llamadas, catalogo, parametros]
   );
 
   const datosB = useMemo(
-    () => calcularDatosEscenario(filtroB, crucesTodos, llamadas, catalogo, parametros),
-    [filtroB, crucesTodos, llamadas, catalogo, parametros]
+    () =>
+      calcularDatosEscenario(
+        filtroB,
+        paisPanelB,
+        paisGlobal,
+        crucesTodos,
+        llamadas,
+        catalogo,
+        parametros
+      ),
+    [filtroB, paisPanelB, paisGlobal, crucesTodos, llamadas, catalogo, parametros]
   );
 
-  const listaEjecutivosGlobal = useMemo(
-    () => obtenerEjecutivosPorPais(catalogo, crucesTodos, 'TODOS'),
-    [catalogo, crucesTodos]
-  );
-
-  // Presets de Comparación Rápida
-  const aplicarPreset = (
-    preset:
-      | 'pasado_presente'
-      | 'mismo_ejecutivo_periodos'
-      | 'ejecutivo_vs_ejecutivo'
-      | 'paises_sv_gt'
-      | '7d_vs_mes'
-  ) => {
-    const rAnt = getRangoMesAnterior();
-    const rAct = getRangoDefaultLeads();
-    const r7d = getRangoUltimosNDias(7);
-
-    if (preset === 'pasado_presente') {
-      setFiltroA({
-        pais: 'TODOS',
-        asesor: 'TODOS',
-        fechaInicio: rAnt.inicio,
-        fechaFin: rAnt.fin,
-      });
-      setFiltroB({
-        pais: 'TODOS',
-        asesor: 'TODOS',
-        fechaInicio: rAct.inicio,
-        fechaFin: rAct.fin,
-      });
-      return;
+  // Si cambia el país arriba y el ejecutivo elegido en A o B ya no pertenece a ese país, limpiarlo automáticamente
+  useEffect(() => {
+    if (
+      filtroA.asesor &&
+      filtroA.asesor !== 'TODOS' &&
+      !datosA.asesoresDisponibles.some((a) => coincideAsesorFiltro(a, filtroA.asesor, catalogo))
+    ) {
+      setFiltroA((prev) => ({ ...prev, asesor: '' }));
     }
+  }, [paisPanelA, datosA.asesoresDisponibles, filtroA.asesor, catalogo]);
 
-    if (preset === 'mismo_ejecutivo_periodos') {
-      const ejec =
-        filtroB.asesor !== 'TODOS'
-          ? filtroB.asesor
-          : filtroA.asesor !== 'TODOS'
-          ? filtroA.asesor
-          : listaEjecutivosGlobal[0] || 'TODOS';
-      setFiltroA({
-        pais: 'TODOS',
-        asesor: ejec,
-        fechaInicio: rAnt.inicio,
-        fechaFin: rAnt.fin,
-      });
-      setFiltroB({
-        pais: 'TODOS',
-        asesor: ejec,
-        fechaInicio: rAct.inicio,
-        fechaFin: rAct.fin,
-      });
-      return;
+  useEffect(() => {
+    if (
+      filtroB.asesor &&
+      filtroB.asesor !== 'TODOS' &&
+      !datosB.asesoresDisponibles.some((a) => coincideAsesorFiltro(a, filtroB.asesor, catalogo))
+    ) {
+      setFiltroB((prev) => ({ ...prev, asesor: '' }));
     }
-
-    if (preset === 'ejecutivo_vs_ejecutivo') {
-      const ini = filtroB.fechaInicio || rAct.inicio;
-      const fin = filtroB.fechaFin || rAct.fin;
-      const e1 =
-        filtroA.asesor !== 'TODOS'
-          ? filtroA.asesor
-          : listaEjecutivosGlobal[0] || 'TODOS';
-      const e2 =
-        filtroB.asesor !== 'TODOS' && filtroB.asesor !== e1
-          ? filtroB.asesor
-          : listaEjecutivosGlobal.find((e) => e !== e1) || e1;
-      setFiltroA({
-        pais: 'TODOS',
-        asesor: e1,
-        fechaInicio: ini,
-        fechaFin: fin,
-      });
-      setFiltroB({
-        pais: 'TODOS',
-        asesor: e2,
-        fechaInicio: ini,
-        fechaFin: fin,
-      });
-      return;
-    }
-
-    if (preset === 'paises_sv_gt') {
-      const ini = filtroB.fechaInicio || rAct.inicio;
-      const fin = filtroB.fechaFin || rAct.fin;
-      setFiltroA({
-        pais: 'SV',
-        asesor: 'TODOS',
-        fechaInicio: ini,
-        fechaFin: fin,
-      });
-      setFiltroB({
-        pais: 'GT',
-        asesor: 'TODOS',
-        fechaInicio: ini,
-        fechaFin: fin,
-      });
-      return;
-    }
-
-    if (preset === '7d_vs_mes') {
-      setFiltroA({
-        pais: filtroA.pais,
-        asesor: filtroA.asesor,
-        fechaInicio: r7d.inicio,
-        fechaFin: r7d.fin,
-      });
-      setFiltroB({
-        pais: filtroB.pais,
-        asesor: filtroB.asesor,
-        fechaInicio: rAct.inicio,
-        fechaFin: rAct.fin,
-      });
-    }
-  };
+  }, [paisPanelB, datosB.asesoresDisponibles, filtroB.asesor, catalogo]);
 
   const intercambiarEscenarios = () => {
     setFiltroA(filtroB);
     setFiltroB(filtroA);
   };
 
-  // Métricas comparativas B vs A (deltas)
-  const deltas = useMemo(() => {
-    const items = [
-      {
-        label: '% A Tiempo (Semáforo)',
-        valA: datosA.pctVerdeSemaforo,
-        valB: datosB.pctVerdeSemaforo,
-        suffix: '%',
-        deltaSuffix: ' pts',
-        mayorEsMejor: true,
-      },
-      {
-        label: esCalificado ? 'Total Citas' : 'Total Leads',
-        valA: datosA.conteos.total,
-        valB: datosB.conteos.total,
-        suffix: '',
-        deltaSuffix: '',
-        mayorEsMejor: null as boolean | null,
-      },
-      {
-        label: 'A Tiempo (Verde)',
-        valA: datosA.conteos.verde,
-        valB: datosB.conteos.verde,
-        suffix: '',
-        deltaSuffix: '',
-        mayorEsMejor: true,
-      },
-      {
-        label: 'Tarde Leve (Amarillo)',
-        valA: datosA.conteos.amarillo,
-        valB: datosB.conteos.amarillo,
-        suffix: '',
-        deltaSuffix: '',
-        mayorEsMejor: false,
-      },
-      {
-        label: 'Tarde Grave (Rojo)',
-        valA: datosA.conteos.rojo,
-        valB: datosB.conteos.rojo,
-        suffix: '',
-        deltaSuffix: '',
-        mayorEsMejor: false,
-      },
-      {
-        label: 'No Llamó',
-        valA: datosA.conteos.noLlamo,
-        valB: datosB.conteos.noLlamo,
-        suffix: '',
-        deltaSuffix: '',
-        mayorEsMejor: false,
-      },
-    ];
-    return items.map((it) => {
-      const diff = Number((it.valB - it.valA).toFixed(1));
-      const mejora =
-        it.mayorEsMejor === null || diff === 0
-          ? null
-          : it.mayorEsMejor
-          ? diff > 0
-          : diff < 0;
-      return { ...it, diff, mejora };
-    });
-  }, [datosA, datosB, esCalificado]);
+  const limpiarTodo = () => {
+    setPaisGlobal('TODOS');
+    setFiltroA({ asesor: '', fechaInicio: '', fechaFin: '' });
+    setFiltroB({ asesor: '', fechaInicio: '', fechaFin: '' });
+  };
 
-  // Datos para gráfica de barras agrupadas (A vs B)
-  const datosGraficaBarras = useMemo(() => {
-    const pctOver = (val: number, total: number) =>
-      total > 0 ? Math.round((val / total) * 100) : 0;
-
-    return [
-      {
-        label: 'A Tiempo',
-        sub: 'Verde',
-        aPct: datosA.pctVerdeSemaforo,
-        bPct: datosB.pctVerdeSemaforo,
-        aCant: datosA.conteos.verde,
-        bCant: datosB.conteos.verde,
-      },
-      {
-        label: 'Tarde Leve',
-        sub: 'Amarillo',
-        aPct: datosA.pctAmarilloSemaforo,
-        bPct: datosB.pctAmarilloSemaforo,
-        aCant: datosA.conteos.amarillo,
-        bCant: datosB.conteos.amarillo,
-      },
-      {
-        label: 'Tarde Grave',
-        sub: 'Rojo',
-        aPct: datosA.pctRojoSemaforo,
-        bPct: datosB.pctRojoSemaforo,
-        aCant: datosA.conteos.rojo,
-        bCant: datosB.conteos.rojo,
-      },
-      {
-        label: 'No Llamó',
-        sub: 'Sin gestión',
-        aPct: pctOver(datosA.conteos.noLlamo, datosA.conteos.total),
-        bPct: pctOver(datosB.conteos.noLlamo, datosB.conteos.total),
-        aCant: datosA.conteos.noLlamo,
-        bCant: datosB.conteos.noLlamo,
-      },
-      {
-        label: 'Otro Día',
-        sub: 'Reprogramada',
-        aPct: pctOver(datosA.conteos.otroDia, datosA.conteos.total),
-        bPct: pctOver(datosB.conteos.otroDia, datosB.conteos.total),
-        aCant: datosA.conteos.otroDia,
-        bCant: datosB.conteos.otroDia,
-      },
-    ];
-  }, [datosA, datosB]);
-
-  const maxValorGrafica = useMemo(() => {
-    if (modoGrafica === 'porcentaje') return 100;
-    const maxVal = Math.max(
-      1,
-      ...datosGraficaBarras.flatMap((d) => [d.aCant, d.bCant])
-    );
-    return Math.ceil(maxVal * 1.15);
-  }, [datosGraficaBarras, modoGrafica]);
+  const tieneAlgoActivo = datosA.activo || datosB.activo;
 
   // Construcción de libro Excel / PDF comparativo
   const construirLibroComparacion = (): ExcelSheetConfig<any>[] => {
     const modoLabel = formatearAlcanceLeads(!esCalificado, 'TODOS');
     const filasResumen = [
       {
-        metrica: 'País Seleccionado',
+        metrica: 'País',
         escenarioA: datosA.etiquetaPais,
         escenarioB: datosB.etiquetaPais,
-        diferencia: datosA.etiquetaPais === datosB.etiquetaPais ? 'Mismo país' : `${datosA.filtro.pais} vs ${datosB.filtro.pais}`,
+        diferencia:
+          datosA.etiquetaPais === datosB.etiquetaPais
+            ? 'Mismo país'
+            : `${datosA.paisEfectivo} vs ${datosB.paisEfectivo}`,
       },
       {
         metrica: 'Ejecutivo',
         escenarioA: datosA.etiquetaEjecutivo,
         escenarioB: datosB.etiquetaEjecutivo,
-        diferencia: datosA.etiquetaEjecutivo === datosB.etiquetaEjecutivo ? 'Mismo ejecutivo' : 'Comparativa ejecutivos',
+        diferencia:
+          datosA.etiquetaEjecutivo === datosB.etiquetaEjecutivo
+            ? 'Mismo ejecutivo'
+            : 'Comparativa ejecutivos',
       },
       {
         metrica: 'Rango de Fechas',
         escenarioA: datosA.etiquetaRango,
         escenarioB: datosB.etiquetaRango,
-        diferencia: datosA.etiquetaRango === datosB.etiquetaRango ? 'Mismo período' : 'Períodos distintos',
+        diferencia:
+          datosA.etiquetaRango === datosB.etiquetaRango ? 'Mismo período' : 'Períodos distintos',
       },
       {
         metrica: esCalificado ? 'Total Citas' : 'Total Leads',
@@ -1106,12 +895,6 @@ export const VistaComparacion: React.FC<VistaComparacionProps> = ({
         escenarioB: datosB.desfasePromedioMin,
         diferencia: Number((datosB.desfasePromedioMin - datosA.desfasePromedioMin).toFixed(1)),
       },
-      {
-        metrica: 'Llamadas Período (Total)',
-        escenarioA: datosA.llamadasPeriodo.length,
-        escenarioB: datosB.llamadasPeriodo.length,
-        diferencia: datosB.llamadasPeriodo.length - datosA.llamadasPeriodo.length,
-      },
     ];
 
     const colsDetalle = [
@@ -1137,7 +920,7 @@ export const VistaComparacion: React.FC<VistaComparacionProps> = ({
       {
         name: 'Resumen Comparativo',
         title: `Comparación A vs B — ${modoLabel}`,
-        subtitle: `Escenario A (${datosA.etiquetaEjecutivo} · ${datosA.etiquetaRango}) vs Escenario B (${datosB.etiquetaEjecutivo} · ${datosB.etiquetaRango})`,
+        subtitle: `Escenario A (${datosA.etiquetaEjecutivo} · ${datosA.etiquetaPais} · ${datosA.etiquetaRango}) vs Escenario B (${datosB.etiquetaEjecutivo} · ${datosB.etiquetaPais} · ${datosB.etiquetaRango})`,
         accentHex: '4F46E5',
         columns: [
           { header: 'Indicador / Métrica', key: 'metrica', width: 30 },
@@ -1190,539 +973,116 @@ export const VistaComparacion: React.FC<VistaComparacionProps> = ({
     }
   };
 
-  const segmentosA = [
-    { key: 'verde', count: datosA.conteos.verde, color: 'bg-emerald-500', label: 'A Tiempo' },
-    { key: 'amarillo', count: datosA.conteos.amarillo, color: 'bg-amber-400', label: 'Tarde Leve' },
-    { key: 'rojo', count: datosA.conteos.rojo, color: 'bg-rose-500', label: 'Tarde Grave' },
-    { key: 'adelantada', count: datosA.conteos.adelantada, color: 'bg-sky-500', label: 'Adelantada' },
-    { key: 'otroDia', count: datosA.conteos.otroDia, color: 'bg-indigo-500', label: 'Otro Día' },
-    { key: 'noLlamo', count: datosA.conteos.noLlamo, color: 'bg-purple-500', label: 'No Llamó' },
-    { key: 'pendiente', count: datosA.conteos.pendiente, color: 'bg-slate-400 dark:bg-slate-600', label: 'Pendiente' },
-  ];
-
-  const segmentosB = [
-    { key: 'verde', count: datosB.conteos.verde, color: 'bg-emerald-500', label: 'A Tiempo' },
-    { key: 'amarillo', count: datosB.conteos.amarillo, color: 'bg-amber-400', label: 'Tarde Leve' },
-    { key: 'rojo', count: datosB.conteos.rojo, color: 'bg-rose-500', label: 'Tarde Grave' },
-    { key: 'adelantada', count: datosB.conteos.adelantada, color: 'bg-sky-500', label: 'Adelantada' },
-    { key: 'otroDia', count: datosB.conteos.otroDia, color: 'bg-indigo-500', label: 'Otro Día' },
-    { key: 'noLlamo', count: datosB.conteos.noLlamo, color: 'bg-purple-500', label: 'No Llamó' },
-    { key: 'pendiente', count: datosB.conteos.pendiente, color: 'bg-slate-400 dark:bg-slate-600', label: 'Pendiente' },
-  ];
+  const tituloLadoA =
+    paisGlobal === 'SV_VS_GT' ? 'El Salvador (A)' : 'Escenario A';
+  const tituloLadoB =
+    paisGlobal === 'SV_VS_GT' ? 'Guatemala (B)' : 'Escenario B';
 
   return (
-    <div className="space-y-6 tabular-nums">
-      {/* Encabezado Superior de Comparación + Presets Rápidos */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs space-y-4">
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wider border ${
-                  esCalificado
-                    ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-500/40'
-                    : 'bg-cyan-100 text-cyan-800 border-cyan-300 dark:bg-cyan-950/80 dark:text-cyan-300 dark:border-cyan-500/40'
+    <div className="space-y-5 tabular-nums">
+      {/* Barra Superior Limpia con Selector de País Arriba */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-5 py-4 shadow-xs flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <span
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wider border ${
+              esCalificado
+                ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-500/40'
+                : 'bg-cyan-100 text-cyan-800 border-cyan-300 dark:bg-cyan-950/80 dark:text-cyan-300 dark:border-cyan-500/40'
+            }`}
+          >
+            {esCalificado ? 'Leads Calificados (Citas)' : 'Leads No Calificados (Directos)'}
+          </span>
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">
+            Comparación · Herramientas
+          </h2>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Selector de País Arriba */}
+          <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-1">
+            <Globe2 className="h-3.5 w-3.5 text-slate-400 ml-2 shrink-0 hidden sm:block" />
+            {(
+              [
+                { id: 'TODOS', label: 'Todos Países' },
+                { id: 'SV', label: 'El Salvador (SV)' },
+                { id: 'GT', label: 'Guatemala (GT)' },
+                { id: 'SV_VS_GT', label: 'SV vs GT' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setPaisGlobal(opt.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  paisGlobal === opt.id
+                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                {esCalificado ? 'Leads Calificados (Citas)' : 'Leads No Calificados (Directos)'}
-              </span>
-              <span className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                Herramientas · Comparación Dual
-              </span>
-            </div>
-            <h2 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
-              Comparación de Desempeño · Escenario A vs Escenario B
-            </h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              Pantalla dividida para contrastar en paralelo el mismo ejecutivo en fechas distintas, dos ejecutivos o el equipo completo (pasado vs presente).
-            </p>
+                {opt.label}
+              </button>
+            ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={intercambiarEscenarios}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all cursor-pointer whitespace-nowrap"
+            title="Intercambiar selecciones entre izquierda y derecha"
+          >
+            <ArrowLeftRight className="h-3.5 w-3.5 text-indigo-500" />
+            <span>Intercambiar</span>
+          </button>
+
+          {tieneAlgoActivo && (
             <button
               type="button"
-              onClick={intercambiarEscenarios}
-              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all cursor-pointer whitespace-nowrap"
-              title="Intercambiar los filtros y datos entre Escenario A y Escenario B"
+              onClick={limpiarTodo}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:text-rose-600 dark:hover:text-rose-300 text-xs font-bold transition-all cursor-pointer whitespace-nowrap"
+              title="Restablecer todo en blanco"
             >
-              <ArrowLeftRight className="h-3.5 w-3.5 text-indigo-500" />
-              <span>Intercambiar A ⇄ B</span>
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Limpiar</span>
             </button>
+          )}
 
-            <button
-              type="button"
-              onClick={handleExportarExcel}
-              disabled={exportandoExcel}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap"
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span>{exportandoExcel ? 'Generando...' : 'Descargar Excel'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleExportarPdf}
-              disabled={exportandoPdf}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-sm transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap"
-            >
-              <FileText className="h-3.5 w-3.5" />
-              <span>{exportandoPdf ? 'Generando...' : 'Descargar PDF'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Presets de Escenario en 1 clic */}
-        <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mr-1">
-            Modos rápidos:
-          </span>
           <button
             type="button"
-            onClick={() => aplicarPreset('pasado_presente')}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+            onClick={handleExportarExcel}
+            disabled={exportandoExcel || !tieneAlgoActivo}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm transition-all disabled:opacity-40 cursor-pointer whitespace-nowrap"
           >
-            <Calendar className="h-3.5 w-3.5 text-indigo-500" />
-            <span>
-              Pasado ({mesAnterior.nombreMes}) vs Presente ({mesActual.nombreMes})
-            </span>
+            <Download className="h-3.5 w-3.5" />
+            <span>{exportandoExcel ? 'Excel...' : 'Excel'}</span>
           </button>
 
           <button
             type="button"
-            onClick={() => aplicarPreset('mismo_ejecutivo_periodos')}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+            onClick={handleExportarPdf}
+            disabled={exportandoPdf || !tieneAlgoActivo}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-sm transition-all disabled:opacity-40 cursor-pointer whitespace-nowrap"
           >
-            <User className="h-3.5 w-3.5 text-cyan-500" />
-            <span>Mismo Ejecutivo · Mes Ant. vs Actual</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => aplicarPreset('ejecutivo_vs_ejecutivo')}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
-          >
-            <Users className="h-3.5 w-3.5 text-emerald-500" />
-            <span>Ejecutivo vs Ejecutivo (Mismo Período)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => aplicarPreset('7d_vs_mes')}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
-          >
-            <PhoneCall className="h-3.5 w-3.5 text-amber-500" />
-            <span>Últimos 7 días vs Mes Actual</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => aplicarPreset('paises_sv_gt')}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
-          >
-            <span>🇸🇻 SV vs 🇬🇹 GT (Mismo Período)</span>
+            <FileText className="h-3.5 w-3.5" />
+            <span>{exportandoPdf ? 'PDF...' : 'PDF'}</span>
           </button>
         </div>
       </div>
 
-      {/* Banda Resumen Cara a Cara + Gráficas Comparativas */}
-      <div className="space-y-5">
-        {/* Tarjetas Delta B vs A */}
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-          {deltas.map((d) => {
-            const signo = d.diff > 0 ? '+' : '';
-            const colorDelta =
-              d.mejora === null
-                ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-                : d.mejora
-                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300'
-                : 'bg-rose-50 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300';
-
-            return (
-              <div
-                key={d.label}
-                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 flex flex-col justify-between gap-2"
-              >
-                <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 truncate">
-                  {d.label}
-                </span>
-
-                <div className="flex items-baseline justify-between gap-2 font-mono">
-                  <div>
-                    <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 block">
-                      A
-                    </span>
-                    <span className="text-lg font-extrabold text-slate-900 dark:text-white">
-                      {d.valA}
-                      {d.suffix}
-                    </span>
-                  </div>
-                  <span className="text-xs text-slate-400">vs</span>
-                  <div className="text-right">
-                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 block">
-                      B
-                    </span>
-                    <span className="text-lg font-extrabold text-slate-900 dark:text-white">
-                      {d.valB}
-                      {d.suffix}
-                    </span>
-                  </div>
-                </div>
-
-                <div
-                  className={`flex items-center justify-between px-2 py-1 rounded-lg text-[11px] font-mono font-bold ${colorDelta}`}
-                >
-                  <span>Dif. B vs A</span>
-                  <span className="inline-flex items-center gap-1">
-                    {d.diff > 0 && <TrendingUp className="h-3 w-3" />}
-                    {d.diff < 0 && <TrendingDown className="h-3 w-3" />}
-                    {signo}
-                    {d.diff}
-                    {d.deltaSuffix}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Gráficas Comparativas Organizadas */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* Gráfica 1: Barras Agrupadas SVG (Escenario A vs Escenario B) */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Comparativa Visual por Categoría (A vs B)
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Contraste directo de resultados entre ambos escenarios
-                </p>
-              </div>
-              <div className="flex items-center bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setModoGrafica('porcentaje')}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer transition-colors ${
-                    modoGrafica === 'porcentaje'
-                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                      : 'text-slate-500 dark:text-slate-400'
-                  }`}
-                >
-                  % Proporción
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModoGrafica('cantidad')}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer transition-colors ${
-                    modoGrafica === 'cantidad'
-                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                      : 'text-slate-500 dark:text-slate-400'
-                  }`}
-                >
-                  # Cantidad
-                </button>
-              </div>
-            </div>
-
-            {/* Leyenda */}
-            <div className="flex flex-wrap items-center gap-4 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="h-3 w-3 rounded-sm bg-indigo-500 inline-block" />
-                <span className="font-semibold text-slate-700 dark:text-slate-300">
-                  Escenario A: {datosA.etiquetaEjecutivo} ({datosA.etiquetaRango})
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="h-3 w-3 rounded-sm bg-emerald-500 inline-block" />
-                <span className="font-semibold text-slate-700 dark:text-slate-300">
-                  Escenario B: {datosB.etiquetaEjecutivo} ({datosB.etiquetaRango})
-                </span>
-              </div>
-            </div>
-
-            {/* SVG Grouped Bar Chart */}
-            <div className="w-full overflow-x-auto">
-              <svg
-                viewBox="0 0 600 220"
-                className="w-full h-52 min-w-[440px]"
-                role="img"
-                aria-label="Gráfica comparativa entre Escenario A y Escenario B"
-              >
-                {[0, 0.25, 0.5, 0.75, 1].map((frac, idx) => {
-                  const y = 175 - frac * 145;
-                  const valLabel = Math.round(maxValorGrafica * frac);
-                  return (
-                    <g key={idx}>
-                      <line
-                        x1="40"
-                        y1={y}
-                        x2="585"
-                        y2={y}
-                        stroke="currentColor"
-                        className="text-slate-200 dark:text-slate-800"
-                        strokeDasharray={frac === 0 ? undefined : '3 3'}
-                        strokeWidth="1"
-                      />
-                      <text
-                        x="34"
-                        y={y + 4}
-                        textAnchor="end"
-                        className="fill-slate-400 text-[10px] font-mono"
-                      >
-                        {valLabel}
-                        {modoGrafica === 'porcentaje' ? '%' : ''}
-                      </text>
-                    </g>
-                  );
-                })}
-
-                {datosGraficaBarras.map((g, idx) => {
-                  const xGrupo = 58 + idx * 106;
-                  const valA = modoGrafica === 'porcentaje' ? g.aPct : g.aCant;
-                  const valB = modoGrafica === 'porcentaje' ? g.bPct : g.bCant;
-                  const hA = Math.max(2, (valA / maxValorGrafica) * 145);
-                  const hB = Math.max(2, (valB / maxValorGrafica) * 145);
-
-                  return (
-                    <g key={g.label}>
-                      {/* Barra A (Indigo) */}
-                      <rect
-                        x={xGrupo}
-                        y={175 - hA}
-                        width="32"
-                        height={hA}
-                        rx="4"
-                        className="fill-indigo-500"
-                      >
-                        <title>{`Escenario A · ${g.label}: ${g.aCant} (${g.aPct}%)`}</title>
-                      </rect>
-                      <text
-                        x={xGrupo + 16}
-                        y={170 - hA}
-                        textAnchor="middle"
-                        className="fill-indigo-600 dark:fill-indigo-300 text-[10px] font-bold font-mono"
-                      >
-                        {valA}
-                        {modoGrafica === 'porcentaje' ? '%' : ''}
-                      </text>
-
-                      {/* Barra B (Emerald) */}
-                      <rect
-                        x={xGrupo + 38}
-                        y={175 - hB}
-                        width="32"
-                        height={hB}
-                        rx="4"
-                        className="fill-emerald-500"
-                      >
-                        <title>{`Escenario B · ${g.label}: ${g.bCant} (${g.bPct}%)`}</title>
-                      </rect>
-                      <text
-                        x={xGrupo + 54}
-                        y={170 - hB}
-                        textAnchor="middle"
-                        className="fill-emerald-600 dark:fill-emerald-300 text-[10px] font-bold font-mono"
-                      >
-                        {valB}
-                        {modoGrafica === 'porcentaje' ? '%' : ''}
-                      </text>
-
-                      {/* Etiqueta Eje X */}
-                      <text
-                        x={xGrupo + 35}
-                        y="194"
-                        textAnchor="middle"
-                        className="fill-slate-700 dark:fill-slate-200 text-[11px] font-bold"
-                      >
-                        {g.label}
-                      </text>
-                      <text
-                        x={xGrupo + 35}
-                        y="208"
-                        textAnchor="middle"
-                        className="fill-slate-400 text-[9px]"
-                      >
-                        {g.sub}
-                      </text>
-                    </g>
-                  );
-                })}
-              </svg>
-            </div>
-          </div>
-
-          {/* Gráfica 2: Distribución Proporcional Apilada + Canales + Desfase */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between gap-4">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                Composición 100% del Embudo · A vs B
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Proporción exacta sobre los registros totales de cada lado
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              {/* Barra Escenario A */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-indigo-700 dark:text-indigo-300">
-                    Escenario A · {datosA.etiquetaEjecutivo}
-                  </span>
-                  <span className="font-mono font-bold text-slate-700 dark:text-slate-300">
-                    {datosA.conteos.total} registros · {datosA.pctVerdeSemaforo}% Verde
-                  </span>
-                </div>
-                <div className="h-5 w-full rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-800 flex">
-                  {segmentosA.map((s) => {
-                    if (s.count === 0) return null;
-                    const w = (s.count / Math.max(1, datosA.conteos.total)) * 100;
-                    return (
-                      <div
-                        key={s.key}
-                        style={{ width: `${w}%` }}
-                        className={`${s.color} h-full`}
-                        title={`A · ${s.label}: ${s.count} (${Math.round(w)}%)`}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Barra Escenario B */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-emerald-700 dark:text-emerald-300">
-                    Escenario B · {datosB.etiquetaEjecutivo}
-                  </span>
-                  <span className="font-mono font-bold text-slate-700 dark:text-slate-300">
-                    {datosB.conteos.total} registros · {datosB.pctVerdeSemaforo}% Verde
-                  </span>
-                </div>
-                <div className="h-5 w-full rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-800 flex">
-                  {segmentosB.map((s) => {
-                    if (s.count === 0) return null;
-                    const w = (s.count / Math.max(1, datosB.conteos.total)) * 100;
-                    return (
-                      <div
-                        key={s.key}
-                        style={{ width: `${w}%` }}
-                        className={`${s.color} h-full`}
-                        title={`B · ${s.label}: ${s.count} (${Math.round(w)}%)`}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Leyenda común */}
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-slate-600 dark:text-slate-400">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-xs bg-emerald-500" /> A Tiempo
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-xs bg-amber-400" /> Tarde Leve
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-xs bg-rose-500" /> Tarde Grave
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-xs bg-sky-500" /> Adelantada
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-xs bg-indigo-500" /> Otro Día
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-xs bg-purple-500" /> No Llamó
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-xs bg-slate-400 dark:bg-slate-600" /> Pendiente
-                </span>
-              </div>
-            </div>
-
-            {/* Desfase Medio & Llamadas Multicanal A vs B */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-3 border-t border-slate-100 dark:border-slate-800 text-center font-mono">
-              <div className="bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl p-2">
-                <span className="block text-[10px] font-sans font-bold uppercase text-slate-400">
-                  Desfase Medio
-                </span>
-                <span className="text-xs font-extrabold text-indigo-600 dark:text-indigo-400">
-                  {datosA.desfasePromedioMin}m
-                </span>
-                <span className="text-[10px] text-slate-400 mx-1">/</span>
-                <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400">
-                  {datosB.desfasePromedioMin}m
-                </span>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl p-2">
-                <span className="block text-[10px] font-sans font-bold uppercase text-slate-400">
-                  PBX (A / B)
-                </span>
-                <span className="text-xs font-extrabold text-indigo-600 dark:text-indigo-400">
-                  {datosA.canales.PBX}
-                </span>
-                <span className="text-[10px] text-slate-400 mx-1">/</span>
-                <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400">
-                  {datosB.canales.PBX}
-                </span>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl p-2">
-                <span className="block text-[10px] font-sans font-bold uppercase text-slate-400">
-                  Celular (A / B)
-                </span>
-                <span className="text-xs font-extrabold text-indigo-600 dark:text-indigo-400">
-                  {datosA.canales.Celular}
-                </span>
-                <span className="text-[10px] text-slate-400 mx-1">/</span>
-                <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400">
-                  {datosB.canales.Celular}
-                </span>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl p-2">
-                <span className="block text-[10px] font-sans font-bold uppercase text-slate-400">
-                  WhatsApp (A / B)
-                </span>
-                <span className="text-xs font-extrabold text-indigo-600 dark:text-indigo-400">
-                  {datosA.canales.WhatsApp}
-                </span>
-                <span className="text-[10px] text-slate-400 mx-1">/</span>
-                <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400">
-                  {datosB.canales.WhatsApp}
-                </span>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl p-2 col-span-2 sm:col-span-1">
-                <span className="block text-[10px] font-sans font-bold uppercase text-slate-400">
-                  Teams (A / B)
-                </span>
-                <span className="text-xs font-extrabold text-indigo-600 dark:text-indigo-400">
-                  {datosA.canales.Teams}
-                </span>
-                <span className="text-[10px] text-slate-400 mx-1">/</span>
-                <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400">
-                  {datosB.canales.Teams}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* PANTALLA DIVIDIDA EN 2 (ESCENARIO A | DIVISOR VS | ESCENARIO B) */}
+      {/* PANTALLA DIVIDIDA EN 2 TABLAS COMPARATIVAS */}
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-4 items-stretch">
-        {/* MITAD IZQUIERDA: ESCENARIO A */}
         <PanelEscenario
           lado="A"
-          tituloBadge="Escenario A"
-          subtituloRol="Base / Pasado"
+          tituloBadge={tituloLadoA}
+          paisPanel={paisPanelA}
           esCalificado={esCalificado}
           datos={datosA}
+          catalogo={catalogo}
+          crucesTodos={crucesTodos}
           onChangeFiltro={setFiltroA}
           parametros={parametros}
           onVerTranscripcion={onVerTranscripcion}
         />
 
-        {/* DIVISOR CENTRAL MUY NOTORIO EN PANTALLA */}
         <div className="flex xl:flex-col items-center justify-center gap-2 py-2 xl:py-6 px-1 select-none">
           <div className="flex-1 h-0.5 xl:h-auto xl:w-0.5 bg-gradient-to-r xl:bg-gradient-to-b from-transparent via-slate-300 dark:via-slate-700 to-slate-300 dark:to-slate-700" />
           <div className="px-2.5 py-1.5 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-black tracking-widest shadow-md border-2 border-slate-200 dark:border-slate-700">
@@ -1731,13 +1091,14 @@ export const VistaComparacion: React.FC<VistaComparacionProps> = ({
           <div className="flex-1 h-0.5 xl:h-auto xl:w-0.5 bg-gradient-to-r xl:bg-gradient-to-b from-slate-300 dark:from-slate-700 via-slate-300 dark:via-slate-700 to-transparent" />
         </div>
 
-        {/* MITAD DERECHA: ESCENARIO B */}
         <PanelEscenario
           lado="B"
-          tituloBadge="Escenario B"
-          subtituloRol="Comparado / Presente"
+          tituloBadge={tituloLadoB}
+          paisPanel={paisPanelB}
           esCalificado={esCalificado}
           datos={datosB}
+          catalogo={catalogo}
+          crucesTodos={crucesTodos}
           onChangeFiltro={setFiltroB}
           parametros={parametros}
           onVerTranscripcion={onVerTranscripcion}

@@ -214,24 +214,11 @@ async function fetchSupabaseTablePaginado(
 function esLeadCalificadoValido(lead: any): boolean {
   if (!lead) return false;
 
-  // 1. Validar fecha_agendada real
+  // 1. Validar fecha_agendada real (si tiene fecha agendada se admite aunque tipo venga "(sin reunion)")
   const fAg = lead.fecha_agendada && lead.fecha_agendada !== 'null' ? String(lead.fecha_agendada).trim() : '';
   if (!fAg || fAg.length < 8) return false;
 
-  // 2. Validar tipo_reunion (no debe ser "(sin reunion)", "sin reunion", etc.)
-  const tipo = String(lead.tipo_reunion || lead.tipo || '').toLowerCase().trim();
-  if (
-    tipo.includes('sin reunion') ||
-    tipo.includes('sin reunión') ||
-    tipo.includes('sin agendar') ||
-    tipo.includes('no agendad') ||
-    tipo === '(sin reunion)' ||
-    tipo === 'sin reunion'
-  ) {
-    return false;
-  }
-
-  // 3. Validar nombre del prospecto / empresa
+  // 2. Validar nombre del prospecto / empresa
   const rawNombre = String(
     lead.nombre_prospecto || lead.nombre || lead.cliente || lead.prospecto_nombre || ''
   ).trim();
@@ -259,7 +246,6 @@ function esLeadCalificadoValido(lead: any): boolean {
     'anónimo',
     'sin nombre',
     'no nombre',
-    'cliente',
     'lead',
   ];
   if (invalidos.includes(normalizado)) return false;

@@ -28,7 +28,7 @@ function normalizarTipoReunion(tipoReunion?: unknown, tipoLlamada?: unknown, tip
     if (cand === null || cand === undefined) continue;
     const raw = String(cand).trim();
     const lower = raw.toLowerCase();
-    if (!raw || ['null', 'undefined', 'none', 'n/a', 'na', '-'].includes(lower)) continue;
+    if (!raw || ['null', 'undefined', 'none', 'n/a', 'na', '-', '(sin reunion)', 'sin reunion', 'sin reunión'].includes(lower)) continue;
     return raw;
   }
   return 'Llamada Telefonica';
@@ -104,18 +104,6 @@ function esLeadCalificadoValido(lead: any): boolean {
   const fAg = lead.fecha_agendada && lead.fecha_agendada !== 'null' ? String(lead.fecha_agendada).trim() : '';
   if (!fAg || fAg.length < 8) return false;
 
-  const tipo = String(lead.tipo_reunion || lead.tipo || '').toLowerCase().trim();
-  if (
-    tipo.includes('sin reunion') ||
-    tipo.includes('sin reunión') ||
-    tipo.includes('sin agendar') ||
-    tipo.includes('no agendad') ||
-    tipo === '(sin reunion)' ||
-    tipo === 'sin reunion'
-  ) {
-    return false;
-  }
-
   const rawNombre = String(
     lead.nombre_prospecto || lead.nombre || lead.cliente || lead.prospecto_nombre || ''
   ).trim();
@@ -141,7 +129,6 @@ function esLeadCalificadoValido(lead: any): boolean {
     'anónimo',
     'sin nombre',
     'no nombre',
-    'cliente',
     'lead',
   ];
   if (invalidos.includes(normalizado)) return false;

@@ -7,7 +7,7 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json ./
+COPY package*.json .npmrc ./
 RUN if [ -f package-lock.json ]; then \
       npm ci --no-audit --no-fund; \
     else \
@@ -34,7 +34,7 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV KPI_DATA_DIR=/app/.data
 
-COPY package*.json ./
+COPY package*.json .npmrc ./
 RUN if [ -f package-lock.json ]; then \
       npm ci --omit=dev --no-audit --no-fund; \
     else \
@@ -42,6 +42,7 @@ RUN if [ -f package-lock.json ]; then \
     fi && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/src ./src
 COPY --from=builder /app/server.ts ./server.ts
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 

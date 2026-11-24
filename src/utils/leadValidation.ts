@@ -8,8 +8,8 @@
 
 /**
  * Normaliza el tipo de llamada / reunión proveniente de ProspektIA.
- * - Si viene null, "null", undefined o vacío -> "Llamada Telefonica" por defecto.
- * - Si trae algo diferente ("Virtual", "Llamada Virtual Teams", "Presencial", "(sin reunion)", etc.) se respeta.
+ * - Si viene null, "null", undefined, vacío o "(sin reunion)" -> "Llamada Telefonica" por defecto.
+ * - Si trae algo diferente ("Virtual", "Llamada Virtual Teams", "Presencial", etc.) se respeta.
  */
 export function normalizarTipoReunion(
   tipoReunion?: unknown,
@@ -28,7 +28,10 @@ export function normalizarTipoReunion(
       lower === 'none' ||
       lower === 'n/a' ||
       lower === 'na' ||
-      lower === '-'
+      lower === '-' ||
+      lower === '(sin reunion)' ||
+      lower === 'sin reunion' ||
+      lower === 'sin reunión'
     ) {
       continue;
     }
@@ -74,7 +77,6 @@ export function esNombreValido(nombre: string | null | undefined): boolean {
     'anónimo',
     'sin nombre',
     'no nombre',
-    'cliente',
     'lead',
   ];
 
@@ -88,22 +90,9 @@ export function esNombreValido(nombre: string | null | undefined): boolean {
 export function tieneReunionAgendadaValida(lead: any): boolean {
   if (!lead) return false;
 
-  // 1. Validar fecha_agendada real
+  // Validar fecha_agendada real (sin importar si tipo_reunion vino null o "(sin reunion)" cuando sí tiene fecha)
   const fAg = lead.fecha_agendada && lead.fecha_agendada !== 'null' ? String(lead.fecha_agendada).trim() : '';
   if (!fAg || fAg.length < 8) return false;
-
-  // 2. Validar tipo_reunion
-  const tipo = String(lead.tipo_reunion || lead.tipo || '').toLowerCase().trim();
-  if (
-    tipo.includes('sin reunion') ||
-    tipo.includes('sin reunión') ||
-    tipo.includes('sin agendar') ||
-    tipo.includes('no agendad') ||
-    tipo === '(sin reunion)' ||
-    tipo === 'sin reunion'
-  ) {
-    return false;
-  }
 
   return true;
 }
